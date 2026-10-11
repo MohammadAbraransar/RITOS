@@ -245,8 +245,8 @@ def run_ticket_pipeline(db: Session, ticket: Ticket, actor_id: str | None = None
     risk_signals = []
 
     if ticket.category == "UNAUTHORIZED_PAYMENT":
-        risk_score += 45
-        risk_signals.append({"signal": "UNAUTHORIZED_PAYMENT_REPORT", "severity": "HIGH", "score_delta": 45})
+        risk_score += 50
+        risk_signals.append({"signal": "UNAUTHORIZED_PAYMENT_REPORT", "severity": "HIGH", "score_delta": 50})
 
     if verification["status"] in {"CUSTOMER_MISMATCH", "AMOUNT_MISMATCH", "TRANSACTION_NOT_FOUND", "MANUAL_VERIFICATION_REQUIRED"}:
         risk_score += 35
@@ -440,6 +440,7 @@ def run_ticket_pipeline(db: Session, ticket: Ticket, actor_id: str | None = None
         "eligibility_candidate": eligible,
         "decision": decision,
         "reason": reason,
+        "executed_refund": False,
         "priority": ticket.priority,
         "queue": ticket.queue,
         "idempotency_key": idempotency_hash,
