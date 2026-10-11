@@ -2,6 +2,8 @@ from datetime import datetime, timezone
 import hmac
 from decimal import Decimal
 from uuid import uuid4
+from typing import Optional
+from pydantic import BaseModel
 from fastapi import APIRouter, Depends, HTTPException, Query, Header
 from sqlalchemy.orm import Session
 from sqlalchemy import select, func, desc
@@ -727,6 +729,80 @@ def ecommerce_ticket_intake(
         "customer_message_draft": ticket.customer_message_draft,
         "proof_required": ticket.proof_required,
         "ticket": ticket_view(ticket)
+    }
+
+class ProofActionPayload(BaseModel):
+    action: str  # "APPROVE_PROOF", "REQUEST_PROOF", "DENY"
+    note: Optional[str] = "Human review decision recorded."
+
+@router.post("/tickets/{ticket_id}/proof-action")
+def handle_proof_action(ticket_id: str, payload: ProofActionPayload, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    t = db.get(Ticket, ticket_id)
+    if not t: raise HTTPException(404, "Ticket not found")
+    
+    if payload.action == "APPROVE_PROOF":
+        t.proof_status = "PROOF_VERIFIED"
+        t.decision_bucket = "GENUINE_REFUNDABLE"
+        t.assigned_desk = AssignedDesk.CS_1.value
+        t.policy_evaluation_reason = f"Human Agent ({user.email}) verified photo proof: {payload.note}"
+        t.customer_message_draft = generate_customer_message_draft(
+            customer_name=t.customer_name, order_id=t.order_id, item_name=t.item_name,
+            claimed_amount=float(t.claimed_amount), currency=t.currency, decision_bucket=t.decision_bucket,
+            reason=t.policy_evaluation_reason
+        )
+        record_event(db, t.id, user.id, "PROOF_VERIFIED_BY_AGENT", {"note": payload.note})
+        audit(db, user.id, "PROOF_VERIFIED_BY_AGENT", "ticket", t.id, {"note": payload.note})
+
+    elif payload.action == "REQUEST_PROOF":
+        t.proof_status = "PROOF_REQUESTED"
+        t.proof_request_sent_at = datetime.now(timezone.utc)
+        record_event(db, t.id, user.id, "PROOF_REQUESTED", {"note": payload.note})
+        audit(db, user.id, "PROOF_REQUESTED", "ticket", t.id, {"note": payload.note})
+
+    elif payload.action == "DENY":
+        t.decision_bucket = "NON_REFUNDABLE"
+        t.assigned_desk = AssignedDesk.CS_3.value
+        t.rejection_notice_sent_at = datetime.now(timezone.utc)
+        t.policy_evaluation_reason = f"Human Agent ({user.email}) denied exception: {payload.note}"
+        record_event(db, t.id, user.id, "CLAIM_DENIED_BY_AGENT", {"note": payload.note})
+        audit(db, user.id, "CLAIM_DENIED_BY_AGENT", "ticket", t.id, {"note": payload.note})
+
+    db.commit()
+    db.refresh(t)
+    return {"status": "SUCCESS", "ticket": ticket_view(t)}
+
+@router.post("/tickets/{ticket_id}/authorize-payout")
+def authorize_payout(ticket_id: str, db: Session = Depends(get_db), user: User = Depends(require_roles(Role.FINANCE.value, Role.REFUNDS.value, Role.ADMIN.value))):
+    t = db.get(Ticket, ticket_id)
+    if not t: raise HTTPException(404, "Ticket not found")
+    if t.refund_status == "REFUNDED":
+        return {"status": "ALREADY_REFUNDED", "ticket": ticket_view(t)}
+    
+    tx = db.get(Transaction, t.transaction_id)
+    if not tx: raise HTTPException(404, "Transaction ledger entry not found")
+    
+    amount = Decimal(str(t.claimed_amount)).quantize(Decimal("0.01"))
+    tx.refunded_amount = (Decimal(str(tx.refunded_amount)) + amount).quantize(Decimal("0.01"))
+    provider_ref = f"MOCK-PAYOUT-{uuid4().hex[:10].upper()}"
+    
+    t.refund_status = "REFUNDED"
+    t.status = TicketStatus.RESOLVED.value
+    t.refund_decided_at = datetime.now(timezone.utc)
+    t.refund_decided_by_id = user.id
+    
+    record_event(db, t.id, user.id, "FINANCE_PAYOUT_EXECUTED", {
+        "amount": str(amount), "currency": t.currency, "provider_reference": provider_ref
+    })
+    audit(db, user.id, "FINANCE_PAYOUT_EXECUTED", "ticket", t.id, {
+        "amount": str(amount), "provider_reference": provider_ref, "approver": user.email
+    })
+    db.commit()
+    db.refresh(t)
+    return {
+        "status": "REFUNDED",
+        "provider_reference": provider_ref,
+        "amount": float(amount),
+        "ticket": ticket_view(t)
     }
 
 # ==========================================

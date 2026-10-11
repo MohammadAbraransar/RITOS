@@ -122,5 +122,14 @@ export const api = {
     request<any>('/webhook/refund-tickets', {
       method: 'POST',
       body: JSON.stringify(payload)
+    }),
+  proofAction: (ticketId: string, action: string, note?: string) =>
+    request<any>(`/tickets/${ticketId}/proof-action`, {
+      method: 'POST',
+      body: JSON.stringify({ action, note })
+    }),
+  authorizePayout: (ticketId: string) =>
+    request<any>(`/tickets/${ticketId}/authorize-payout`, {
+      method: 'POST'
     })
 }

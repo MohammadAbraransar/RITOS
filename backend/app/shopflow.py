@@ -229,6 +229,7 @@ def process_shopflow_event(db: Session, ticket_id: str, event_id: Optional[str] 
                 "shopflow_ticket_id": ticket_id,
                 "event_id": event_id,
                 "evidence_count": len(evidence_list),
+                "evidence_images": fb.get("evidence_images") or [],
                 "derived_facts": derived_facts
             }
         )
@@ -331,5 +332,10 @@ def process_shopflow_event(db: Session, ticket_id: str, event_id: Optional[str] 
         "decision_bucket": t.decision_bucket,
         "decision": decision,
         "refund_amount_minor": refund_amt,
+        "policy_evaluation_reason": t.policy_evaluation_reason,
+        "customer_message_draft": t.customer_message_draft,
+        "proof_status": t.proof_status,
+        "agents_trace": pipeline_res.get("agents_trace", []),
+        "visual_evidence": pipeline_res.get("visual_evidence", {}),
         "shopflow_response": shopflow_cb_res
     }

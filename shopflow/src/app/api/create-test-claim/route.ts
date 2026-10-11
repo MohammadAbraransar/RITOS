@@ -26,6 +26,9 @@ export async function POST(req: Request) {
       category: body.category || "DEFECTIVE_PRODUCT",
       description: body.description || "Stitching came undone upon unboxing the package.",
       item_name: body.item_name || "Executive Laptop Sleeve 15-inch",
+      item_category: body.item_category || "GENERAL",
+      purchase_date: body.purchase_date || null,
+      evidence_images: body.evidence_images || [],
       merchant_id: "merch_dell_in",
       created_at: new Date().toISOString()
     };

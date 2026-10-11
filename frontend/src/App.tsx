@@ -5,7 +5,8 @@ import {
   CircleDollarSign, Clock3, Command, Copy, Database, ExternalLink, FileText,
   Filter, Gauge, Headphones, HelpCircle, Info, LayoutDashboard, Lock, LogOut,
   Mail, Menu, MessageSquare, Phone, Play, Plus, RefreshCw, Search, Send,
-  Shield, ShieldAlert, Sparkles, Ticket as TicketIcon, Users, WalletCards, X, Zap
+  Shield, ShieldAlert, Sparkles, Ticket as TicketIcon, Users, WalletCards, X, Zap,
+  Camera, Cpu
 } from 'lucide-react'
 import { api, getToken, setToken, type Ticket, type User } from './api'
 import { isClosedStatus, priorityRank } from './logic'
@@ -66,6 +67,7 @@ const navFor = (role: string) => {
   if (role === 'finance_approver') {
     return [
       ['Finance Dashboard', 'dashboard'],
+      ['💰 Finance Approvals Queue', 'finance_queue'],
       ['Settlement Register', 'refunds'],
       ['Audit Trail', 'audit']
     ]
@@ -76,6 +78,7 @@ const navFor = (role: string) => {
     ['🟢 CS-1 Genuine Desk', 'cs1_desk'],
     ['🟡 CS-2 Exception Desk', 'cs2_desk'],
     ['🔴 CS-3 Denial Desk', 'cs3_desk'],
+    ['💰 Finance Approvals Queue', 'finance_queue'],
     ['All Team Tickets Queue', 'tickets'],
     ['🛒 eCommerce Integration Hub', 'ecommerce'],
     ['8 Specialist Agents Registry', 'automation'],
@@ -346,6 +349,42 @@ function App() {
       await load()
     } catch (err) {
       setNotice(`Dispatch Failed: ${(err as Error).message}`)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  // --- CS-2 HUMAN-IN-THE-LOOP PROOF ACTIONS ---
+  async function handleProofAction(t: Ticket, action: 'APPROVE_PROOF' | 'REQUEST_PROOF' | 'DENY', note: string) {
+    setBusy(true)
+    try {
+      const res = await api.proofAction(t.id, action, note)
+      setNotice(
+        action === 'APPROVE_PROOF'
+          ? '✅ Photo Proof Approved! Ticket promoted to CS-1 for payout.'
+          : action === 'REQUEST_PROOF'
+          ? '📩 Additional proof requested from customer.'
+          : '❌ Claim denied based on photo proof inspection.'
+      )
+      setSelected(res.ticket)
+      await load()
+    } catch (err) {
+      setNotice(`Proof Action Failed: ${(err as Error).message}`)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  // --- FINANCE PAYOUT AUTHORIZATION ---
+  async function handleAuthorizePayout(t: Ticket) {
+    setBusy(true)
+    try {
+      const res = await api.authorizePayout(t.id)
+      setNotice(`💰 Gateway Payout Authorized & Executed! Ref: ${res.provider_reference} (${money(res.amount, t.currency)})`)
+      setSelected(res.ticket)
+      await load()
+    } catch (err) {
+      setNotice(`Payout Execution Failed: ${(err as Error).message}`)
     } finally {
       setBusy(false)
     }
@@ -1969,6 +2008,86 @@ await fetch('http://YOUR_RITOS_URL/api/v1/integrations/ecommerce/ticket', {
             )
           )}
 
+          {/* FINANCE APPROVALS QUEUE */}
+          {page === 'finance_queue' && (
+            <>
+              <div className="page-heading">
+                <div>
+                  <div className="eyebrow">FINANCE CLEARING HOUSE</div>
+                  <h1>💰 Finance Approvals &amp; Payout Execution</h1>
+                  <p>Review policy-approved refunds and execute real-time payment gateway payouts.</p>
+                </div>
+              </div>
+
+              <div className="panel table-panel">
+                <div className="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>TICKET #</th>
+                        <th>ORDER ID</th>
+                        <th>PRODUCT / ITEM</th>
+                        <th>AMOUNT</th>
+                        <th>DESK / STATUS</th>
+                        <th>LEDGER VERIFICATION</th>
+                        <th>PAYOUT STATUS</th>
+                        <th>FINANCE ACTION</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {tickets
+                        .filter(t => t.decision_bucket === 'GENUINE_REFUNDABLE' || t.assigned_desk === 'CS_1')
+                        .map(t => (
+                          <tr key={t.id} onClick={() => setSelected(t)} style={{ cursor: 'pointer' }}>
+                            <td><span className="mono bold">{t.ticket_number}</span></td>
+                            <td><span className="mono">{t.order_id || '—'}</span></td>
+                            <td><strong>{t.item_name || t.category}</strong></td>
+                            <td className="amount">{money(t.claimed_amount, t.currency)}</td>
+                            <td>
+                              <span className="pill green"><i />{t.assigned_desk} ({t.status})</span>
+                            </td>
+                            <td>
+                              <span className={`pill ${t.payment_verification === 'VERIFIED' ? 'green' : 'amber'}`}>
+                                <i />{t.payment_verification}
+                              </span>
+                            </td>
+                            <td>
+                              {t.refund_status === 'REFUNDED' ? (
+                                <span className="pill green"><i />SETTLED</span>
+                              ) : (
+                                <span className="pill amber"><i />AWAITING PAYOUT</span>
+                              )}
+                            </td>
+                            <td onClick={e => e.stopPropagation()}>
+                              {t.refund_status === 'REFUNDED' ? (
+                                <span style={{ color: 'var(--emerald-700)', fontWeight: 700, fontSize: '11px' }}>
+                                  ✓ Payout Executed
+                                </span>
+                              ) : (
+                                <button
+                                  className="primary compact"
+                                  onClick={() => handleAuthorizePayout(t)}
+                                  disabled={busy}
+                                  style={{ background: 'var(--emerald-600)', borderColor: 'var(--emerald-600)', fontSize: '11px' }}
+                                >
+                                  ⚡ Authorize Payout ({money(t.claimed_amount, t.currency)})
+                                </button>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      {!tickets.filter(t => t.decision_bucket === 'GENUINE_REFUNDABLE' || t.assigned_desk === 'CS_1').length && (
+                        <tr>
+                          <td colSpan={8}><Empty text="No tickets currently awaiting finance payout authorization." /></td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </>
+          )}
+
           {/* REFUND OPERATIONS REGISTER */}
           {page === 'refunds' && (
             <>
@@ -2289,14 +2408,52 @@ await fetch('http://YOUR_RITOS_URL/api/v1/integrations/ecommerce/ticket', {
                     style={{ width: '100%', background: '#ffffff', border: '1px solid var(--amber-200)', borderRadius: 'var(--radius-md)', padding: '10px', fontSize: '12px' }}
                   />
 
-                  <div style={{ display: 'flex', gap: '10px', marginTop: '12px' }}>
+                  {/* Photo Proof & Visual Evidence Inspection */}
+                  {selected.classification_evidence?.visual_analysis?.has_visual_proof && (
+                    <div style={{ marginTop: '12px', padding: '12px', background: '#ffffff', borderRadius: 'var(--radius-md)', border: '1px solid var(--amber-200)' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                        <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--navy-900)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          <Camera size={14} color="var(--indigo-600)" />
+                          Customer Photo Proof &amp; Agent 7 Visual Extraction
+                        </span>
+                        <span className={`pill ${selected.proof_status === 'PROOF_VERIFIED' ? 'green' : 'amber'}`}>
+                          <i />{selected.proof_status}
+                        </span>
+                      </div>
+
+                      <div style={{ fontSize: '11px', color: 'var(--navy-700)', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                        <div><strong>Attached Image(s):</strong> {selected.classification_evidence?.visual_analysis?.images_analyzed?.join(', ')}</div>
+                        <div><strong>Detected Defect Features:</strong> {selected.classification_evidence?.visual_analysis?.detected_features?.join(', ') || 'No damage tokens'}</div>
+                        <div><strong>Visual Confidence:</strong> {((selected.classification_evidence?.visual_analysis?.visual_confidence || 0) * 100).toFixed(1)}%</div>
+                      </div>
+                    </div>
+                  )}
+
+                  <div style={{ display: 'flex', gap: '8px', marginTop: '12px', flexWrap: 'wrap' }}>
                     <button
                       className="primary compact"
+                      onClick={() => handleProofAction(selected, 'APPROVE_PROOF', 'Photo proof verified by human agent')}
+                      disabled={busy}
+                      style={{ background: 'var(--emerald-600)', borderColor: 'var(--emerald-600)' }}
+                    >
+                      <CheckCircle2 size={13} /> Approve Proof &amp; Move to CS-1
+                    </button>
+
+                    <button
+                      className="secondary compact"
                       onClick={() => handleCS2SendProof(selected)}
                       disabled={busy}
-                      style={{ background: 'var(--amber-600)', borderColor: 'var(--amber-600)' }}
                     >
-                      <Send size={14} /> Send Proof Request to Customer
+                      <Send size={13} /> Send Proof Request Notice
+                    </button>
+
+                    <button
+                      className="secondary compact"
+                      onClick={() => handleProofAction(selected, 'DENY', 'Photo evidence does not demonstrate manufacturing defect')}
+                      disabled={busy}
+                      style={{ color: 'var(--rose-700)' }}
+                    >
+                      <X size={13} /> Deny Claim
                     </button>
                   </div>
                 </div>
@@ -2364,6 +2521,56 @@ await fetch('http://YOUR_RITOS_URL/api/v1/integrations/ecommerce/ticket', {
                   <div><strong>Policy Reasoning:</strong> {selected.policy_evaluation_reason}</div>
                 </div>
               </div>
+
+              {/* 8 SPECIALIST AGENTS AUTONOMOUS TELEMETRY TRACE */}
+              {selected.classification_evidence?.agents?.length > 0 && (
+                <div style={{ marginTop: '16px', marginBottom: '18px', padding: '16px', background: 'var(--bg-card)', border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-lg)' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
+                    <strong style={{ fontSize: '13px', display: 'flex', alignItems: 'center', gap: '6px', color: 'var(--navy-900)' }}>
+                      <Cpu size={16} color="var(--indigo-600)" /> RITOS 8 Specialist Agents Autonomous Execution Trace
+                    </strong>
+                    <span className="pill green"><i />8/8 COMPLETED</span>
+                  </div>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '8px' }}>
+                    {selected.classification_evidence.agents.map((ag: any, idx: number) => (
+                      <div key={idx} style={{ padding: '10px 12px', background: 'var(--bg-page)', border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-md)', fontSize: '11px' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                          <span style={{ fontWeight: 700, color: 'var(--navy-900)' }}>
+                            {idx + 1}. {ag.agent_name}
+                          </span>
+                          <span style={{ fontSize: '9px', fontWeight: 700, color: 'var(--emerald-700)' }}>✓ {ag.status}</span>
+                        </div>
+                        <p style={{ margin: 0, color: 'var(--navy-600)', lineHeight: '1.4' }}>
+                          {ag.findings}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* FINANCE PAYOUT EXECUTION BOX */}
+              {selected.decision_bucket === 'GENUINE_REFUNDABLE' && selected.refund_status !== 'REFUNDED' && (
+                <div style={{ padding: '14px 18px', background: 'var(--indigo-50)', border: '1px solid var(--indigo-100)', borderRadius: 'var(--radius-lg)', marginBottom: '18px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div>
+                    <div style={{ fontWeight: 700, fontSize: '13px', color: 'var(--indigo-950)' }}>
+                      💰 Authorized for Gateway Settlement
+                    </div>
+                    <div style={{ fontSize: '11px', color: 'var(--indigo-800)' }}>
+                      Anti-fraud cleared and policy approved under CS-1.
+                    </div>
+                  </div>
+                  <button
+                    className="primary compact"
+                    onClick={() => handleAuthorizePayout(selected)}
+                    disabled={busy}
+                    style={{ background: 'var(--indigo-700)', borderColor: 'var(--indigo-700)' }}
+                  >
+                    <Zap size={14} /> Authorize Payout ({money(selected.claimed_amount, selected.currency)})
+                  </button>
+                </div>
+              )}
 
               {/* Conversation & Notes */}
               <div className="drawer-section">
