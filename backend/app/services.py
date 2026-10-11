@@ -68,18 +68,20 @@ def calculate_priority(category: str, description: str, created_at=None):
     if category in ("MISSING_DOCUMENTATION","REFUND_STATUS_INQUIRY"): return "P4"
     return "P3"
 
-def find_duplicate(db: Session, customer_id: str, transaction_id: str, category: str, description: str):
-    # Conservative matching: exact same customer + transaction + category, active canonical ticket.
+def find_duplicate(db: Session, customer_id: str, transaction_id: str, category: str, description: str, item_name: str | None = None):
+    # Conservative matching: exact same customer + transaction + matching purchased product/item
     active = [TicketStatus.NEW.value, TicketStatus.TRIAGED.value, TicketStatus.IN_REVIEW.value,
-              TicketStatus.AWAITING_INFORMATION.value, TicketStatus.ESCALATED.value, TicketStatus.REOPENED.value]
-    # Exact transaction ID is a strong linkage signal even when issue categories differ.
-    # Link the case for human review; never auto-close or auto-reject solely on this signal.
+              TicketStatus.AWAITING_INFORMATION.value, TicketStatus.ESCALATED.value, TicketStatus.REOPENED.value, TicketStatus.RESOLVED.value]
     existing = db.scalars(select(Ticket).where(Ticket.customer_id==customer_id,
        Ticket.transaction_id==transaction_id, Ticket.status.in_(active)).order_by(Ticket.created_at.desc())).all()
-    normalized = lambda s: re.sub(r"[^a-z0-9]", "", s.lower())
+    normalized = lambda s: re.sub(r"[^a-z0-9]", "", s.lower()) if s else ""
     for ticket in existing:
-        if normalized(ticket.description) == normalized(description) or ticket.transaction_id == transaction_id:
-            return ticket
+        if item_name and ticket.item_name:
+            if normalized(ticket.item_name) == normalized(item_name):
+                return ticket
+        elif not item_name and not ticket.item_name:
+            if normalized(ticket.description) == normalized(description) or ticket.transaction_id == transaction_id:
+                return ticket
     return None
 
 def record_event(db: Session, ticket_id: str, actor_id: str|None, event_type: str, details: dict):
@@ -89,3 +91,187 @@ def audit(db: Session, actor_id: str|None, action: str, entity_type: str, entity
 def refund_key(ticket_id: str, amount, currency: str):
     raw = f"ritos-refund:{ticket_id}:{Decimal(str(amount)).quantize(Decimal('0.01'))}:{currency}"
     return hashlib.sha256(raw.encode()).hexdigest()
+
+PRODUCT_POLICIES = {
+    "ELECTRONICS": {
+        "return_window_days": 7,
+        "requires_serial": True,
+        "policy_summary": "7-day replacement or refund for verified hardware or delivery defect."
+    },
+    "APPAREL": {
+        "return_window_days": 14,
+        "requires_tags": True,
+        "policy_summary": "14-day return window for unworn items with original tags intact."
+    },
+    "PERISHABLE": {
+        "return_window_days": 0,
+        "policy_summary": "Final sale. Non-returnable unless package damaged or wrong item delivered."
+    },
+    "HYGIENE": {
+        "return_window_days": 0,
+        "policy_summary": "Non-returnable once opened for health and hygiene safety standards."
+    },
+    "DIGITAL": {
+        "return_window_days": 0,
+        "policy_summary": "Digital software and keys are non-refundable once delivered."
+    },
+    "GENERAL": {
+        "return_window_days": 14,
+        "policy_summary": "Standard 14-day eCommerce satisfaction guarantee."
+    }
+}
+
+def evaluate_three_buckets(
+    verification_status: str,
+    category: str,
+    description: str,
+    item_category: str = "GENERAL",
+    purchase_date=None,
+    duplicate_ticket_id: str | None = None,
+    claimed_amount: float = 0.0,
+    tx_amount: float = 0.0
+) -> dict:
+    item_cat = (item_category or "GENERAL").upper()
+    policy = PRODUCT_POLICIES.get(item_cat, PRODUCT_POLICIES["GENERAL"])
+    window_days = policy["return_window_days"]
+    desc_lower = description.lower()
+
+    # 1. Check for Hard Non-Refundable Disqualifiers (Bucket 3: CS-3)
+    if duplicate_ticket_id:
+        return {
+            "decision_bucket": "NON_REFUNDABLE",
+            "assigned_desk": "CS_3",
+            "policy_reason": f"Duplicate claim rejected: An active or resolved claim (#{duplicate_ticket_id[:12]}) already exists for this exact product item/model in order/transaction.",
+            "proof_required": None,
+            "eligible": False
+        }
+
+    if verification_status == "TRANSACTION_NOT_FOUND":
+        return {
+            "decision_bucket": "NON_REFUNDABLE",
+            "assigned_desk": "CS_3",
+            "policy_reason": "Transaction reference was not found in payment gateway records.",
+            "proof_required": None,
+            "eligible": False
+        }
+
+    if verification_status == "ALREADY_REFUNDED":
+        return {
+            "decision_bucket": "NON_REFUNDABLE",
+            "assigned_desk": "CS_3",
+            "policy_reason": "Transaction has already been fully refunded in ledger.",
+            "proof_required": None,
+            "eligible": False
+        }
+
+    # Policy window check
+    if purchase_date and window_days > 0:
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+        p_date = purchase_date if purchase_date.tzinfo else purchase_date.replace(tzinfo=timezone.utc)
+        days_passed = (now - p_date).days
+        if days_passed > window_days:
+            return {
+                "decision_bucket": "NON_REFUNDABLE",
+                "assigned_desk": "CS_3",
+                "policy_reason": f"Claim filed past the {window_days}-day return policy window ({days_passed} days elapsed).",
+                "proof_required": None,
+                "eligible": False
+            }
+
+    # Non-returnable product category check (unless delivery defect claimed)
+    delivery_defect = any(w in desc_lower for w in ["damaged", "broken", "wrong item", "leaked", "spoiled", "expired"])
+    if window_days == 0 and not delivery_defect:
+        return {
+            "decision_bucket": "NON_REFUNDABLE",
+            "assigned_desk": "CS_3",
+            "policy_reason": f"{item_cat} category is classified as final sale and non-returnable under store policy.",
+            "proof_required": None,
+            "eligible": False
+        }
+
+    # 2. Check for Exceptions and Missing Proof (Bucket 2: CS-2)
+    needs_proof = False
+    proof_items = []
+    exception_reasons = []
+
+    if verification_status in {"AMOUNT_MISMATCH", "CUSTOMER_MISMATCH", "MANUAL_VERIFICATION_REQUIRED"}:
+        needs_proof = True
+        exception_reasons.append(f"Ledger check exception: {verification_status.replace('_', ' ')}")
+        proof_items.append("BANK_STATEMENT_PROOF")
+
+    if any(w in desc_lower for w in ["damaged", "broken", "cracked", "defective", "not working", "wrong product", "wrong item"]):
+        needs_proof = True
+        exception_reasons.append("Item reported damaged, defective or mismatched")
+        proof_items.extend(["PHOTO_OF_ITEM", "SHIPPING_LABEL_PHOTO"])
+
+    if category in {"MISSING_DOCUMENTATION", "INCORRECT_REFUND_AMOUNT", "RETURN_ELIGIBILITY"}:
+        needs_proof = True
+        exception_reasons.append(f"Issue category '{category}' requires case verification")
+        proof_items.append("RECEIPT_OR_INVOICE")
+
+    if needs_proof:
+        return {
+            "decision_bucket": "EXCEPTIONAL_PROOF_NEEDED",
+            "assigned_desk": "CS_2",
+            "policy_reason": " · ".join(exception_reasons) or "Discrepancy detected; verification required.",
+            "proof_required": ",".join(list(dict.fromkeys(proof_items))),
+            "eligible": False
+        }
+
+    # 3. Valid Genuine Claim (Bucket 1: CS-1)
+    if verification_status == "VERIFIED":
+        return {
+            "decision_bucket": "GENUINE_REFUNDABLE",
+            "assigned_desk": "CS_1",
+            "policy_reason": f"Verified ledger payment, within {window_days}-day policy window, valid claim reason.",
+            "proof_required": None,
+            "eligible": True
+        }
+
+    # Default fallback
+    return {
+        "decision_bucket": "EXCEPTIONAL_PROOF_NEEDED",
+        "assigned_desk": "CS_2",
+        "policy_reason": f"Pending manual verification ({verification_status})",
+        "proof_required": "PROOF_OF_PURCHASE",
+        "eligible": False
+    }
+
+def generate_customer_message_draft(
+    customer_name: str | None,
+    order_id: str | None,
+    item_name: str | None,
+    claimed_amount: float,
+    currency: str,
+    decision_bucket: str,
+    reason: str,
+    proof_required: str | None = None
+) -> str:
+    name = (customer_name or "Valued Customer").strip()
+    order = order_id or "your recent order"
+    item = f" ({item_name})" if item_name else ""
+    formatted_amt = f"{currency} {claimed_amount:,.2f}"
+
+    if decision_bucket == "GENUINE_REFUNDABLE":
+        return (
+            f"Dear {name}, your refund request for order {order}{item} ({formatted_amt}) has been "
+            f"verified and approved under our store policy. Our Customer Service team is processing your "
+            f"refund to your original payment method. Please allow 3-5 business days for settlement."
+        )
+
+    if decision_bucket == "EXCEPTIONAL_PROOF_NEEDED":
+        proof_str = proof_required.replace("_", " ").lower() if proof_required else "clear photos of the delivered item and package label"
+        return (
+            f"Dear {name}, regarding your refund inquiry for order {order}{item}: To help us resolve your case "
+            f"promptly, our team needs additional verification ({reason}). Please reply with {proof_str}. "
+            f"Once received, we will expedite your resolution."
+        )
+
+    # NON_REFUNDABLE
+    return (
+        f"Dear {name}, thank you for contacting customer support regarding order {order}{item}. "
+        f"After automated verification against our store refund policy, this request is ineligible for a cash refund "
+        f"due to: {reason}. If you believe this is in error, please reply with your invoice for review."
+    )
+

@@ -33,6 +33,11 @@ if settings.app_env.lower() == "development":
 
 app.include_router(router)
 
+# Mount root webhook paths for direct ShopFlow outbox compatibility
+from .api import shopflow_webhook
+app.add_api_route("/webhook/refund-tickets", shopflow_webhook, methods=["POST"])
+app.add_api_route("/webhooks/shopflow", shopflow_webhook, methods=["POST"])
+
 @app.get("/")
 def root():
     return {"name":"RITOS","version":"1.0.0","docs":"/docs","mode":settings.app_env}

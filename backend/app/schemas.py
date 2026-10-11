@@ -55,6 +55,31 @@ class TicketOut(BaseModel):
     duplicate_of_id: Optional[str]
     assigned_to_id: Optional[str]
     recommended_action: str
-    classification_evidence: dict
     created_at: str
     updated_at: str
+
+class CS1DecisionIn(BaseModel):
+    decision: str = Field(description="'APPROVE' or 'CANCEL'")
+    reason: str = Field(min_length=3, max_length=1000)
+
+class ProofRequestIn(BaseModel):
+    message: str = Field(min_length=5, max_length=2000)
+    proof_type: Optional[str] = "PHOTO_OF_ITEM,SHIPPING_LABEL_PHOTO"
+
+class RejectionNoticeIn(BaseModel):
+    message: str = Field(min_length=5, max_length=2000)
+    reason: Optional[str] = None
+
+class EcommerceTicketIn(BaseModel):
+    order_id: str
+    transaction_id: str
+    customer_name: Optional[str] = "Customer"
+    customer_email: Optional[str] = None
+    customer_phone: Optional[str] = None
+    item_name: Optional[str] = "Product Item"
+    item_category: Optional[str] = "GENERAL"
+    claimed_amount: float = Field(gt=0)
+    currency: Optional[str] = "INR"
+    purchase_date: Optional[str] = None
+    description: str = Field(min_length=5, max_length=5000)
+

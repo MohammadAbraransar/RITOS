@@ -16,6 +16,20 @@ class Role(str, enum.Enum):
     FINANCE="finance_approver"
     ADMIN="administrator"
     AUDITOR="auditor"
+    CS_1="cs_1"
+    CS_2="cs_2"
+    CS_3="cs_3"
+
+class DecisionBucket(str, enum.Enum):
+    GENUINE_REFUNDABLE="GENUINE_REFUNDABLE"
+    EXCEPTIONAL_PROOF_NEEDED="EXCEPTIONAL_PROOF_NEEDED"
+    NON_REFUNDABLE="NON_REFUNDABLE"
+
+class AssignedDesk(str, enum.Enum):
+    CS_1="CS_1"
+    CS_2="CS_2"
+    CS_3="CS_3"
+    SUPERVISOR="SUPERVISOR"
 
 class TicketStatus(str, enum.Enum):
     NEW="NEW"
@@ -81,6 +95,22 @@ class Ticket(Base):
     assigned_to_id: Mapped[str|None]=mapped_column(String(36), ForeignKey("users.id"), nullable=True)
     recommended_action: Mapped[str]=mapped_column(Text, default="Review transaction records.")
     classification_evidence: Mapped[dict]=mapped_column(JSON, default=dict)
+    decision_bucket: Mapped[str]=mapped_column(String(50), default="EXCEPTIONAL_PROOF_NEEDED", index=True)
+    assigned_desk: Mapped[str]=mapped_column(String(30), default="CS_2", index=True)
+    customer_name: Mapped[str|None]=mapped_column(String(120), nullable=True)
+    customer_phone: Mapped[str|None]=mapped_column(String(30), nullable=True)
+    customer_email: Mapped[str|None]=mapped_column(String(255), nullable=True)
+    item_name: Mapped[str|None]=mapped_column(String(150), nullable=True)
+    item_category: Mapped[str|None]=mapped_column(String(50), default="GENERAL")
+    purchase_date: Mapped[datetime|None]=mapped_column(DateTime(timezone=True), nullable=True)
+    customer_message_draft: Mapped[str|None]=mapped_column(Text, nullable=True)
+    policy_evaluation_reason: Mapped[str|None]=mapped_column(Text, nullable=True)
+    proof_required: Mapped[str|None]=mapped_column(String(100), nullable=True)
+    proof_status: Mapped[str]=mapped_column(String(30), default="NOT_REQUESTED")
+    proof_request_sent_at: Mapped[datetime|None]=mapped_column(DateTime(timezone=True), nullable=True)
+    rejection_notice_sent_at: Mapped[datetime|None]=mapped_column(DateTime(timezone=True), nullable=True)
+    refund_decided_at: Mapped[datetime|None]=mapped_column(DateTime(timezone=True), nullable=True)
+    refund_decided_by_id: Mapped[str|None]=mapped_column(String(36), nullable=True)
     created_at: Mapped[datetime]=mapped_column(DateTime(timezone=True), default=now_utc)
     updated_at: Mapped[datetime]=mapped_column(DateTime(timezone=True), default=now_utc, onupdate=now_utc)
     comments: Mapped[list["TicketComment"]]=relationship(back_populates="ticket", cascade="all, delete-orphan")

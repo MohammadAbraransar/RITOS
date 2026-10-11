@@ -7,9 +7,12 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from decimal import Decimal
 from sqlalchemy.orm import Session
-from sqlalchemy import select
+from sqlalchemy import select, or_, func
 from .models import Ticket, Transaction, TicketEvent, AuditLog, TicketStatus
-from .services import classify, calculate_priority, find_duplicate, verify_transaction, ROUTES
+from .services import (
+    classify, calculate_priority, find_duplicate, verify_transaction, ROUTES,
+    evaluate_three_buckets, generate_customer_message_draft
+)
 
 AGENTS = [
     {"id":"transaction_data_fetcher","name":"Transaction Data Fetcher","mode":"deterministic","purpose":"Fetch and validate trusted transaction/order/refund facts."},
@@ -44,14 +47,34 @@ def run_ticket_pipeline(db: Session, ticket: Ticket, actor_id: str | None = None
     if verification["transaction"]:
         ticket.refund_status = verification["transaction"].payment_status
 
-    active = [TicketStatus.NEW.value, TicketStatus.TRIAGED.value, TicketStatus.IN_REVIEW.value,
-              TicketStatus.AWAITING_INFORMATION.value, TicketStatus.ESCALATED.value, TicketStatus.REOPENED.value]
-    duplicate = db.scalar(select(Ticket).where(
-        Ticket.id != ticket.id, Ticket.customer_id == ticket.customer_id,
-        Ticket.transaction_id == ticket.transaction_id,
-        Ticket.status.in_(active)).order_by(Ticket.created_at.desc()))
-    if duplicate and not ticket.duplicate_of_id:
+    prior_statuses = [
+        TicketStatus.NEW.value, TicketStatus.TRIAGED.value, TicketStatus.IN_REVIEW.value,
+        TicketStatus.AWAITING_INFORMATION.value, TicketStatus.ESCALATED.value, 
+        TicketStatus.REOPENED.value, TicketStatus.RESOLVED.value
+    ]
+    
+    # Composite Duplicate Detection:
+    # A claim is ONLY duplicate if BOTH:
+    # 1. Same transaction_id or order_id
+    # 2. Same purchased item_name / product model!
+    duplicate_query = select(Ticket).where(
+        Ticket.id != ticket.id,
+        or_(
+            Ticket.transaction_id == ticket.transaction_id,
+            (Ticket.order_id.isnot(None)) & (Ticket.order_id == ticket.order_id)
+        ),
+        Ticket.status.in_(prior_statuses)
+    )
+    if ticket.item_name and ticket.item_name.strip():
+        norm_item = ticket.item_name.strip().lower()
+        duplicate_query = duplicate_query.where(
+            func.lower(func.trim(Ticket.item_name)) == norm_item
+        )
+    duplicate = db.scalar(duplicate_query.order_by(Ticket.created_at.desc()))
+    if duplicate:
         ticket.duplicate_of_id = duplicate.id
+    elif ticket.duplicate_of_id:
+        ticket.duplicate_of_id = None
 
     risk_signals = []
     if ticket.category == "UNAUTHORIZED_PAYMENT":
@@ -61,16 +84,46 @@ def run_ticket_pipeline(db: Session, ticket: Ticket, actor_id: str | None = None
     if ticket.duplicate_of_id:
         risk_signals.append({"signal":"POSSIBLE_DUPLICATE_TICKET","severity":"MEDIUM"})
 
-    # Policy engine is intentionally conservative: only marks eligible for consideration;
-    # it never issues an approval. Payment execution remains behind the approval endpoint.
     tx = verification["transaction"]
+    tx_amt = float(tx.amount) if tx else 0.0
+
+    # 3-Bucket Decision & Auto-Drafting Engine
+    three_buckets = evaluate_three_buckets(
+        verification_status=verification["status"],
+        category=ticket.category,
+        description=ticket.description,
+        item_category=getattr(ticket, "item_category", "GENERAL") or "GENERAL",
+        purchase_date=getattr(ticket, "purchase_date", None),
+        duplicate_ticket_id=ticket.duplicate_of_id,
+        claimed_amount=float(ticket.claimed_amount),
+        tx_amount=tx_amt
+    )
+
+    ticket.decision_bucket = three_buckets["decision_bucket"]
+    ticket.assigned_desk = three_buckets["assigned_desk"]
+    ticket.policy_evaluation_reason = three_buckets["policy_reason"]
+    ticket.proof_required = three_buckets["proof_required"]
+
+    ticket.customer_message_draft = generate_customer_message_draft(
+        customer_name=getattr(ticket, "customer_name", None),
+        order_id=ticket.order_id,
+        item_name=getattr(ticket, "item_name", None),
+        claimed_amount=float(ticket.claimed_amount),
+        currency=ticket.currency,
+        decision_bucket=ticket.decision_bucket,
+        reason=ticket.policy_evaluation_reason,
+        proof_required=ticket.proof_required
+    )
+
     eligible = bool(tx and verification["status"] == "VERIFIED" and not risk_signals
-                   and Decimal(str(tx.amount)) > Decimal(str(tx.refunded_amount)))
+                   and Decimal(str(tx.amount)) > Decimal(str(tx.refunded_amount))
+                   and ticket.decision_bucket == "GENUINE_REFUNDABLE")
+
     decision = "HUMAN_REVIEW_REQUIRED"
-    reason = "Trusted evidence is incomplete, a risk signal exists, or policy approval is required."
+    reason = ticket.policy_evaluation_reason or "Verification or risk check active."
     if eligible:
         decision = "ELIGIBLE_FOR_AUTHORIZED_REFUND_REVIEW"
-        reason = "Verified transaction and no current risk flags; required authorization still applies."
+        reason = "Verified transaction and policy compliant; ready for CS-1 execution or review."
     elif verification["status"] == "ALREADY_REFUNDED":
         decision, reason = "NO_DUPLICATE_REFUND", "Transaction is already fully refunded."
 
@@ -78,12 +131,17 @@ def run_ticket_pipeline(db: Session, ticket: Ticket, actor_id: str | None = None
         "orchestrator": ORCHESTRATOR["id"], "agents_run": [a["id"] for a in AGENTS[:6]],
         "ticket_id": ticket.id, "classification": {"category":ticket.category,"confidence":float(ticket.confidence),"evidence":classification["evidence"]},
         "transaction_verification": verification["status"], "duplicate_ticket_id":ticket.duplicate_of_id,
+        "decision_bucket": ticket.decision_bucket,
+        "assigned_desk": ticket.assigned_desk,
+        "policy_evaluation_reason": ticket.policy_evaluation_reason,
+        "customer_message_draft": ticket.customer_message_draft,
+        "proof_required": ticket.proof_required,
         "risk_level":"HIGH" if any(s["severity"]=="HIGH" for s in risk_signals) else ("MEDIUM" if risk_signals else "LOW"),
         "risk_signals":risk_signals, "eligibility_candidate":eligible, "decision":decision,"reason":reason,
         "priority":ticket.priority,"queue":ticket.queue,"executed_refund":False,
         "evaluated_at":datetime.now(timezone.utc).isoformat(),
     }
     db.add(TicketEvent(ticket_id=ticket.id, actor_id=actor_id, event_type="AUTOMATION_PIPELINE_COMPLETED", details=result))
-    db.add(AuditLog(actor_id=actor_id, action="AUTOMATION_PIPELINE_COMPLETED", entity_type="ticket", entity_id=ticket.id, details={"decision":decision,"risk_level":result["risk_level"],"verification":verification["status"]}))
+    db.add(AuditLog(actor_id=actor_id, action="AUTOMATION_PIPELINE_COMPLETED", entity_type="ticket", entity_id=ticket.id, details={"decision":decision,"bucket":ticket.decision_bucket,"desk":ticket.assigned_desk,"risk_level":result["risk_level"]}))
     db.flush()
     return result

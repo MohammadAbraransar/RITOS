@@ -1,0 +1,48 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: shopflow-postgres
+    restart: always
+    environment:
+      POSTGRES_USER: shopflow
+      POSTGRES_PASSWORD: shopflow123
+      POSTGRES_DB: shopflow
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U shopflow -d shopflow"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: shopflow-app
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+    environment:
+      DATABASE_URL: "postgresql://shopflow:shopflow123@postgres:5432/shopflow?schema=public"
+      SESSION_SECRET: "complex_password_at_least_32_characters_long_for_iron_session_12345"
+      RITOS_BASE_URL: "http://host.docker.internal:8000"
+      RITOS_API_KEY: "ritos_dev_key_secret_2026"
+      SHOPFLOW_OUTBOUND_KEY: "shopflow_outbound_hmac_secret_2026"
+      SHOPFLOW_BASE_URL: "http://localhost:3000"
+      MOCK_RITOS: "true"
+      EXECUTION_OWNER: "shopflow"
+      HIGH_VALUE_THRESHOLD_MINOR: "5000000"
+      UPLOAD_DIR: "/app/uploads"
+      MOCK_SETTLE_MS: "3000"
+    volumes:
+      - uploads_data:/app/uploads
+
+volumes:
+  postgres_data:
+  uploads_data:

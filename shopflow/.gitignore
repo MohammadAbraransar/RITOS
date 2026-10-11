@@ -1,0 +1,45 @@
+# Dependencies
+/node_modules
+/.pnp
+.pnp.js
+
+# Testing
+/coverage
+
+# Next.js
+/.next/
+/out/
+
+# Production
+/build
+
+# Misc
+.DS_Store
+*.pem
+*.tsbuildinfo
+
+# Debug and Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Local Env Files
+.env
+.env*.local
+
+# Prisma
+# migrations are kept
+
+# Uploads
+/uploads/*
+!/uploads/.gitkeep
+!/uploads/seed/
+!/uploads/seed/*
+
+# Playwright
+/test-results/
+/playwright-report/
+
+# Scratch & Temporary
+/scratch/

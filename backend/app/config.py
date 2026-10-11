@@ -9,6 +9,8 @@ class Settings(BaseSettings):
     access_token_minutes: int = 45
     redis_url: str = "redis://localhost:6379/0"
     ecommerce_webhook_secret: str = ""
+    shopflow_base_url: str = "http://localhost:3001"
+    ritos_api_key: str = "ritos_dev_key_secret_2026"
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 settings = Settings()

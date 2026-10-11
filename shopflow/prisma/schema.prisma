@@ -1,0 +1,414 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum UserRole {
+  CUSTOMER
+  SUPPORT_ANALYST
+  ADMIN
+}
+
+enum PolicyType {
+  FULL
+  FULL_HIGH_VALUE
+  PARTIAL
+  NON_REFUNDABLE
+  NON_REFUNDABLE_AFTER_OPEN
+  EXCHANGE_ONLY
+  DEFECTIVE_ONLY
+  FULL_SHORT_WINDOW
+}
+
+enum ReturnShipping {
+  FREE
+  CUSTOMER
+  NA
+}
+
+enum VerificationType {
+  NONE
+  IMEI
+  SERIAL
+}
+
+enum OrderStatus {
+  PENDING
+  CONFIRMED
+  PROCESSING
+  SHIPPED
+  OUT_FOR_DELIVERY
+  DELIVERED
+  CANCELLED
+}
+
+enum PaymentMethod {
+  UPI
+  CARD
+  NETBANKING
+  COD
+}
+
+enum PaymentStatus {
+  PAID
+  FAILED
+  REFUNDED
+  PARTIALLY_REFUNDED
+}
+
+enum TicketReason {
+  PRODUCT_DAMAGED
+  PRODUCT_DEFECTIVE
+  WRONG_PRODUCT
+  MISSING_ITEM
+  NOT_AS_DESCRIBED
+  DUPLICATE_CHARGE
+  ORDER_NEVER_ARRIVED
+  LATE_DELIVERY
+  CHANGED_MIND
+  INCORRECT_QUANTITY
+  BILLING_ISSUE
+  OTHER
+}
+
+enum RequestedAction {
+  FULL_REFUND
+  PARTIAL_REFUND
+  REPLACEMENT
+  EXCHANGE
+  RETURN
+}
+
+enum TicketStatus {
+  PENDING_RITOS
+  PROCESSING
+  APPROVED
+  PARTIALLY_APPROVED
+  REJECTED
+  HUMAN_REVIEW
+  REFUND_INITIATED
+  REFUND_PROCESSING
+  REFUNDED
+  FAILED
+}
+
+enum ApprovalSource {
+  AUTO
+  HUMAN
+}
+
+enum EvidenceType {
+  IMAGE
+  DOCUMENT
+  SCREENSHOT
+}
+
+enum DecisionType {
+  APPROVED
+  PARTIALLY_APPROVED
+  REJECTED
+  HUMAN_REVIEW
+}
+
+enum RefundTxStatus {
+  PENDING
+  PROCESSING
+  SUCCESS
+  FAILED
+}
+
+enum NotificationChannel {
+  IN_APP
+  EMAIL_MOCK
+}
+
+enum EventStatus {
+  PENDING
+  SENT
+  FAILED
+}
+
+enum ExchangeDirection {
+  OUT
+  IN
+}
+
+model User {
+  id           String        @id
+  role         UserRole      @default(CUSTOMER)
+  name         String
+  email        String        @unique
+  phone        String?
+  passwordHash String        @map("password_hash")
+  riskMetadata Json?         @default("{}") @map("risk_metadata")
+  createdAt    DateTime      @default(now()) @map("created_at")
+
+  orders        Order[]
+  tickets       RefundTicket[]
+  notifications Notification[]
+  sessions      Session[]
+
+  @@map("users")
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique @map("session_token")
+  userId       String   @map("user_id")
+  expiresAt    DateTime @map("expires_at")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+model Product {
+  id            String         @id
+  sku           String         @unique
+  name          String
+  category      String
+  brand         String
+  description   String
+  specs         Json           @default("{}")
+  priceMinor    Int            @map("price_minor")
+  stock         Int            @default(0)
+  imageUrl      String         @map("image_url")
+  rating        Float          @default(4.5)
+  isDigital     Boolean        @default(false) @map("is_digital")
+  isPersonalized Boolean       @default(false) @map("is_personalized")
+  isClearance   Boolean        @default(false) @map("is_clearance")
+
+  policy     RefundPolicy?
+  orderItems OrderItem[]
+  tickets    RefundTicket[]
+
+  @@map("products")
+}
+
+model RefundPolicy {
+  id                          String           @id @default(cuid())
+  productId                   String           @unique @map("product_id")
+  version                     Int              @default(1)
+  policyType                  PolicyType       @map("policy_type")
+  refundPercentage            Int              @default(100) @map("refund_percentage")
+  returnWindowDays            Int              @default(30) @map("return_window_days")
+  openedAllowed               Boolean          @default(true) @map("opened_allowed")
+  requiresUnused              Boolean          @default(false) @map("requires_unused")
+  defectiveOnly               Boolean          @default(false) @map("defective_only")
+  exchangeOnly                Boolean          @default(false) @map("exchange_only")
+  replacementAllowed          Boolean          @default(true) @map("replacement_allowed")
+  returnRequired              Boolean          @default(true) @map("return_required")
+  evidenceRequiredReasons     String[]         @map("evidence_required_reasons")
+  humanApprovalThresholdMinor Int?             @map("human_approval_threshold_minor")
+  exceptions                  Json             @default("{}")
+  returnShipping              ReturnShipping   @default(FREE) @map("return_shipping")
+  verificationRequired        VerificationType @default(NONE) @map("verification_required")
+  notes                       String?
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@map("refund_policies")
+}
+
+model Order {
+  id              String      @id
+  customerId      String      @map("customer_id")
+  status          OrderStatus @default(PENDING)
+  totalMinor      Int         @map("total_minor")
+  currency        String      @default("INR")
+  shippingAddress Json        @map("shipping_address")
+  orderedAt       DateTime    @default(now()) @map("ordered_at")
+  deliveredAt     DateTime?   @map("delivered_at")
+  deliveryStatus  String      @default("PENDING") @map("delivery_status")
+
+  customer User           @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  items    OrderItem[]
+  payment  Payment?
+  tickets  RefundTicket[]
+
+  @@map("orders")
+}
+
+model OrderItem {
+  id             String  @id @default(cuid())
+  orderId        String  @map("order_id")
+  productId      String  @map("product_id")
+  quantity       Int     @default(1)
+  unitPriceMinor Int     @map("unit_price_minor")
+  unitSerial     String? @map("unit_serial")
+
+  order   Order          @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product Product        @relation(fields: [productId], references: [id], onDelete: Restrict)
+  tickets RefundTicket[]
+
+  @@map("order_items")
+}
+
+model Payment {
+  id            String        @id
+  orderId       String        @unique @map("order_id")
+  transactionId String        @unique @map("transaction_id")
+  method        PaymentMethod
+  status        PaymentStatus @default(PAID)
+  amountMinor   Int           @map("amount_minor")
+  paidAt        DateTime?     @map("paid_at")
+
+  order              Order               @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  refundTransactions RefundTransaction[]
+
+  @@map("payments")
+}
+
+model RefundTicket {
+  id                     String          @id
+  customerId             String          @map("customer_id")
+  orderId                String          @map("order_id")
+  orderItemId            String          @map("order_item_id")
+  productId              String          @map("product_id")
+  transactionId          String          @map("transaction_id")
+  reason                 TicketReason
+  description            String
+  requestedAction        RequestedAction @map("requested_action")
+  requestedAmountMinor   Int             @map("requested_amount_minor")
+  status                 TicketStatus    @default(PENDING_RITOS)
+  approvalSource         ApprovalSource? @map("approval_source")
+  policySnapshot         Json            @map("policy_snapshot")
+  simulateRefundFailure  Boolean         @default(false) @map("simulate_refund_failure")
+  createdAt              DateTime        @default(now()) @map("created_at")
+  updatedAt              DateTime        @updatedAt @map("updated_at")
+
+  customer           User                @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  order              Order               @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  orderItem          OrderItem           @relation(fields: [orderItemId], references: [id], onDelete: Restrict)
+  product            Product             @relation(fields: [productId], references: [id], onDelete: Restrict)
+  evidence           RefundEvidence[]
+  decisions          RefundDecision[]
+  refundTransactions RefundTransaction[]
+  notifications      Notification[]
+
+  @@map("refund_tickets")
+}
+
+model RefundEvidence {
+  id         String       @id
+  ticketId   String       @map("ticket_id")
+  type       EvidenceType
+  filename   String
+  storedPath String       @map("stored_path")
+  mime       String
+  sizeBytes  Int          @map("size_bytes")
+  sha256     String
+  uploadedAt DateTime     @default(now()) @map("uploaded_at")
+
+  ticket RefundTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+
+  @@map("refund_evidence")
+}
+
+model RefundDecision {
+  id                  String       @id
+  ticketId            String       @map("ticket_id")
+  decision            DecisionType
+  refundPercentage    Int          @default(100) @map("refund_percentage")
+  refundAmountMinor   Int          @map("refund_amount_minor")
+  reason              String
+  confidenceScore     Decimal      @db.Decimal(4, 3) @map("confidence_score")
+  processedBy         String       @map("processed_by")
+  requiresHumanReview Boolean      @default(false) @map("requires_human_review")
+  agentTrace          Json?        @map("agent_trace")
+  humanNote           String?      @map("human_note")
+  createdAt           DateTime     @default(now()) @map("created_at")
+
+  ticket RefundTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+
+  @@map("refund_decisions")
+}
+
+model RefundTransaction {
+  id             String         @id
+  ticketId       String         @map("ticket_id")
+  transactionId  String         @map("transaction_id")
+  amountMinor    Int            @map("amount_minor")
+  status         RefundTxStatus @default(PENDING)
+  idempotencyKey String         @map("idempotency_key")
+  failureReason  String?        @map("failure_reason")
+  settleAt       DateTime?      @map("settle_at")
+  createdAt      DateTime       @default(now()) @map("created_at")
+
+  ticket  RefundTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  payment Payment      @relation(fields: [transactionId], references: [transactionId], onDelete: Restrict)
+
+  @@unique([transactionId, idempotencyKey])
+  @@map("refund_transactions")
+}
+
+model Notification {
+  id        String              @id @default(cuid())
+  userId    String              @map("user_id")
+  ticketId  String?             @map("ticket_id")
+  channel   NotificationChannel @default(IN_APP)
+  title     String
+  body      String
+  readAt    DateTime?           @map("read_at")
+  createdAt DateTime            @default(now()) @map("created_at")
+
+  user   User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  ticket RefundTicket? @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+
+  @@map("notifications")
+}
+
+model AuditEvent {
+  id         String   @id @default(cuid())
+  entityType String   @map("entity_type")
+  entityId   String   @map("entity_id")
+  event      String
+  actor      String
+  payload    Json     @default("{}")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  @@map("audit_events")
+}
+
+model IntegrationEvent {
+  id        String      @id @default(cuid())
+  eventType String      @map("event_type")
+  ticketId  String      @map("ticket_id")
+  payload   Json        @default("{}")
+  status    EventStatus @default(PENDING)
+  attempts  Int         @default(0)
+  lastError String?     @map("last_error")
+  createdAt DateTime    @default(now()) @map("created_at")
+  sentAt    DateTime?   @map("sent_at")
+
+  @@map("integration_events")
+}
+
+model RitosExchange {
+  id         String            @id @default(cuid())
+  ticketId   String?           @map("ticket_id")
+  direction  ExchangeDirection
+  endpoint   String
+  request    Json?
+  response   Json?
+  httpStatus Int?              @map("http_status")
+  latencyMs  Int?              @map("latency_ms")
+  createdAt  DateTime          @default(now()) @map("created_at")
+
+  @@map("ritos_exchanges")
+}
+
+model IdempotencyKey {
+  key         String   @id
+  scope       String
+  requestHash String   @map("request_hash")
+  response    Json
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@map("idempotency_keys")
+}

@@ -1,81 +1,2646 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react'
-import { Activity, AlertTriangle, ArrowDownRight, ArrowUpRight, BadgeCheck, Bell, BrainCircuit, Check, ChevronDown, CircleDollarSign, Clock3, Command, FileText, Filter, Gauge, Headphones, LayoutDashboard, LogOut, Menu, Plus, RefreshCw, Search, Shield, ShieldAlert, Ticket as TicketIcon, Users, WalletCards, X } from 'lucide-react'
+import {
+  Activity, AlertTriangle, ArrowDownRight, ArrowUpRight, BadgeCheck, Bell,
+  BookOpen, BrainCircuit, Check, CheckCircle2, ChevronDown, ChevronRight,
+  CircleDollarSign, Clock3, Command, Copy, Database, ExternalLink, FileText,
+  Filter, Gauge, Headphones, HelpCircle, Info, LayoutDashboard, Lock, LogOut,
+  Mail, Menu, MessageSquare, Phone, Play, Plus, RefreshCw, Search, Send,
+  Shield, ShieldAlert, Sparkles, Ticket as TicketIcon, Users, WalletCards, X, Zap
+} from 'lucide-react'
 import { api, getToken, setToken, type Ticket, type User } from './api'
+import { isClosedStatus, priorityRank } from './logic'
+
+export { isClosedStatus, priorityRank }
 
 const roles = [
- {label:'Customer',role:'customer',email:'customer@ritos.local'},
- {label:'Support Agent',role:'support_agent',email:'agent@ritos.local'},
- {label:'Refund Operations',role:'refund_operations',email:'refunds@ritos.local'},
- {label:'Risk Analyst',role:'risk_analyst',email:'risk@ritos.local'},
- {label:'Team Supervisor',role:'supervisor',email:'lead@ritos.local'},
- {label:'Finance Approver',role:'finance_approver',email:'finance@ritos.local'},
- {label:'Administrator',role:'administrator',email:'admin@ritos.local'},
- {label:'Auditor',role:'auditor',email:'audit@ritos.local'}
+  { label: 'CS-1 (Fast-Track)', role: 'cs_1', email: 'cs1@ritos.local', icon: CheckCircle2, desc: 'Genuine in-policy refunds' },
+  { label: 'CS-2 (Exceptions)', role: 'cs_2', email: 'cs2@ritos.local', icon: AlertTriangle, desc: 'Missing proof & damage' },
+  { label: 'CS-3 (Denials)', role: 'cs_3', email: 'cs3@ritos.local', icon: X, desc: 'Policy rejection notices' },
+  { label: 'Administrator', role: 'administrator', email: 'admin@ritos.local', icon: Command, desc: 'Webhooks & system config' },
+  { label: 'Supervisor', role: 'supervisor', email: 'lead@ritos.local', icon: Shield, desc: 'Omnichannel desk oversight' },
+  { label: 'Finance Approver', role: 'finance_approver', email: 'finance@ritos.local', icon: CircleDollarSign, desc: 'Settlement authorization' },
+  { label: 'Customer Portal', role: 'customer', email: 'customer@ritos.local', icon: Users, desc: 'Self-service claims' }
 ]
-const navFor=(role:string)=>role==='customer'?[['Overview','dashboard'],['My tickets','tickets'],['Submit a request','new'],['Refunds','refunds']]:
- role==='finance_approver'?[['Overview','dashboard'],['Ticket queue','tickets'],['Refund approvals','refunds'],['Automation agents','automation'],['Audit trail','audit']]:
- role==='risk_analyst'?[['Overview','dashboard'],['Risk queue','tickets'],['Refunds','refunds'],['Automation agents','automation'],['Audit trail','audit']]:
- role==='administrator'?[['Overview','dashboard'],['Ticket queue','tickets'],['Refund operations','refunds'],['Automation agents','automation'],['Users & access','users'],['Audit trail','audit']]:
- role==='auditor'?[['Overview','dashboard'],['Case records','tickets'],['Refund records','refunds'],['Automation agents','automation'],['Audit trail','audit']]:
- [['Overview','dashboard'],['Ticket queue','tickets'],['Refund operations','refunds'],['Automation agents','automation'],['Analytics','analytics'],['Audit trail','audit']]
-const roleTitle=(r:string)=>roles.find(x=>x.role===r)?.label||r
-const money=(n:number,c='INR')=>new Intl.NumberFormat('en-IN',{style:'currency',currency:c,maximumFractionDigits:2}).format(n||0)
-const date=(d:string)=>new Date(d).toLocaleString()
-function App(){
- const [user,setUser]=useState<User|null>(null),[email,setEmail]=useState('agent@ritos.local'),[password,setPassword]=useState('ChangeMe123!'),[loginError,setLoginError]=useState(''),[busy,setBusy]=useState(false)
- const [page,setPage]=useState('dashboard'),[tickets,setTickets]=useState<Ticket[]>([]),[metrics,setMetrics]=useState<any>(null),[automation,setAutomation]=useState<any>(null),[refunds,setRefunds]=useState<any[]>([]),[audit,setAudit]=useState<any[]>([]),[users,setUsers]=useState<User[]>([])
- const [selected,setSelected]=useState<Ticket|null>(null),[search,setSearch]=useState(''),[statusFilter,setStatusFilter]=useState(''),[priorityFilter,setPriorityFilter]=useState('')
- const [notice,setNotice]=useState(''),[showNew,setShowNew]=useState(false),[showMobileNav,setShowMobileNav]=useState(false),[apiStatus,setApiStatus]=useState<'checking'|'connected'|'degraded'>('checking')
- const [form,setForm]=useState({transaction_id:'TXN-1001',order_id:'ORD-1001',claimed_amount:'1500',currency:'INR',description:'My refund has not arrived after three days.'})
- const [comment,setComment]=useState(''),[internal,setInternal]=useState(true),[refundAmount,setRefundAmount]=useState(''),[refundReason,setRefundReason]=useState('Verified refund request; please review.'),[decisionReason,setDecisionReason]=useState('Reviewed against verified transaction records.')
- const isCustomer=user?.role==='customer'
- const canOperate=['refund_operations','finance_approver','administrator'].includes(user?.role||'')
- const nav=useMemo(()=>navFor(user?.role||'support_agent'),[user?.role])
- async function load(){
-  try{
-   const params=new URLSearchParams();if(search)params.set('q',search);if(statusFilter)params.set('status',statusFilter);if(priorityFilter)params.set('priority',priorityFilter)
-   const [t,m,r]=await Promise.all([api.tickets(params.toString()?'?'+params.toString():''),isCustomer?Promise.resolve(null):api.analytics(),api.refunds()])
-   setTickets(t.items);setMetrics(m);setRefunds(r);setApiStatus('connected');if(!isCustomer){try{setAutomation(await api.automationSummary())}catch{setAutomation(null)}}
-   if(['administrator','auditor'].includes(user?.role||'')){try{setAudit(await api.audit())}catch{}}
-   if(user?.role==='administrator'){try{setUsers(await api.users())}catch{}}
-  }catch(e){setApiStatus('degraded');setNotice((e as Error).message)}
- }
- useEffect(()=>{if(getToken()){api.me().then(setUser).catch(()=>{setToken('');setUser(null)})}},[])
- useEffect(()=>{if(user){load()}},[user,page,search,statusFilter,priorityFilter])
- async function login(e:FormEvent){e.preventDefault();setBusy(true);setLoginError('');try{const data=await api.login(email,password);setToken(data.access_token);setUser(data.user);setPage('dashboard')}catch(e){setLoginError((e as Error).message)}finally{setBusy(false)}}
- function logout(){setToken('');setUser(null);setSelected(null);setPage('dashboard')}
- async function refresh(){await load();setNotice('Workspace refreshed from the API.')}
- async function submitTicket(e:FormEvent){e.preventDefault();try{await api.createTicket({...form,claimed_amount:Number(form.claimed_amount)});setShowNew(false);setPage('tickets');await load();setNotice('Ticket submitted and triaged.')}catch(e){setNotice((e as Error).message)}}
- async function doUpdate(t:Ticket,data:unknown){try{const updated=await api.updateTicket(t.id,data);setSelected(updated);await load();setNotice('Ticket updated.')}catch(e){setNotice((e as Error).message)}}
- async function addComment(e:FormEvent){e.preventDefault();if(!selected||!comment.trim())return;try{await api.comment(selected.id,comment,internal&&!isCustomer);setComment('');setSelected(await api.ticket(selected.id));await load();setNotice('Comment added.')}catch(e){setNotice((e as Error).message)}}
- async function escalate(t:Ticket){try{const updated=await api.escalate(t.id);setSelected(updated);await load();setNotice('Ticket escalated to the escalation queue.')}catch(e){setNotice((e as Error).message)}}
- async function requestRefund(e:FormEvent){e.preventDefault();if(!selected)return;try{await api.createRefund(selected.id,Number(refundAmount),refundReason);setRefundAmount('');await load();setNotice('Refund request created. It requires authorized finance approval.')}catch(e){setNotice((e as Error).message)}}
- async function decideRefund(id:string,approve:boolean){try{if(approve){await api.approveRefund(id,decisionReason);setNotice('Refund approved. Execution remains a separate authorized action.')}else{await api.rejectRefund(id,decisionReason);setNotice('Refund rejected with a recorded reason.')}await load()}catch(e){setNotice((e as Error).message)}}
- async function executeRefund(id:string){try{const r=await api.executeRefund(id);setNotice(`Mock provider result: ${r.status} · ${r.provider_reference||''}`);await load()}catch(e){setNotice((e as Error).message)}}
- if(!user)return <div className="login-shell"><div className="login-art"><div className="brand large"><span className="brand-mark"><Command size={25}/></span><span>RITOS</span></div><div className="login-copy"><div className="eyebrow light">REFUND INTELLIGENCE PLATFORM</div><h1>Clarity for every<br/><em>refund decision.</em></h1><p>One operational workspace to triage customer issues, investigate payment records and coordinate trusted resolutions.</p><div className="login-proof"><div><ShieldCheckIcon/><span>Controlled financial workflows</span></div><div><BrainCircuit size={18}/><span>Explainable ticket intelligence</span></div><div><Activity size={18}/><span>Auditable operations</span></div></div></div><div className="login-foot">RITOS · INTERNAL OPERATIONS PLATFORM</div></div><div className="login-panel"><form className="login-card" onSubmit={login}><div className="eyebrow">WELCOME BACK</div><h2>Sign in to RITOS</h2><p className="muted">Use a seeded development account to explore the workspace.</p>{loginError&&<div className="error-box">{loginError}</div>}<label>Email address</label><input type="email" value={email} onChange={e=>setEmail(e.target.value)} required/><label>Password</label><input type="password" value={password} onChange={e=>setPassword(e.target.value)} required/><button className="primary full" disabled={busy}>{busy?'Signing in…':'Sign in securely'}</button>{import.meta.env.DEV&&<><div className="divider-text">DEVELOPMENT ROLE SHORTCUTS</div><label>Choose a workspace</label><select value={email} onChange={e=>setEmail(e.target.value)}>{roles.map(r=><option value={r.email} key={r.role}>{r.label}</option>)}</select><div className="hint">Development account passwords are configured through the backend <code>SEED_PASSWORD</code> environment variable.</div></>}<div className="login-security"><Shield size={16}/> Role permissions are checked by the backend API.</div></form></div></div>
- return <div className="app-shell"><aside className={`sidebar ${showMobileNav?'open':''}`}><div className="brand"><span className="brand-mark"><Command size={21}/></span><span>RITOS</span><span className="brand-tag">OPS</span></div><div className="workspace-label">WORKSPACE</div><div className="workspace-switch"><div className="workspace-icon"><WalletCards size={18}/></div><div><strong>Refund Operations</strong><small>Enterprise workspace</small></div><ChevronDown size={15}/></div><div className="nav-label">OPERATIONS</div><nav>{nav.map(([label,key])=><button key={key} className={`nav-item ${page===key?'active':''}`} onClick={()=>{setPage(key);setSelected(null);setShowMobileNav(false)}}>{key==='dashboard'?<LayoutDashboard size={18}/>:key==='tickets'?<TicketIcon size={18}/>:key==='new'?<Plus size={18}/>:key==='refunds'?<CircleDollarSign size={18}/>:key==='analytics'?<Gauge size={18}/>:key==='automation'?<BrainCircuit size={18}/>:key==='audit'?<FileText size={18}/>:<Users size={18}/>}<span>{label}</span>{key==='tickets'&&<span className="nav-count">{tickets.length}</span>}</button>)}</nav><div className="sidebar-bottom"><div className="secure-card"><div className="secure-icon"><ShieldCheckIcon/></div><strong>Security controls active</strong><p>Role-aware access and audit events are enabled for this environment.</p><span className={`secure-status ${apiStatus==='degraded'?'degraded':''}`}><i/>{apiStatus==='connected'?'API connected':apiStatus==='degraded'?'API unavailable':'Checking API…'}</span></div><button className="profile" onClick={logout}><div className="avatar">{user.full_name.split(' ').map(x=>x[0]).slice(0,2).join('')}</div><div className="profile-info"><strong>{user.full_name}</strong><small>{roleTitle(user.role)}</small></div><LogOut size={16}/></button></div></aside>{showMobileNav&&<div className="mobile-scrim" onClick={()=>setShowMobileNav(false)}/>}<main className="main"><header className="topbar"><div className="top-left"><button className="icon-btn mobile-menu" onClick={()=>setShowMobileNav(!showMobileNav)}><Menu size={20}/></button><div className="crumb">Workspace <span>/</span> <strong>{nav.find(x=>x[1]===page)?.[0]||page}</strong></div></div><div className="top-actions"><div className={`system-status ${apiStatus==='degraded'?'degraded':''}`}><i/>{apiStatus==='connected'?'API connected':apiStatus==='degraded'?'API unavailable':'Checking API…'}</div><button className="icon-btn" title="Refresh data" onClick={refresh}><RefreshCw size={17}/></button><button className="icon-btn notification" title="Notifications" onClick={()=>setNotice('Notifications are shown as persisted ticket and refund status updates in this build.')}><Bell size={18}/><b/></button><div className="top-avatar">{user.full_name.split(' ').map(x=>x[0]).slice(0,2).join('')}</div></div></header><div className="content">
- {notice&&<div className="notice"><span>{notice}</span><button onClick={()=>setNotice('')}><X size={16}/></button></div>}
- {page==='dashboard'&&<><div className="page-heading"><div><div className="eyebrow">OVERVIEW · {new Date().toLocaleDateString(undefined,{month:'long',day:'numeric',year:'numeric'})}</div><h1>{isCustomer?'Your refund workspace':`Good ${new Date().getHours()<12?'morning':new Date().getHours()<18?'afternoon':'evening'}, ${user.full_name.split(' ')[0]}`}</h1><p>{isCustomer?'Track your refund requests and get clear next steps.':'Here is what is happening across your refund operations today.'}</p></div><div className="heading-actions"><button className="secondary" onClick={refresh}><RefreshCw size={16}/> Refresh</button>{isCustomer&&<button className="primary" onClick={()=>setShowNew(true)}><Plus size={17}/> New ticket</button>}</div></div>{isCustomer?<><div className="metric-grid three"><Metric icon={<TicketIcon/>} label="My tickets" value={tickets.length} note="All submitted cases"/><Metric icon={<Clock3/>} label="In progress" value={tickets.filter(t=>!['RESOLVED','REJECTED'].includes(t.status)).length} note="Awaiting resolution"/><Metric icon={<CircleDollarSign/>} label="Refund requests" value={refunds.length} note="Linked to your cases"/></div><SectionTitle title="Recent tickets" action="View all" onAction={()=>setPage('tickets')}/><TicketTable tickets={tickets.slice(0,5)} onSelect={setSelected}/></>:<><div className="metric-grid"><Metric icon={<TicketIcon/>} label="Total tickets" value={metrics?.total_tickets??'—'} note="Persisted cases" trend="Live data"/><Metric icon={<Activity/>} label="Open tickets" value={metrics?.open_tickets??'—'} note="Not resolved or rejected" trend="Live data"/><Metric icon={<ShieldAlert/>} label="Urgent review" value={metrics?.urgent_tickets??'—'} note="Priority P1" tone="red"/><Metric icon={<Users/>} label="Unassigned" value={metrics?.unassigned_tickets??'—'} note="Needs an owner" tone="amber"/></div><div className="dashboard-grid"><section className="panel main-panel"><div className="panel-heading"><div><h3>Ticket workload</h3><p>Current status distribution from persisted records</p></div><button className="text-btn" onClick={()=>setPage('tickets')}>View queue <ArrowUpRight size={15}/></button></div><div className="status-bars">{Object.entries(metrics?.status_counts||{}).length?Object.entries(metrics.status_counts).map(([name,val]:any)=>{const max=Math.max(...Object.values(metrics.status_counts) as number[],1);return <div className="bar-row" key={name}><span>{name.replace(/_/g, ' ')}</span><div className="bar-track"><div className={`bar-fill bar-${name.toLowerCase()}`} style={{width:`${Math.max(4,val/max*100)}%`}}/></div><strong>{val}</strong></div>}):<Empty text="No ticket data yet. Submit a customer ticket to begin."/ >}</div><div className="panel-foot"><span><i className="dot blue"/> Status counts</span><span>Updated {metrics?.as_of?new Date(metrics.as_of).toLocaleTimeString(): '—'}</span></div></section><section className="panel"><div className="panel-heading"><div><h3>Priority watch</h3><p>Cases requiring attention</p></div><span className="icon-muted"><AlertTriangle size={18}/></span></div><div className="priority-list"><PriorityRow color="red" label="Critical · P1" value={tickets.filter(t=>t.priority==='P1').length} desc="Security-sensitive or urgent"/><PriorityRow color="amber" label="High · P2" value={tickets.filter(t=>t.priority==='P2').length} desc="Overdue or escalated"/><PriorityRow color="blue" label="Normal · P3" value={tickets.filter(t=>t.priority==='P3').length} desc="Standard investigation"/><PriorityRow color="gray" label="Low · P4" value={tickets.filter(t=>t.priority==='P4').length} desc="General questions"/></div><div className="risk-note"><ShieldCheckIcon/><span><strong>Safety guardrail</strong><small>Risk flags are review signals, not proof of fraud.</small></span></div></section></div><div className="section-heading"><SectionTitle title="Latest tickets" action="Open queue" onAction={()=>setPage('tickets')}/></div><TicketTable tickets={tickets.slice(0,5)} onSelect={setSelected}/></>}</>}
- {page==='tickets'&&<><div className="page-heading"><div><div className="eyebrow">CASE MANAGEMENT</div><h1>{isCustomer?'My tickets':'Ticket queue'}</h1><p>Classified cases, verified transaction checks and explainable routing.</p></div>{isCustomer&&<button className="primary" onClick={()=>setShowNew(true)}><Plus size={17}/> Submit ticket</button>}</div><div className="filterbar"><div className="searchbox"><Search size={17}/><input placeholder="Search ticket, transaction or description…" value={search} onChange={e=>setSearch(e.target.value)}/></div><div className="select-filter"><Filter size={16}/><select value={statusFilter} onChange={e=>setStatusFilter(e.target.value)}><option value="">All statuses</option>{['NEW','TRIAGED','IN_REVIEW','AWAITING_INFORMATION','ESCALATED','RESOLVED','REJECTED','REOPENED'].map(s=><option key={s}>{s}</option>)}</select></div><select className="priority-filter" value={priorityFilter} onChange={e=>setPriorityFilter(e.target.value)}><option value="">All priorities</option>{['P1','P2','P3','P4'].map(p=><option key={p}>{p}</option>)}</select><button className="secondary compact" onClick={refresh}><RefreshCw size={15}/> Refresh</button></div><TicketTable tickets={tickets} onSelect={setSelected}/></>}
- {page==='new'&&<><div className="page-heading"><div><div className="eyebrow">CUSTOMER PORTAL</div><h1>Submit a refund issue</h1><p>Tell us what happened. RITOS will check the available transaction record and route your case.</p></div></div><NewTicketForm form={form} setForm={setForm} onSubmit={submitTicket}/></>}
- {page==='refunds'&&<><div className="page-heading"><div><div className="eyebrow">FINANCIAL OPERATIONS</div><h1>{user.role==='finance_approver'?'Refund approvals':'Refund operations'}</h1><p>Requested, approved and completed amounts are kept separate.</p></div></div><div className="metric-grid three"><Metric icon={<CircleDollarSign/>} label="Refund requests" value={refunds.length} note="All visible requests"/><Metric icon={<Clock3/>} label="Awaiting approval" value={refunds.filter(r=>r.status==='PENDING_APPROVAL').length} note="Finance decision needed"/><Metric icon={<BadgeCheck/>} label="Confirmed (mock)" value={refunds.filter(r=>r.status==='REFUNDED').length} note="Mock provider only"/></div><div className="panel table-panel"><div className="panel-heading"><div><h3>Refund register</h3><p>All state changes are persisted and audited.</p></div></div><div className="table-wrap"><table><thead><tr><th>REFUND ID</th><th>TICKET</th><th>AMOUNT</th><th>STATUS</th><th>PROVIDER REF.</th><th>ACTIONS</th></tr></thead><tbody>{refunds.map(r=><tr key={r.id}><td><span className="mono">{r.id.slice(0,8).toUpperCase()}</span></td><td><button className="link-btn" onClick={()=>{const t=tickets.find(x=>x.id===r.ticket_id);if(t)setSelected(t)}}>{tickets.find(x=>x.id===r.ticket_id)?.ticket_number||r.ticket_id.slice(0,8)}</button></td><td className="amount">{money(r.amount,r.currency)}</td><td><StatusPill value={r.status}/></td><td className="mono">{r.provider_reference||'—'}</td><td><div className="row-actions">{r.status==='PENDING_APPROVAL'&&user.role==='finance_approver'&&<><button className="mini-action good" onClick={()=>decideRefund(r.id,true)} title="Approve"><Check size={15}/></button><button className="mini-action bad" onClick={()=>decideRefund(r.id,false)} title="Reject"><X size={15}/></button></>}{r.status==='APPROVED'&&canOperate&&user.role!=='finance_approver'&&<button className="mini-action" onClick={()=>executeRefund(r.id)} title="Execute mock refund"><ArrowDownRight size={15}/></button>}</div></td></tr>)}{!refunds.length&&<tr><td colSpan={6}><Empty text="No refund requests yet. A verified case must be reviewed before a refund request is created."/></td></tr>}</tbody></table></div><div className="hint padded">This build uses a mock payment provider. Execution never moves real money.</div></div></>}
- {page==='automation'&&<><div className="page-heading"><div><div className="eyebrow">AUTOMATION CONTROL PLANE</div><h1>Agent orchestration</h1><p>Live counts from persisted backend records. Financial execution remains approval-gated.</p></div><button className="secondary" onClick={refresh}><RefreshCw size={16}/> Refresh</button></div><div className="metric-grid"><Metric icon={<BrainCircuit size={19}/>} label="Specialist agents" value={automation?.agent_count??8} note="Registered workflow components" tone="blue"/><Metric icon={<Activity size={19}/>} label="Pipeline runs" value={automation?.pipeline_runs??0} note="Persisted automation events" tone="green"/><Metric icon={<AlertTriangle size={19}/>} label="Verification exceptions" value={automation?.tickets_needing_verification??0} note="Tickets needing trusted verification" tone="amber"/><Metric icon={<ShieldAlert size={19}/>} label="Duplicate candidates" value={automation?.tickets_flagged_duplicate??0} note="Linked tickets; not auto-closed" tone="red"/></div><div className="content-grid"><section className="panel"><div className="panel-heading"><div><h3>Specialist agents</h3><p>8 specialists coordinated by one central orchestrator</p></div></div>{[['Transaction Data Fetcher','Fetches trusted order and payment facts.'],['Duplicate Intelligence','Links repeated tickets and separately investigates double charges.'],['Issue Classification','Classifies the complaint with rule evidence and confidence.'],['Risk & Fraud Signals','Flags indicators; signals alone never prove fraud.'],['Refund Eligibility & Policy','Checks configured policy against verified facts.'],['Routing & SLA','Routes cases and tracks priority/escalation.'],['Refund Execution','Submits authorized operations with idempotency safeguards.'],['Reconciliation & Communication','Verifies provider outcome and prepares accurate updates.']].map(([name,desc],i)=><div className="timeline-item" key={name}><span className="timeline-dot blue"/><div><strong>{String(i+1).padStart(2,'0')} · {name}</strong><p>{desc}</p></div><StatusPill value={i<6?'ACTIVE':'APPROVAL GATED'}/></div>)}</section><section className="panel"><div className="panel-heading"><div><h3>Autonomy guardrails</h3><p>Financial safety rules</p></div></div><ul className="measurement-list"><li><strong>Trusted data only</strong><span>Customer text cannot establish payment or refund status.</span></li><li><strong>No duplicate execution</strong><span>Idempotency and provider reconciliation protect retry paths.</span></li><li><strong>Human review</strong><span>Risk, mismatched data and policy-required approvals are escalated.</span></li><li><strong>Provider mode</strong><span>{automation?.refund_execution_mode||'MOCK_ONLY'} — no real funds move in this build.</span></li><li><strong>Background worker</strong><span>Celery worker entrypoint is included; durable queue scheduling needs deployment validation.</span></li></ul></section></div></>}
- {page==='analytics'&&<><div className="page-heading"><div><div className="eyebrow">PERFORMANCE & QUALITY</div><h1>Operational analytics</h1><p>Metrics calculated from the current persisted dataset.</p></div></div><div className="metric-grid"><Metric icon={<TicketIcon/>} label="Total tickets" value={metrics?.total_tickets??'—'} note="All tickets"/><Metric icon={<AlertTriangle/>} label="Escalated cases" value={metrics?.sla_breaches??'—'} note="Escalated status proxy"/><Metric icon={<CircleDollarSign/>} label="Requested amount" value={money(metrics?.refund_requested||0)} note="All refund requests"/><Metric icon={<BadgeCheck/>} label="Completed amount" value={money(metrics?.refund_completed||0)} note="Provider-confirmed mock amount"/></div><div className="dashboard-grid"><section className="panel"><div className="panel-heading"><div><h3>Issue categories</h3><p>Persisted classifier labels</p></div></div>{Object.entries(metrics?.category_counts||{}).map(([name,val]:any)=><div className="bar-row" key={name}><span>{name.replace(/_/g, ' ')}</span><div className="bar-track"><div className="bar-fill" style={{width:`${Math.max(4,val/Math.max(...Object.values(metrics.category_counts) as number[],1)*100)}%`}}/></div><strong>{val}</strong></div>)}{!tickets.length&&<Empty text="No data to analyze yet."/ >}</section><section className="panel"><div className="panel-heading"><div><h3>Measurement notes</h3><p>Metric definitions</p></div></div><ul className="measurement-list"><li><strong>Open tickets</strong><span>Tickets not resolved or rejected.</span></li><li><strong>Urgent tickets</strong><span>Priority P1 from persisted priority rules.</span></li><li><strong>Refund completed</strong><span>Only records in REFUNDED state; provider is mock.</span></li><li><strong>SLA breaches</strong><span>Currently an escalation-count proxy, not a configured SLA clock.</span></li></ul></section></div></>}
- {page==='audit'&&<><div className="page-heading"><div><div className="eyebrow">GOVERNANCE</div><h1>Audit trail</h1><p>Append-only application events available to authorized roles.</p></div><button className="secondary" onClick={refresh}><RefreshCw size={16}/> Refresh</button></div><div className="panel table-panel"><div className="table-wrap"><table><thead><tr><th>TIME</th><th>ACTOR</th><th>ACTION</th><th>ENTITY</th><th>DETAILS</th></tr></thead><tbody>{audit.map(a=><tr key={a.id}><td>{date(a.created_at)}</td><td className="mono">{a.actor_id?.slice(0,8)||'SYSTEM'}</td><td><strong>{a.action}</strong></td><td>{a.entity_type} · {a.entity_id.slice(0,8)}</td><td><code>{JSON.stringify(a.details)}</code></td></tr>)}{!audit.length&&<tr><td colSpan={5}><Empty text="No audit records available or your role does not have access."/></td></tr>}</tbody></table></div></div></>}
- {page==='users'&&<><div className="page-heading"><div><div className="eyebrow">ACCESS CONTROL</div><h1>Users & access</h1><p>Development users and role assignments currently seeded in the database.</p></div></div><div className="panel table-panel"><div className="table-wrap"><table><thead><tr><th>USER</th><th>EMAIL</th><th>ROLE</th><th>STATUS</th></tr></thead><tbody>{users.map(u=><tr key={u.id}><td><strong>{u.full_name}</strong></td><td>{u.email}</td><td>{roleTitle(u.role)}</td><td><StatusPill value="ACTIVE"/></td></tr>)}</tbody></table></div><div className="hint padded">Role management mutations are intentionally not exposed in this initial build.</div></div></>}
- </div><footer className="footer"><span>© 2026 RITOS · Refund Intelligence & Ticket Orchestration System</span><span><Shield size={13}/> Development environment · Mock provider</span></footer></main>
- {selected&&<div className="drawer-backdrop" onClick={()=>setSelected(null)}><aside className="ticket-drawer" onClick={e=>e.stopPropagation()}><div className="drawer-top"><div><div className="eyebrow">CASE DETAILS</div><h2>{selected.ticket_number}</h2></div><button className="icon-btn" onClick={()=>setSelected(null)}><X size={18}/></button></div><div className="drawer-scroll"><div className="drawer-badges"><StatusPill value={selected.status}/><PriorityPill value={selected.priority}/></div><h3>{selected.category.replace(/_/g, ' ')}</h3><p className="ticket-description">{selected.description}</p><div className="detail-grid"><Detail label="Claimed amount" value={money(selected.claimed_amount,selected.currency)}/><Detail label="Transaction" value={selected.transaction_id}/><Detail label="Payment verification" value={selected.payment_verification}/><Detail label="Refund status" value={selected.refund_status}/><Detail label="Assigned queue" value={selected.queue}/><Detail label="AI/rule confidence" value={`${Math.round(selected.confidence*100)}%`}/></div><div className="recommendation"><div className="recommend-icon"><BrainCircuit size={17}/></div><div><strong>Recommended next action</strong><p>{selected.recommended_action}</p><small>Rules classifier · {String(selected.classification_evidence?.classifier||'rules-v1')}</small></div></div>{selected.duplicate_of_id&&<div className="warning-box"><AlertTriangle size={17}/> Potential duplicate linked to case {selected.duplicate_of_id.slice(0,8)}. Review before resolving.</div>}<div className="drawer-section"><div className="section-title"><h4>Case controls</h4></div>{!isCustomer&&user.role!=='auditor'&&<div className="control-grid"><label>Status<select value={selected.status} onChange={e=>doUpdate(selected,{status:e.target.value})}>{['TRIAGED','IN_REVIEW','AWAITING_INFORMATION','ESCALATED','RESOLVED','REJECTED','REOPENED'].map(s=><option key={s}>{s}</option>)}</select></label><label>Priority<select value={selected.priority} onChange={e=>doUpdate(selected,{priority:e.target.value})}>{['P1','P2','P3','P4'].map(s=><option key={s}>{s}</option>)}</select></label></div>}{!isCustomer&&user.role!=='auditor'&&<button className="secondary full" onClick={()=>escalate(selected)}><AlertTriangle size={15}/> Escalate case</button>}</div>{canOperate&&<div className="drawer-section"><h4>Create refund request</h4><p className="muted small">Requires a verified transaction. Finance approval is a separate step.</p><form onSubmit={requestRefund}><label>Amount ({selected.currency})</label><input type="number" min="0.01" step="0.01" value={refundAmount} onChange={e=>setRefundAmount(e.target.value)} required/><label>Reason</label><textarea value={refundReason} onChange={e=>setRefundReason(e.target.value)} required/><button className="primary full" type="submit">Submit for approval</button></form></div>}<div className="drawer-section"><div className="section-title"><h4>Conversation & notes</h4><span>{selected.comments?.length||0} entries</span></div>{selected.comments?.map(c=><div className={`comment ${c.internal?'internal':''}`} key={c.id}><div className="comment-meta"><strong>{c.internal?'Internal note':'Customer-visible comment'}</strong><span>{date(c.created_at)}</span></div><p>{c.body}</p></div>)}{user.role!=='auditor'&&<form onSubmit={addComment}><textarea placeholder="Add a case update or note…" value={comment} onChange={e=>setComment(e.target.value)} required/><label className="checkbox-label"><input type="checkbox" checked={internal&&!isCustomer} disabled={isCustomer} onChange={e=>setInternal(e.target.checked)}/> Internal note (staff only)</label><button className="primary full" type="submit">Add comment</button></form>}</div><div className="drawer-section"><h4>Case timeline</h4><div className="timeline-item"><span className="timeline-dot"/><div><strong>Ticket created</strong><p>{date(selected.created_at)}</p></div></div><div className="timeline-item"><span className="timeline-dot blue"/><div><strong>Automated triage completed</strong><p>Category: {selected.category.replace(/_/g, ' ')} · Queue: {selected.queue}</p></div></div></div></div></aside></div>}
- {showNew&&<div className="modal-backdrop" onClick={()=>setShowNew(false)}><div className="modal" onClick={e=>e.stopPropagation()}><div className="modal-heading"><div><div className="eyebrow">CUSTOMER SUPPORT</div><h2>Submit a refund ticket</h2><p>Provide the details as they appear in your transaction record.</p></div><button className="icon-btn" onClick={()=>setShowNew(false)}><X size={18}/></button></div><NewTicketForm form={form} setForm={setForm} onSubmit={submitTicket}/></div></div>}
- </div>
+
+const AGENT_CATALOG = [
+  { id: 'transaction_data_fetcher', name: 'Transaction Data Fetcher', mode: 'Deterministic SQL / Provider', purpose: 'Fetches trusted ledger records for claimed transaction ID and validates amount, currency, and customer ownership.', guardrail: 'Customer statements never establish payment proof; ledger is ground truth.' },
+  { id: 'duplicate_intelligence', name: 'Duplicate Intelligence', mode: 'Heuristic Matching', purpose: 'Detects repeated customer tickets for the same transaction ID to prevent redundant investigation efforts.', guardrail: 'Never auto-closes or auto-rejects cases; links related tickets for human verification.' },
+  { id: 'issue_classifier', name: 'Issue Classification', mode: 'NLP / Rule Extraction', purpose: 'Classifies customer complaint into standardized operational categories with confidence rating and evidence tokens.', guardrail: 'Confidence score is a triage signal, never an authorization for money movement.' },
+  { id: 'risk_assessment', name: 'Risk & Fraud Signals', mode: 'Multi-Factor Scoring', purpose: 'Evaluates transaction and claim history to flag high-severity anomalies like unauthorized payment reports.', guardrail: 'Risk indicators are review flags, not proof of fraud. Never auto-penalizes customers.' },
+  { id: 'eligibility_policy', name: 'Refund Eligibility & Policy', mode: 'Deterministic Rules', purpose: 'Evaluates eCommerce product category return windows (Electronics: 7d, Apparel: 14d, Perishable: 0d).', guardrail: 'Conservative policy: only marks eligibility for human review; cannot trigger payout.' },
+  { id: 'routing_sla', name: 'Routing & SLA Agent', mode: 'Queue Table & Priority Engine', purpose: 'Assigns tickets to CS-1 (Genuine), CS-2 (Exceptions/Proof), or CS-3 (Ineligible/Non-refundable).', guardrail: 'Security-sensitive categories (unauthorized payments) cannot be downgraded from P1.' },
+  { id: 'refund_execution', name: 'Refund Execution Adapter', mode: 'Idempotent Provider Adapter', purpose: 'Submits authorized payout requests to payment gateway using SHA-256 idempotency key protection.', guardrail: 'Strict segregation of duties: Requester ≠ Approver ≠ Executor. Prevents double-spend.' },
+  { id: 'reconciliation_communication', name: 'Reconciliation & Communication', mode: 'Event Publisher & Audit Dispatch', purpose: 'Reconciles asynchronous gateway settlement webhooks, updates ticket status, and logs immutable audit trails.', guardrail: 'Stateless replay safety; audit events are strictly append-only.' }
+]
+
+const navFor = (role: string) => {
+  if (role === 'cs_1') {
+    return [
+      ['CS-1 Dashboard', 'dashboard'],
+      ['🟢 CS-1 Genuine Queue', 'cs1_desk'],
+      ['My Desk Tickets', 'tickets']
+    ]
+  }
+  if (role === 'cs_2') {
+    return [
+      ['CS-2 Dashboard', 'dashboard'],
+      ['🟡 CS-2 Exception Queue', 'cs2_desk'],
+      ['My Desk Tickets', 'tickets']
+    ]
+  }
+  if (role === 'cs_3') {
+    return [
+      ['CS-3 Dashboard', 'dashboard'],
+      ['🔴 CS-3 Denial Queue', 'cs3_desk'],
+      ['My Desk Tickets', 'tickets']
+    ]
+  }
+  if (role === 'customer') {
+    return [
+      ['Overview', 'dashboard'],
+      ['My Claims', 'tickets'],
+      ['File New Claim', 'new'],
+      ['Refunds', 'refunds']
+    ]
+  }
+  if (role === 'finance_approver') {
+    return [
+      ['Finance Dashboard', 'dashboard'],
+      ['Settlement Register', 'refunds'],
+      ['Audit Trail', 'audit']
+    ]
+  }
+  // Administrator and Supervisor: Full omnichannel visibility & controls
+  return [
+    ['Executive Command', 'dashboard'],
+    ['🟢 CS-1 Genuine Desk', 'cs1_desk'],
+    ['🟡 CS-2 Exception Desk', 'cs2_desk'],
+    ['🔴 CS-3 Denial Desk', 'cs3_desk'],
+    ['All Team Tickets Queue', 'tickets'],
+    ['🛒 eCommerce Integration Hub', 'ecommerce'],
+    ['8 Specialist Agents Registry', 'automation'],
+    ['Settlement Register', 'refunds'],
+    ['Security Audit Trail', 'audit']
+  ]
 }
-function ShieldCheckIcon(){return <BadgeCheck size={18}/>}
-function Metric({icon,label,value,note,tone,trend}:any){return <div className="metric-card"><div className="metric-top"><span className={`metric-icon ${tone||''}`}>{icon}</span>{trend&&<span className="live-tag"><i/>{trend}</span>}</div><div className="metric-label">{label}</div><div className="metric-value">{value}</div><div className="metric-note">{note}</div></div>}
-function SectionTitle({title,action,onAction}:any){return <div className="section-title"><h3>{title}</h3>{action&&<button className="text-btn" onClick={onAction}>{action} <ArrowUpRight size={15}/></button>}</div>}
-function StatusPill({value}:any){const v=String(value||'UNKNOWN');const cls=v.includes('REFUND')||v==='ACTIVE'||v==='RESOLVED'||v==='APPROVED'?'green':v.includes('REJECT')||v==='FAILED'?'red':v.includes('PENDING')||v.includes('AWAITING')||v==='ESCALATED'?'amber':'blue';return <span className={`pill ${cls}`}><i/>{v.replace(/_/g, ' ')}</span>}
-function PriorityPill({value}:any){return <span className={`priority-pill ${String(value).toLowerCase()}`}>{value}</span>}
-function TicketTable({tickets,onSelect}: {tickets:Ticket[];onSelect:(t:Ticket)=>void}){return <div className="panel table-panel"><div className="table-wrap"><table><thead><tr><th>TICKET</th><th>ISSUE</th><th>TRANSACTION</th><th>PRIORITY</th><th>STATUS</th><th>QUEUE</th><th>CREATED</th><th/></tr></thead><tbody>{tickets.map(t=><tr key={t.id} onClick={()=>onSelect(t)} className="click-row"><td><div className="ticket-id"><span className="ticket-symbol"><TicketIcon size={15}/></span><div><strong>{t.ticket_number}</strong><small>{t.customer_id.slice(0,8)}</small></div></div></td><td><div className="issue-cell"><strong>{t.category.replace(/_/g, ' ')}</strong><small>{t.description}</small></div></td><td><span className="mono">{t.transaction_id}</span><small className="subline">{money(t.claimed_amount,t.currency)}</small></td><td><PriorityPill value={t.priority}/></td><td><StatusPill value={t.status}/></td><td><span className="queue-cell">{t.queue}</span></td><td><span className="date-cell">{new Date(t.created_at).toLocaleDateString()}</span></td><td><button className="icon-btn tiny" onClick={e=>{e.stopPropagation();onSelect(t)}}><ArrowUpRight size={16}/></button></td></tr>)}{!tickets.length&&<tr><td colSpan={8}><Empty text="No tickets match the current filters."/></td></tr>}</tbody></table></div><div className="table-foot"><span>Showing <strong>{tickets.length}</strong> ticket{tickets.length===1?'':'s'} from the API</span><span className="pagination-label">Page 1 · API pagination available</span></div></div>}
-function Empty({text}:any){return <div className="empty"><span><FileText size={20}/></span><strong>Nothing to show yet</strong><p>{text}</p></div>}
-function PriorityRow({color,label,value,desc}:any){return <div className="priority-row"><span className={`priority-dot ${color}`}/><div><strong>{label}</strong><small>{desc}</small></div><b>{value}</b></div>}
-function Detail({label,value}:any){return <div className="detail"><small>{label}</small><strong>{value}</strong></div>}
-function NewTicketForm({form,setForm,onSubmit}:any){return <form className="ticket-form" onSubmit={onSubmit}><div className="form-grid"><div><label>Transaction ID *</label><input value={form.transaction_id} onChange={e=>setForm({...form,transaction_id:e.target.value})} required placeholder="TXN-1001"/></div><div><label>Order ID</label><input value={form.order_id} onChange={e=>setForm({...form,order_id:e.target.value})} placeholder="ORD-1001"/></div><div><label>Claimed amount *</label><input type="number" min="0.01" step="0.01" value={form.claimed_amount} onChange={e=>setForm({...form,claimed_amount:e.target.value})} required/></div><div><label>Currency</label><select value={form.currency} onChange={e=>setForm({...form,currency:e.target.value})}><option>INR</option><option>USD</option><option>EUR</option><option>GBP</option></select></div><div className="span-2"><label>Describe the issue *</label><textarea minLength={8} maxLength={5000} value={form.description} onChange={e=>setForm({...form,description:e.target.value})} required placeholder="Explain what happened and when…"/></div></div><div className="form-note"><ShieldCheckIcon/><span><strong>What happens next?</strong><small>RITOS checks the available transaction record, classifies the issue, checks for a related open ticket and assigns a queue. A customer statement is not treated as proof of payment.</small></span></div><button className="primary" type="submit"><Plus size={16}/> Submit ticket</button></form>}
+
+const roleTitle = (r: string) => roles.find(x => x.role === r)?.label || r
+const money = (n: number, c = 'INR') =>
+  new Intl.NumberFormat('en-IN', { style: 'currency', currency: c, maximumFractionDigits: 2 }).format(n || 0)
+const date = (d: string) => new Date(d).toLocaleString()
+
+function App() {
+  const [user, setUser] = useState<User | null>(null)
+  const [email, setEmail] = useState('cs1@ritos.local')
+  const [password, setPassword] = useState('ChangeMe123!')
+  const [loginError, setLoginError] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  const [page, setPage] = useState('dashboard')
+  const [tickets, setTickets] = useState<Ticket[]>([])
+  const [metrics, setMetrics] = useState<any>(null)
+  const [desks, setDesks] = useState<any>({ cs1_count: 0, cs2_count: 0, cs3_count: 0, resolved_count: 0, total_tickets: 0 })
+  const [automation, setAutomation] = useState<any>(null)
+  const [refunds, setRefunds] = useState<any[]>([])
+  const [audit, setAudit] = useState<any[]>([])
+
+  const [selected, setSelected] = useState<Ticket | null>(null)
+  const [search, setSearch] = useState('')
+  const [statusFilter, setStatusFilter] = useState('')
+  const [priorityFilter, setPriorityFilter] = useState('')
+
+  const [notice, setNotice] = useState('')
+  const [showNew, setShowNew] = useState(false)
+  const [showMobileNav, setShowMobileNav] = useState(false)
+  const [showDocModal, setShowDocModal] = useState(false)
+  const [activeAgentModal, setActiveAgentModal] = useState<any>(null)
+  const [apiStatus, setApiStatus] = useState<'checking' | 'connected' | 'degraded'>('checking')
+
+  const [pipelineLoading, setPipelineLoading] = useState(false)
+  const [pipelineTrace, setPipelineTrace] = useState<any>(null)
+
+  // Message drafting state in drawer
+  const [draftMessage, setDraftMessage] = useState('')
+  const [manualCancelReason, setManualCancelReason] = useState('')
+  const [showCancelPrompt, setShowCancelPrompt] = useState(false)
+
+  // eCommerce Webhook Simulator state
+  const [simEcom, setSimEcom] = useState({
+    order_id: 'ORD-9022',
+    transaction_id: 'TXN-1002',
+    customer_name: 'Pooja Verma',
+    customer_phone: '+91-9876543220',
+    item_name: 'Fastrack Smartwatch',
+    item_category: 'ELECTRONICS',
+    claimed_amount: '2499.00',
+    description: 'Display is flickering and battery drains within 1 hour of delivery.'
+  })
+  const [ecomSimResult, setEcomSimResult] = useState<any>(null)
+
+  const [form, setForm] = useState({
+    transaction_id: 'TXN-1001',
+    order_id: 'ORD-1001',
+    claimed_amount: '1500',
+    currency: 'INR',
+    description: 'Order cancelled before dispatch. Refund has not reached my account.'
+  })
+
+  const [customerTxs, setCustomerTxs] = useState<any[]>([])
+  const [runningAllAgents, setRunningAllAgents] = useState(false)
+  const [allAgentsResult, setAllAgentsResult] = useState<any>(null)
+  const [shopflowStatus, setShopflowStatus] = useState<any>(null)
+  const [syncingShopflow, setSyncingShopflow] = useState(false)
+
+  const [comment, setComment] = useState('')
+  const [internal, setInternal] = useState(true)
+  const [refundAmount, setRefundAmount] = useState('')
+  const [refundReason, setRefundReason] = useState('Verified refund request; please review.')
+  const [decisionReason, setDecisionReason] = useState('Reviewed against verified transaction records.')
+
+  const isCustomer = user?.role === 'customer'
+  const canOperate = ['cs_1', 'cs_2', 'cs_3', 'refund_operations', 'finance_approver', 'administrator', 'supervisor', 'support_agent'].includes(user?.role || '')
+  const nav = useMemo(() => navFor(user?.role || 'cs_1'), [user?.role])
+
+  // Filtered ticket subsets for desks (Strict isolation)
+  const cs1Tickets = useMemo(() => tickets.filter(t => t.decision_bucket === 'GENUINE_REFUNDABLE' || t.assigned_desk === 'CS_1'), [tickets])
+  const cs2Tickets = useMemo(() => tickets.filter(t => t.decision_bucket === 'EXCEPTIONAL_PROOF_NEEDED' || t.assigned_desk === 'CS_2'), [tickets])
+  const cs3Tickets = useMemo(() => tickets.filter(t => t.decision_bucket === 'NON_REFUNDABLE' || t.assigned_desk === 'CS_3'), [tickets])
+
+  // Strictly segregated queue per operational role
+  const displayedTickets = useMemo(() => {
+    if (user?.role === 'cs_1') return cs1Tickets
+    if (user?.role === 'cs_2') return cs2Tickets
+    if (user?.role === 'cs_3') return cs3Tickets
+    return tickets
+  }, [tickets, user?.role, cs1Tickets, cs2Tickets, cs3Tickets])
+
+  async function load() {
+    try {
+      const params = new URLSearchParams()
+      if (search) params.set('q', search)
+      if (statusFilter) params.set('status', statusFilter)
+      if (priorityFilter) params.set('priority', priorityFilter)
+
+      const [t, m, r, d, txs] = await Promise.all([
+        api.tickets(params.toString() ? '?' + params.toString() : ''),
+        isCustomer ? Promise.resolve(null) : api.analytics(),
+        api.refunds(),
+        isCustomer ? Promise.resolve(null) : api.desksSummary().catch(() => null),
+        isCustomer ? api.customerTransactions().catch(() => []) : Promise.resolve([])
+      ])
+      setTickets(t.items)
+      setMetrics(m)
+      setRefunds(r)
+      if (d) setDesks(d)
+      if (txs) setCustomerTxs(txs)
+      setApiStatus('connected')
+
+      if (!isCustomer) {
+        try {
+          setAutomation(await api.automationSummary())
+        } catch {
+          setAutomation(null)
+        }
+      }
+      if (['administrator', 'auditor', 'supervisor'].includes(user?.role || '')) {
+        try {
+          setAudit(await api.audit())
+        } catch {}
+      }
+      if (!isCustomer) {
+        api.shopflowStatus().then(setShopflowStatus).catch(() => setShopflowStatus(null))
+      }
+    } catch (e) {
+      setApiStatus('degraded')
+      setNotice((e as Error).message)
+    }
+  }
+
+  useEffect(() => {
+    if (getToken()) {
+      api.me().then(setUser).catch(() => {
+        setToken('')
+        setUser(null)
+      })
+    }
+  }, [])
+
+  useEffect(() => {
+    if (selected) {
+      setRefundAmount(selected.claimed_amount ? String(selected.claimed_amount) : '')
+      setDraftMessage(selected.customer_message_draft || '')
+      setShowCancelPrompt(false)
+      setManualCancelReason('')
+    }
+  }, [selected])
+
+  useEffect(() => {
+    if (user) {
+      load()
+    }
+  }, [user, page, search, statusFilter, priorityFilter])
+
+  async function login(e: FormEvent) {
+    e.preventDefault()
+    setBusy(true)
+    setLoginError('')
+    try {
+      const data = await api.login(email, password)
+      setToken(data.access_token)
+      setUser(data.user)
+      setPage('dashboard')
+    } catch (e) {
+      setLoginError((e as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function quickSwitch(targetEmail: string) {
+    setBusy(true)
+    try {
+      const data = await api.login(targetEmail, 'ChangeMe123!')
+      setToken(data.access_token)
+      setUser(data.user)
+      setSelected(null)
+      setPipelineTrace(null)
+      setNotice(`Switched session to ${data.user.full_name} (${roleTitle(data.user.role)})`)
+      await load()
+    } catch (err) {
+      setNotice(`Role switch failed: ${(err as Error).message}`)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  function logout() {
+    setToken('')
+    setUser(null)
+    setSelected(null)
+    setPipelineTrace(null)
+    setPage('dashboard')
+  }
+
+  async function refresh() {
+    await load()
+    setNotice('Data synced with database and desk queues.')
+  }
+
+  // --- CS-1 ACTIONS ---
+  async function handleCS1DirectRefund(t: Ticket) {
+    setBusy(true)
+    try {
+      const res = await api.cs1DirectRefund(t.id)
+      setNotice(`✅ CS-1 Direct Refund Executed! Provider Reference: ${res.provider_reference}`)
+      setSelected(res.ticket)
+      await load()
+    } catch (err) {
+      setNotice(`CS-1 Refund Failed: ${(err as Error).message}`)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function handleCS1ManualDecide(t: Ticket, decision: 'APPROVE' | 'CANCEL') {
+    if (decision === 'CANCEL' && !manualCancelReason.trim()) {
+      setNotice('Please provide a reason for cancelling the refund.')
+      return
+    }
+    setBusy(true)
+    try {
+      const reason = decision === 'APPROVE' ? 'CS-1 Manual Inspection Verified and Approved.' : manualCancelReason
+      const res = await api.cs1ManualDecide(t.id, decision, reason)
+      setNotice(decision === 'APPROVE' ? '✅ Refund Approved & Executed by CS-1!' : '❌ Refund Cancelled/Denied by CS-1.')
+      setSelected(res.ticket)
+      setShowCancelPrompt(false)
+      await load()
+    } catch (err) {
+      setNotice(`Action Failed: ${(err as Error).message}`)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  // --- CS-2 ACTION: SEND PROOF REQUEST ---
+  async function handleCS2SendProof(t: Ticket) {
+    setBusy(true)
+    try {
+      const res = await api.cs2SendProofRequest(t.id, draftMessage || t.customer_message_draft || '', t.proof_required || undefined)
+      setNotice(`📲 Proof Request Dispatched to ${res.destination}! Ticket moved to Awaiting Information.`)
+      setSelected(res.ticket)
+      await load()
+    } catch (err) {
+      setNotice(`Dispatch Failed: ${(err as Error).message}`)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  // --- CS-3 ACTION: SEND REJECTION NOTICE ---
+  async function handleCS3SendRejection(t: Ticket) {
+    setBusy(true)
+    try {
+      const res = await api.cs3SendRejectionNotice(t.id, draftMessage || t.customer_message_draft || '', t.policy_evaluation_reason || undefined)
+      setNotice(`📩 Policy Rejection Notice Dispatched to ${res.destination}! Ticket marked Rejected.`)
+      setSelected(res.ticket)
+      await load()
+    } catch (err) {
+      setNotice(`Dispatch Failed: ${(err as Error).message}`)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  // --- ECOMMERCE WEBHOOK SIMULATION ---
+  async function handleSimulateEcom() {
+    setBusy(true)
+    try {
+      const payload = {
+        ...simEcom,
+        claimed_amount: Number(simEcom.claimed_amount),
+        purchase_date: new Date().toISOString()
+      }
+      const res = await api.ecommerceTicketIntake(payload, 'ritos_ecommerce_secret_live_2026')
+      setEcomSimResult(res)
+      setNotice(`🚀 eCommerce Ticket Ingested! Ticket #${res.ticket_number} triaged to ${res.assigned_desk} (${res.decision_bucket}).`)
+      await load()
+    } catch (err) {
+      setNotice(`eCommerce Simulation Failed: ${(err as Error).message}`)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  // --- FINANCE APPROVER ACTIONS ---
+  async function handleApproveRefund(r: any) {
+    setBusy(true)
+    try {
+      await api.approveRefund(r.id, 'Dual-custody verification approved by Finance.')
+      setNotice(`✅ Refund #${r.id.slice(0, 8).toUpperCase()} Approved by Finance Approver!`)
+      await load()
+    } catch (err) {
+      setNotice(`Approval Failed: ${(err as Error).message}`)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function handleRejectRefund(r: any) {
+    setBusy(true)
+    try {
+      await api.rejectRefund(r.id, 'Disapproved by Finance Approver audit check.')
+      setNotice(`❌ Refund #${r.id.slice(0, 8).toUpperCase()} Rejected by Finance Approver.`)
+      await load()
+    } catch (err) {
+      setNotice(`Rejection Failed: ${(err as Error).message}`)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  // --- AUTOMATION ORCHESTRATION ---
+  async function handleRunAllAgents() {
+    setRunningAllAgents(true)
+    try {
+      const res = await api.runAllAutomation()
+      setAllAgentsResult(res)
+      setNotice(`🤖 AI Orchestrator: 8 Specialist Agents executed across ${res.processed_count} active tickets!`)
+      await load()
+    } catch (err) {
+      setNotice(`Multi-Agent Run Failed: ${(err as Error).message}`)
+    } finally {
+      setRunningAllAgents(false)
+    }
+  }
+
+  function handleRequestRefundForOrder(tx: any) {
+    setForm({
+      transaction_id: tx.id,
+      order_id: tx.order_id,
+      claimed_amount: String(Number(tx.amount) - Number(tx.refunded_amount)),
+      currency: tx.currency,
+      description: `Refund requested for Order ${tx.order_id} (${tx.id}).`
+    })
+    setPage('new')
+  }
+
+  // --- SHOPFLOW ACTIONS ---
+  async function handleSyncShopflow() {
+    setSyncingShopflow(true)
+    try {
+      const res = await api.shopflowSync()
+      if (res.status === 'DISCONNECTED') {
+        setNotice(`⚠️ ShopFlow Status: ${res.message}`)
+      } else {
+        setNotice(`🔄 ShopFlow Sync Completed: Processed ${res.synced_count} pending claim(s).`)
+      }
+      await load()
+    } catch (err) {
+      setNotice(`ShopFlow Sync Failed: ${(err as Error).message}`)
+    } finally {
+      setSyncingShopflow(false)
+    }
+  }
+
+  async function handleSimulateShopflowWebhook() {
+    setBusy(true)
+    try {
+      const samplePayload = {
+        event_id: `EVT-${Date.now()}`,
+        event_type: 'refund.ticket.created',
+        ticket_id: 'RIT-2026-000001',
+        status: 'PENDING_RITOS'
+      }
+      const res = await api.shopflowWebhook(samplePayload)
+      setNotice(`🚀 ShopFlow Webhook Ingested! Adjudicated ${res.data?.ticket_id} to ${res.data?.assigned_desk} (${res.data?.decision}).`)
+      await load()
+    } catch (err) {
+      setNotice(`ShopFlow Webhook Simulation Note: ${(err as Error).message}`)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function submitTicket(e: FormEvent) {
+    e.preventDefault()
+    try {
+      await api.createTicket({ ...form, claimed_amount: Number(form.claimed_amount) })
+      setShowNew(false)
+      setPage('tickets')
+      await load()
+      setNotice('Ticket submitted and automated 3-bucket triage completed.')
+    } catch (e) {
+      setNotice((e as Error).message)
+    }
+  }
+
+  async function triggerAutomation(t: Ticket) {
+    setPipelineLoading(true)
+    try {
+      const result = await api.runAutomation(t.id)
+      setPipelineTrace(result)
+      const refreshed = await api.ticket(t.id)
+      setSelected(refreshed)
+      await load()
+      setNotice(`Pipeline completed: Routed to ${result.assigned_desk} (${result.decision_bucket}).`)
+    } catch (e) {
+      setNotice(`Automation run failed: ${(e as Error).message}`)
+    } finally {
+      setPipelineLoading(false)
+    }
+  }
+
+  async function doUpdate(t: Ticket, data: unknown) {
+    try {
+      const updated = await api.updateTicket(t.id, data)
+      setSelected(updated)
+      await load()
+      setNotice('Ticket updated successfully.')
+    } catch (e) {
+      setNotice((e as Error).message)
+    }
+  }
+
+  async function addComment(e: FormEvent) {
+    e.preventDefault()
+    if (!selected || !comment.trim()) return
+    try {
+      await api.comment(selected.id, comment, internal && !isCustomer)
+      setComment('')
+      setSelected(await api.ticket(selected.id))
+      await load()
+      setNotice('Comment recorded in case ledger.')
+    } catch (e) {
+      setNotice((e as Error).message)
+    }
+  }
+
+  // --- SIGN IN VIEW ---
+  if (!user) {
+    return (
+      <div className="login-shell">
+        <div className="login-art">
+          <div className="brand large">
+            <span className="brand-mark"><Command size={24} /></span>
+            <span>RITOS</span>
+            <span className="brand-tag">ECOM OPS</span>
+          </div>
+
+          <div className="login-copy">
+            <div className="eyebrow light">ENTERPRISE REFUND INTELLIGENCE ORCHESTRATION</div>
+            <h1 style={{ fontSize: '38px', lineHeight: 1.18, fontWeight: 800 }}>
+              Autonomous Refund Operations.<br />
+              <em>Governed by Ledger Proof.</em>
+            </h1>
+            <p style={{ fontSize: '14.5px', lineHeight: 1.6, color: '#94a3b8', marginTop: '16px', maxWidth: '440px' }}>
+              Real-time payment gateway ledger audits, category-level return policy arbitration, and four-eyes financial governance for modern commerce.
+            </p>
+
+            <div className="login-stat-strip" style={{ marginTop: '36px', display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '16px', borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: '24px' }}>
+              <div>
+                <div style={{ fontSize: '24px', fontWeight: 800, color: '#38bdf8' }}>0%</div>
+                <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '2px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Hallucination Risk</div>
+              </div>
+              <div>
+                <div style={{ fontSize: '24px', fontWeight: 800, color: '#34d399' }}>&lt; 3s</div>
+                <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '2px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Multi-Agent Triage</div>
+              </div>
+              <div>
+                <div style={{ fontSize: '24px', fontWeight: 800, color: '#f472b6' }}>100%</div>
+                <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '2px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Idempotent Payouts</div>
+              </div>
+            </div>
+          </div>
+
+          <div className="login-foot" style={{ fontSize: '11px', letterSpacing: '0.06em', color: '#64748b' }}>
+            RITOS CORE ENGINE · PRODUCTION GRADE · LOCAL ACTIVE
+          </div>
+        </div>
+
+        <div className="login-panel">
+          <form className="login-card" onSubmit={login}>
+            <div className="eyebrow">WELCOME TO RITOS</div>
+            <h2>Sign in to Operational Hub</h2>
+            <p className="muted">Select any desk persona below to launch their isolated pipeline.</p>
+
+            {loginError && <div className="error-box"><AlertTriangle size={15} /> {loginError}</div>}
+
+            <label>Email address</label>
+            <input
+              type="email"
+              value={email}
+              onChange={e => setEmail(e.target.value)}
+              required
+              placeholder="e.g. cs1@ritos.local"
+            />
+
+            <label>Password</label>
+            <input
+              type="password"
+              value={password}
+              onChange={e => setPassword(e.target.value)}
+              required
+            />
+
+            <button className="primary full" disabled={busy}>
+              {busy ? 'Signing in securely…' : 'Sign in to Workspace'}
+            </button>
+
+            <div className="divider-text">SELECT DEMO PERSONA</div>
+            <div className="role-pills-grid" style={{ gridTemplateColumns: 'repeat(2, 1fr)', gap: '8px' }}>
+              {roles.map(r => (
+                <button
+                  type="button"
+                  key={r.role}
+                  className={`role-pill-btn ${email === r.email ? 'active' : ''}`}
+                  onClick={() => {
+                    setEmail(r.email)
+                    setPassword('ChangeMe123!')
+                  }}
+                >
+                  <strong style={{ fontSize: '11px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <r.icon size={13} /> {r.label}
+                  </strong>
+                  <small style={{ color: 'var(--text-muted)' }}>{r.desc}</small>
+                </button>
+              ))}
+            </div>
+
+            <div className="hint">
+              Default password: <code>ChangeMe123!</code>
+            </div>
+          </form>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="app-shell">
+      {/* Sidebar */}
+      <aside className={`sidebar ${showMobileNav ? 'open' : ''}`}>
+        <div className="brand">
+          <span className="brand-mark"><Command size={22} /></span>
+          <span>RITOS</span>
+          <span className="brand-tag">OPS</span>
+        </div>
+
+        <div className="workspace-label">ACTIVE ROLE</div>
+        <div className="workspace-switch">
+          <div className="workspace-icon"><Headphones size={18} /></div>
+          <div>
+            <strong>{roleTitle(user.role)}</strong>
+            <small>{user.email}</small>
+          </div>
+          <ChevronDown size={14} />
+        </div>
+
+        <div className="nav-label">OPERATIONS & DESKS</div>
+        <nav>
+          {nav.map(([label, key]) => {
+            const count =
+              key === 'cs1_desk' ? desks?.cs1_count :
+              key === 'cs2_desk' ? desks?.cs2_count :
+              key === 'cs3_desk' ? desks?.cs3_count :
+              key === 'tickets' ? tickets.length : null
+
+            return (
+              <button
+                key={key}
+                className={`nav-item ${page === key ? 'active' : ''}`}
+                onClick={() => {
+                  setPage(key)
+                  setSelected(null)
+                  setShowMobileNav(false)
+                }}
+              >
+                {key === 'dashboard' ? <LayoutDashboard size={17} /> :
+                 key === 'cs1_desk' ? <CheckCircle2 size={17} color="#059669" /> :
+                 key === 'cs2_desk' ? <AlertTriangle size={17} color="#d97706" /> :
+                 key === 'cs3_desk' ? <X size={17} color="#e11d48" /> :
+                 key === 'tickets' ? <TicketIcon size={17} /> :
+                 key === 'refunds' ? <CircleDollarSign size={17} /> :
+                 key === 'ecommerce' ? <ExternalLink size={17} color="#2563eb" /> :
+                 key === 'automation' ? <BrainCircuit size={17} /> : <FileText size={17} />}
+                <span>{label}</span>
+                {count !== null && count !== undefined && count > 0 && (
+                  <span className="nav-count">{count}</span>
+                )}
+              </button>
+            )
+          })}
+        </nav>
+
+        <div className="sidebar-bottom">
+          <div className="secure-card">
+            <div className="secure-icon"><ShieldCheckIcon /></div>
+            <strong>AI Auto-Triage Active</strong>
+            <p>Tickets sorted into CS-1, CS-2, & CS-3 with pre-drafted customer notifications.</p>
+            <span className="secure-status"><i />eCom Webhook Ready</span>
+          </div>
+
+          <button className="profile" onClick={logout} title="Sign Out">
+            <div className="avatar">
+              {user.full_name.split(' ').map(x => x[0]).slice(0, 2).join('')}
+            </div>
+            <div className="profile-info">
+              <strong>{user.full_name}</strong>
+              <small>{roleTitle(user.role)}</small>
+            </div>
+            <LogOut size={16} />
+          </button>
+        </div>
+      </aside>
+
+      {showMobileNav && <div className="mobile-scrim" onClick={() => setShowMobileNav(false)} />}
+
+      {/* Main Workspace Area */}
+      <main className="main">
+        {/* Topbar */}
+        <header className="topbar">
+          <div className="top-left">
+            <button className="icon-btn mobile-menu" onClick={() => setShowMobileNav(!showMobileNav)}>
+              <Menu size={20} />
+            </button>
+            <div className="crumb">
+              <span>RITOS</span>
+              <span>/</span>
+              <strong>{nav.find(x => x[1] === page)?.[0] || page}</strong>
+            </div>
+          </div>
+
+          <div className="top-actions">
+            {/* Quick Desk / Role Switcher */}
+            <div className="quick-role-bar">
+              {roles.map(r => (
+                <button
+                  key={r.role}
+                  className={`quick-role-btn ${user.role === r.role ? 'active' : ''}`}
+                  onClick={() => quickSwitch(r.email)}
+                  title={`Switch to ${r.label}`}
+                >
+                  <r.icon size={13} />
+                  <span>{r.label.split(' ')[0]}</span>
+                </button>
+              ))}
+            </div>
+
+            <button className="doc-btn" onClick={() => setShowDocModal(true)}>
+              <BookOpen size={15} />
+              <span>System Docs</span>
+            </button>
+
+            <button className="icon-btn" title="Refresh records" onClick={refresh}>
+              <RefreshCw size={17} />
+            </button>
+
+            <div className="top-avatar" title={`${user.full_name} (${roleTitle(user.role)})`}>
+              {user.full_name.split(' ').map(x => x[0]).slice(0, 2).join('')}
+            </div>
+          </div>
+        </header>
+
+        {/* Dynamic Content */}
+        <div className="content">
+          {notice && (
+            <div className="notice">
+              <span>{notice}</span>
+              <button onClick={() => setNotice('')}><X size={16} /></button>
+            </div>
+          )}
+
+          {/* DASHBOARD - STRICTLY ROLE SEGREGATED */}
+          {page === 'dashboard' && user.role === 'cs_1' && (
+            <>
+              <div className="page-heading">
+                <div>
+                  <div className="eyebrow" style={{ color: 'var(--emerald-700)' }}>🟢 CS-1 OPERATIONAL PIPELINE</div>
+                  <h1>CS-1 Fast-Track Refund Workspace</h1>
+                  <p>Verified against payment gateway records and in-policy return windows. Direct 1-click execution or manual inspection.</p>
+                </div>
+                <div className="heading-actions">
+                  <button className="secondary" onClick={refresh}>
+                    <RefreshCw size={15} /> Sync Queue
+                  </button>
+                  <span className="pill green" style={{ padding: '8px 14px', fontSize: '12px' }}>
+                    {cs1Tickets.length} Genuine Cases Pending
+                  </span>
+                </div>
+              </div>
+
+              <div className="metric-grid" style={{ marginBottom: '24px' }}>
+                <Metric icon={<CheckCircle2 />} label="Active Genuine Claims" value={cs1Tickets.length} note="Eligible for immediate refund" tone="green" />
+                <Metric icon={<BadgeCheck />} label="Gateway Verification" value="100% MATCH" note="Double-entry ledger verified" tone="blue" />
+                <Metric icon={<CircleDollarSign />} label="Settlement Execution" value="1-Click Direct" note="SHA-256 idempotency locked" tone="green" />
+                <Metric icon={<Clock3 />} label="Average Triage SLA" value="< 3s" note="Real-time multi-agent arbitration" tone="blue" />
+              </div>
+
+              <SectionTitle title="CS-1 Genuine Queue" action="View Full Desk Queue" onAction={() => setPage('cs1_desk')} />
+              <TicketTable tickets={cs1Tickets} onSelect={setSelected} />
+            </>
+          )}
+
+          {page === 'dashboard' && user.role === 'cs_2' && (
+            <>
+              <div className="page-heading">
+                <div>
+                  <div className="eyebrow" style={{ color: 'var(--amber-700)' }}>🟡 CS-2 OPERATIONAL PIPELINE</div>
+                  <h1>CS-2 Exceptions & Evidence Workspace</h1>
+                  <p>Discrepancies, damaged merchandise, and claims requiring unboxing footage or proof of receipt.</p>
+                </div>
+                <div className="heading-actions">
+                  <button className="secondary" onClick={refresh}>
+                    <RefreshCw size={15} /> Sync Queue
+                  </button>
+                  <span className="pill amber" style={{ padding: '8px 14px', fontSize: '12px' }}>
+                    {cs2Tickets.length} Exceptions Awaiting Proof
+                  </span>
+                </div>
+              </div>
+
+              <div className="metric-grid" style={{ marginBottom: '24px' }}>
+                <Metric icon={<AlertTriangle />} label="Exception Cases" value={cs2Tickets.length} note="Requires customer verification" tone="amber" />
+                <Metric icon={<MessageSquare />} label="AI Drafts Prepared" value={cs2Tickets.filter(t => t.customer_message_draft).length} note="Ready for 1-click dispatch" tone="blue" />
+                <Metric icon={<Send />} label="Proof Requests Sent" value={cs2Tickets.filter(t => t.proof_request_sent_at).length} note="Dispatched to customer mobile" tone="green" />
+                <Metric icon={<ShieldAlert />} label="High-Risk Signals" value={cs2Tickets.filter(t => t.priority === 'P1').length} note="P1 priority reviews" tone="rose" />
+              </div>
+
+              <SectionTitle title="CS-2 Exceptions Queue" action="View Full Desk Queue" onAction={() => setPage('cs2_desk')} />
+              <TicketTable tickets={cs2Tickets} onSelect={setSelected} />
+            </>
+          )}
+
+          {page === 'dashboard' && user.role === 'cs_3' && (
+            <>
+              <div className="page-heading">
+                <div>
+                  <div className="eyebrow" style={{ color: 'var(--rose-700)' }}>🔴 CS-3 OPERATIONAL PIPELINE</div>
+                  <h1>CS-3 Denial & Ineligible Resolution Workspace</h1>
+                  <p>Claims exceeding category return windows, non-returnable hygiene/perishables, or unverified transaction IDs.</p>
+                </div>
+                <div className="heading-actions">
+                  <button className="secondary" onClick={refresh}>
+                    <RefreshCw size={15} /> Sync Queue
+                  </button>
+                  <span className="pill red" style={{ padding: '8px 14px', fontSize: '12px' }}>
+                    {cs3Tickets.length} Ineligible Cases
+                  </span>
+                </div>
+              </div>
+
+              <div className="metric-grid" style={{ marginBottom: '24px' }}>
+                <Metric icon={<X />} label="Ineligible Cases" value={cs3Tickets.length} note="Disqualified by policy engine" tone="rose" />
+                <Metric icon={<FileText />} label="Policy Explanations Drafted" value={cs3Tickets.filter(t => t.customer_message_draft).length} note="Legally compliant notices" tone="blue" />
+                <Metric icon={<Send />} label="Denial Notices Sent" value={cs3Tickets.filter(t => t.rejection_notice_sent_at).length} note="Dispatched to customer" tone="green" />
+                <Metric icon={<Shield />} label="Hard Policy Boundaries" value="100% Enforced" note="Category limits strictly applied" tone="amber" />
+              </div>
+
+              <SectionTitle title="CS-3 Ineligible Queue" action="View Full Desk Queue" onAction={() => setPage('cs3_desk')} />
+              <TicketTable tickets={cs3Tickets} onSelect={setSelected} />
+            </>
+          )}
+
+          {/* OMNICHANNEL COMMAND CENTER - ADMIN & SUPERVISOR ONLY */}
+          {page === 'dashboard' && ['administrator', 'supervisor', 'support_agent', 'refund_operations'].includes(user.role) && (
+            <>
+              <div className="page-heading">
+                <div>
+                  <div className="eyebrow">ENTERPRISE AUTOMATION CONTROL PLANE</div>
+                  <h1>Omnichannel Operations Command Center</h1>
+                  <p>Real-time cross-desk triage, automated customer communications, and live eCommerce webhook integrations.</p>
+                </div>
+                <div className="heading-actions">
+                  <button className="secondary" onClick={refresh}>
+                    <RefreshCw size={15} /> Sync Queues
+                  </button>
+                  <button className="primary" onClick={() => setPage('ecommerce')}>
+                    <ExternalLink size={15} /> eCommerce Webhook Hub
+                  </button>
+                </div>
+              </div>
+
+              {/* 3-Desk Action Cards */}
+              <div className="metric-grid" style={{ gridTemplateColumns: 'repeat(3, 1fr)', marginBottom: '24px' }}>
+                <div className="metric-card click-row" onClick={() => setPage('cs1_desk')}>
+                  <div className="metric-top">
+                    <span className="metric-icon green"><CheckCircle2 size={20} /></span>
+                    <span className="pill green"><i />CS-1 DESK</span>
+                  </div>
+                  <div className="metric-value">{desks?.cs1_count ?? 0} Cases</div>
+                  <div className="metric-label" style={{ fontWeight: 700, color: 'var(--emerald-700)', fontSize: '13px' }}>
+                    Genuine & Refundable
+                  </div>
+                  <div className="metric-note" style={{ marginTop: '4px' }}>
+                    Verified ledger & within policy. Direct 1-Click refund or manual verification.
+                  </div>
+                </div>
+
+                <div className="metric-card click-row" onClick={() => setPage('cs2_desk')}>
+                  <div className="metric-top">
+                    <span className="metric-icon amber"><AlertTriangle size={20} /></span>
+                    <span className="pill amber"><i />CS-2 DESK</span>
+                  </div>
+                  <div className="metric-value">{desks?.cs2_count ?? 0} Cases</div>
+                  <div className="metric-label" style={{ fontWeight: 700, color: 'var(--amber-700)', fontSize: '13px' }}>
+                    Exceptions & Proof Needed
+                  </div>
+                  <div className="metric-note" style={{ marginTop: '4px' }}>
+                    Damaged item, box crushed, or size mismatch. Auto-drafted proof request ready.
+                  </div>
+                </div>
+
+                <div className="metric-card click-row" onClick={() => setPage('cs3_desk')}>
+                  <div className="metric-top">
+                    <span className="metric-icon red"><X size={20} /></span>
+                    <span className="pill red"><i />CS-3 DESK</span>
+                  </div>
+                  <div className="metric-value">{desks?.cs3_count ?? 0} Cases</div>
+                  <div className="metric-label" style={{ fontWeight: 700, color: 'var(--rose-700)', fontSize: '13px' }}>
+                    Non-Refundable / Denials
+                  </div>
+                  <div className="metric-note" style={{ marginTop: '4px' }}>
+                    Past return window, fake transaction ID, or final sale hygiene. Auto-drafted polite notice.
+                  </div>
+                </div>
+              </div>
+
+              {/* Overall Metrics */}
+              <div className="metric-grid">
+                <Metric icon={<TicketIcon />} label="Total Ingested Tickets" value={tickets.length} note="Live database records" tone="blue" />
+                <Metric icon={<CheckCircle2 />} label="Resolved / Settled" value={desks?.resolved_count ?? 0} note="Processed refunds or closed" tone="green" />
+                <Metric icon={<BrainCircuit />} label="Automated Pipeline Runs" value={automation?.pipeline_runs ?? 0} note="AI evaluations completed" tone="blue" />
+                <Metric icon={<CircleDollarSign />} label="Total Refund Volume" value={money(metrics?.refund_completed || 0)} note="Settled via gateway" tone="green" />
+              </div>
+
+              <SectionTitle title="Live Ingested Cases" action="View All Tickets" onAction={() => setPage('tickets')} />
+              <TicketTable tickets={tickets.slice(0, 6)} onSelect={setSelected} />
+            </>
+          )}
+
+          {/* FINANCE APPROVER CONTROL CENTER */}
+          {page === 'dashboard' && user.role === 'finance_approver' && (
+            <>
+              <div className="page-heading">
+                <div>
+                  <div className="eyebrow" style={{ color: 'var(--emerald-700)' }}>
+                    FOUR-EYES FINANCIAL GOVERNANCE & SETTLEMENT DISBURSEMENT
+                  </div>
+                  <h1>Finance Approver Control Center</h1>
+                  <p>Dual-custody authorization for customer refunds, payment gateway transaction audits, and immutable disbursement reconciliation.</p>
+                </div>
+                <div className="heading-actions">
+                  <button className="secondary" onClick={refresh}>
+                    <RefreshCw size={15} /> Sync Ledger
+                  </button>
+                  <button className="secondary" onClick={() => setPage('refunds')}>
+                    <CircleDollarSign size={15} /> Full Settlement Register
+                  </button>
+                  <button className="primary" onClick={() => setPage('audit')}>
+                    <Shield size={15} /> Compliance Audit Trail
+                  </button>
+                </div>
+              </div>
+
+              {/* Finance Metrics */}
+              <div className="metric-grid" style={{ marginBottom: '24px' }}>
+                <Metric
+                  icon={<CircleDollarSign />}
+                  label="Total Settled Volume"
+                  value={money(refunds.filter(r => r.status === 'REFUNDED').reduce((acc, r) => acc + (Number(r.amount) || 0), 0))}
+                  note="Disbursed via payment gateway"
+                  tone="green"
+                />
+                <Metric
+                  icon={<AlertTriangle />}
+                  label="Pending Approvals"
+                  value={refunds.filter(r => r.status === 'PENDING_APPROVAL').length}
+                  note="Awaiting second-pair-of-eyes signoff"
+                  tone="amber"
+                />
+                <Metric
+                  icon={<Clock3 />}
+                  label="Queued Payout Value"
+                  value={money(refunds.filter(r => r.status === 'PENDING_APPROVAL').reduce((acc, r) => acc + (Number(r.amount) || 0), 0))}
+                  note="Authorized release pending"
+                  tone="blue"
+                />
+                <Metric
+                  icon={<BadgeCheck />}
+                  label="Governance Lock"
+                  value="100% ENFORCED"
+                  note="Dual-custody separation of duties"
+                  tone="green"
+                />
+              </div>
+
+              {/* Dual-Custody Approval Queue */}
+              <div className="panel table-panel" style={{ marginBottom: '28px' }}>
+                <div className="panel-heading">
+                  <div>
+                    <h3 style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <AlertTriangle size={18} color="var(--amber-600)" />
+                      Dual-Custody Action Queue
+                    </h3>
+                    <p>These refund requests require second-pair-of-eyes authorization before money is released from the merchant account.</p>
+                  </div>
+                  <span className="pill amber" style={{ padding: '6px 12px', fontSize: '12px' }}>
+                    {refunds.filter(r => r.status === 'PENDING_APPROVAL').length} Pending Dual-Custody Sign-off
+                  </span>
+                </div>
+
+                <div className="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>REFUND ID</th>
+                        <th>TRANSACTION & TICKET</th>
+                        <th>DISBURSEMENT AMOUNT</th>
+                        <th>OPERATIONAL JUSTIFICATION</th>
+                        <th>STATUS</th>
+                        <th>REQUESTED AT</th>
+                        <th>ACTIONS</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {refunds.filter(r => r.status === 'PENDING_APPROVAL').map(r => (
+                        <tr key={r.id}>
+                          <td>
+                            <span className="mono" style={{ fontWeight: 700, color: 'var(--navy-900)' }}>
+                              {r.id.slice(0, 8).toUpperCase()}
+                            </span>
+                          </td>
+                          <td>
+                            <strong>{r.transaction_id}</strong>
+                            <small className="subline mono">Ticket #{r.ticket_id?.slice(0, 8)}</small>
+                          </td>
+                          <td>
+                            <strong className="amount" style={{ fontSize: '15px' }}>
+                              {money(r.amount, r.currency)}
+                            </strong>
+                          </td>
+                          <td>
+                            <p style={{ margin: 0, fontSize: '12px', color: 'var(--navy-700)', maxWidth: '280px', lineHeight: 1.4 }}>
+                              {r.reason}
+                            </p>
+                          </td>
+                          <td>
+                            <StatusPill value={r.status} />
+                          </td>
+                          <td>
+                            <span className="date-cell">{date(r.created_at)}</span>
+                          </td>
+                          <td>
+                            <div className="row-actions">
+                              <button
+                                className="primary compact"
+                                onClick={() => handleApproveRefund(r)}
+                                disabled={busy}
+                                style={{ background: 'var(--emerald-700)', borderColor: 'var(--emerald-700)' }}
+                                title="Authorize and sign-off payout"
+                              >
+                                <Check size={14} /> Approve Payout
+                              </button>
+                              <button
+                                className="secondary compact"
+                                onClick={() => handleRejectRefund(r)}
+                                disabled={busy}
+                                style={{ color: 'var(--rose-700)', borderColor: 'var(--rose-200)' }}
+                                title="Reject and decline disbursement"
+                              >
+                                <X size={14} /> Reject Request
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                      {!refunds.filter(r => r.status === 'PENDING_APPROVAL').length && (
+                        <tr>
+                          <td colSpan={7}>
+                            <div className="empty" style={{ padding: '36px 16px' }}>
+                              <span><BadgeCheck size={28} color="var(--emerald-600)" /></span>
+                              <strong style={{ color: 'var(--navy-900)', marginTop: '8px' }}>Dual-Custody Queue Clear</strong>
+                              <p>No refund requests currently require financial authorization. All pending disbursements have been processed.</p>
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* Settlement Ledger */}
+              <div className="panel table-panel">
+                <div className="panel-heading">
+                  <div>
+                    <h3>Executed Settlement Register</h3>
+                    <p>Recent payouts confirmed with gateway authorization references</p>
+                  </div>
+                  <button className="text-btn" onClick={() => setPage('refunds')}>
+                    View All Settlements <ArrowUpRight size={14} />
+                  </button>
+                </div>
+
+                <div className="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>REFUND ID</th>
+                        <th>TRANSACTION</th>
+                        <th>SETTLED AMOUNT</th>
+                        <th>PROVIDER REFERENCE</th>
+                        <th>STATUS</th>
+                        <th>TIMESTAMP</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {refunds.filter(r => r.status === 'REFUNDED').slice(0, 5).map(r => (
+                        <tr key={r.id}>
+                          <td><span className="mono">{r.id.slice(0, 8).toUpperCase()}</span></td>
+                          <td><span className="mono">{r.transaction_id}</span></td>
+                          <td><strong className="amount">{money(r.amount, r.currency)}</strong></td>
+                          <td><span className="mono" style={{ color: 'var(--primary-700)', fontWeight: 600 }}>{r.provider_reference || '—'}</span></td>
+                          <td><span className="pill green"><i />SETTLED</span></td>
+                          <td><span className="date-cell">{date(r.created_at)}</span></td>
+                        </tr>
+                      ))}
+                      {!refunds.filter(r => r.status === 'REFUNDED').length && (
+                        <tr>
+                          <td colSpan={6}><Empty text="No settled payouts recorded yet." /></td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </>
+          )}
+
+          {/* CUSTOMER PORTAL OVERVIEW - STRICT DATA ISOLATION */}
+          {page === 'dashboard' && user.role === 'customer' && (
+            <>
+              <div className="page-heading">
+                <div>
+                  <div className="eyebrow" style={{ color: 'var(--primary-700)' }}>
+                    CUSTOMER SELF-SERVICE REFUND PORTAL
+                  </div>
+                  <h1>Welcome, {user.full_name}</h1>
+                  <p>Track your real-time return requests, inspect verified order receipts, or file an instant refund claim.</p>
+                </div>
+                <div className="heading-actions">
+                  <button className="secondary" onClick={refresh}>
+                    <RefreshCw size={15} /> Sync Claims
+                  </button>
+                  <button className="primary" onClick={() => setPage('new')}>
+                    <Plus size={15} /> File New Claim
+                  </button>
+                </div>
+              </div>
+
+              {/* Customer Specific Metrics */}
+              <div className="metric-grid" style={{ marginBottom: '24px' }}>
+                <Metric
+                  icon={<TicketIcon />}
+                  label="My Active Claims"
+                  value={tickets.filter(t => t.status !== 'RESOLVED' && t.status !== 'REJECTED').length}
+                  note="Under review or in evidence triage"
+                  tone="blue"
+                />
+                <Metric
+                  icon={<CheckCircle2 />}
+                  label="Refunds Credited"
+                  value={refunds.filter(r => r.status === 'REFUNDED').length}
+                  note="Successfully returned to your account"
+                  tone="green"
+                />
+                <Metric
+                  icon={<CircleDollarSign />}
+                  label="Total Amount Credited"
+                  value={money(refunds.filter(r => r.status === 'REFUNDED').reduce((acc, r) => acc + (Number(r.amount) || 0), 0))}
+                  note="Processed via payment gateway"
+                  tone="green"
+                />
+                <Metric
+                  icon={<Database />}
+                  label="Verified Orders on File"
+                  value={customerTxs.length}
+                  note="Linked to your registered account"
+                  tone="blue"
+                />
+              </div>
+
+              {/* My Active Claims Tracker */}
+              <div className="panel table-panel" style={{ marginBottom: '28px' }}>
+                <div className="panel-heading">
+                  <div>
+                    <h3>My Claims & Return Inquiries</h3>
+                    <p>Live progress tracking of your refund claims across verification and review</p>
+                  </div>
+                  <button className="text-btn" onClick={() => setPage('tickets')}>
+                    View All Claims <ArrowUpRight size={14} />
+                  </button>
+                </div>
+
+                <div className="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>CLAIM #</th>
+                        <th>ORDER & PRODUCT</th>
+                        <th>AMOUNT</th>
+                        <th>STATUS</th>
+                        <th>TRIAGE STAGE</th>
+                        <th>SUBMITTED</th>
+                        <th>ACTION</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {tickets.map(t => (
+                        <tr key={t.id} onClick={() => setSelected(t)} className="click-row">
+                          <td>
+                            <div className="ticket-id">
+                              <span className="ticket-symbol" style={{ background: 'var(--primary-50)', color: 'var(--primary-700)' }}>
+                                <TicketIcon size={16} />
+                              </span>
+                              <div>
+                                <strong>{t.ticket_number}</strong>
+                                <small className="mono">{t.order_id || '—'}</small>
+                              </div>
+                            </div>
+                          </td>
+                          <td>
+                            <strong>{t.item_name || t.category.replace(/_/g, ' ')}</strong>
+                            <small className="subline">{t.item_category} · {t.description.slice(0, 40)}...</small>
+                          </td>
+                          <td>
+                            <strong className="amount">{money(t.claimed_amount, t.currency)}</strong>
+                          </td>
+                          <td>
+                            <StatusPill value={t.status} />
+                          </td>
+                          <td>
+                            <span style={{ fontSize: '12px', fontWeight: 600, color: t.status === 'RESOLVED' ? 'var(--emerald-700)' : t.status === 'REJECTED' ? 'var(--rose-700)' : 'var(--primary-700)' }}>
+                              {t.status === 'RESOLVED' ? '✅ Refund Credited to Bank' :
+                               t.status === 'REJECTED' ? '❌ Ineligible under Return Window' :
+                               t.status === 'AWAITING_INFORMATION' ? '📲 Evidence / Proof Requested' :
+                               '⚙ Automated AI Review'}
+                            </span>
+                          </td>
+                          <td>
+                            <span className="date-cell">{new Date(t.created_at).toLocaleDateString()}</span>
+                          </td>
+                          <td>
+                            <button
+                              className="secondary compact"
+                              onClick={e => {
+                                e.stopPropagation()
+                                setSelected(t)
+                              }}
+                            >
+                              View Details
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                      {!tickets.length && (
+                        <tr>
+                          <td colSpan={7}>
+                            <div className="empty" style={{ padding: '36px 16px' }}>
+                              <span><TicketIcon size={28} color="var(--primary-600)" /></span>
+                              <strong style={{ color: 'var(--navy-900)', marginTop: '8px' }}>No Active Claims</strong>
+                              <p>You have not submitted any return claims yet. Select one of your verified purchases below to request an instant refund.</p>
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* Verified Order History & 1-Click Refund Action */}
+              <div className="panel table-panel">
+                <div className="panel-heading">
+                  <div>
+                    <h3>My Verified Purchases & Order Receipts</h3>
+                    <p>Official merchant orders linked to your profile. Click "Request Refund" to auto-fill your claim details.</p>
+                  </div>
+                  <span className="pill blue" style={{ padding: '6px 12px', fontSize: '12px' }}>
+                    {customerTxs.length} Verified Orders
+                  </span>
+                </div>
+
+                <div className="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>ORDER ID</th>
+                        <th>TRANSACTION ID</th>
+                        <th>ORDER AMOUNT</th>
+                        <th>PAYMENT STATUS</th>
+                        <th>REFUNDED SO FAR</th>
+                        <th>PURCHASE DATE</th>
+                        <th>ACTION</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {customerTxs.map(tx => {
+                        const canRefund = (Number(tx.amount) - Number(tx.refunded_amount)) > 0
+                        return (
+                          <tr key={tx.id}>
+                            <td>
+                              <strong style={{ color: 'var(--navy-900)' }}>{tx.order_id}</strong>
+                            </td>
+                            <td>
+                              <span className="mono">{tx.id}</span>
+                            </td>
+                            <td>
+                              <strong className="amount">{money(tx.amount, tx.currency)}</strong>
+                            </td>
+                            <td>
+                              <span className="pill green"><i />{tx.payment_status}</span>
+                            </td>
+                            <td>
+                              <span className="amount" style={{ color: tx.refunded_amount > 0 ? 'var(--emerald-700)' : 'var(--text-muted)' }}>
+                                {money(tx.refunded_amount, tx.currency)}
+                              </span>
+                            </td>
+                            <td>
+                              <span className="date-cell">{new Date(tx.created_at).toLocaleDateString()}</span>
+                            </td>
+                            <td>
+                              {canRefund ? (
+                                <button
+                                  className="primary compact"
+                                  onClick={() => handleRequestRefundForOrder(tx)}
+                                  style={{ background: 'var(--primary-700)', borderColor: 'var(--primary-700)' }}
+                                  title="1-Click Pre-populate refund claim"
+                                >
+                                  <Zap size={13} /> Request Refund
+                                </button>
+                              ) : (
+                                <span className="pill green"><i />FULLY REFUNDED</span>
+                              )}
+                            </td>
+                          </tr>
+                        )
+                      })}
+                      {!customerTxs.length && (
+                        <tr>
+                          <td colSpan={7}>
+                            <Empty text="No verified purchase records found for your account." />
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </>
+          )}
+
+          {/* 🟢 CS-1 DESK: GENUINE & REFUNDABLE */}
+          {page === 'cs1_desk' && (
+            <>
+              <div className="page-heading">
+                <div>
+                  <div className="eyebrow" style={{ color: 'var(--emerald-700)' }}>🟢 CS-1 FAST-TRACK APPROVALS DESK</div>
+                  <h1>Genuine & Refundable Queue</h1>
+                  <p>These tickets matched payment records in the ledger and comply with your store policy. You can execute a direct 1-click refund or manually inspect the order details.</p>
+                </div>
+                <div className="heading-actions">
+                  <span className="pill green" style={{ padding: '8px 14px', fontSize: '12px' }}>
+                    {cs1Tickets.length} Cases Waiting for CS-1 Action
+                  </span>
+                </div>
+              </div>
+
+              <div className="panel table-panel">
+                <div className="panel-heading">
+                  <div>
+                    <h3>CS-1 Action Queue</h3>
+                    <p>Verified cases ready for financial settlement</p>
+                  </div>
+                </div>
+
+                <div className="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>TICKET</th>
+                        <th>ORDER & ITEM</th>
+                        <th>CLAIMED AMOUNT</th>
+                        <th>POLICY VERIFICATION</th>
+                        <th>STATUS</th>
+                        <th>ACTIONS</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {cs1Tickets.map(t => (
+                        <tr key={t.id} onClick={() => setSelected(t)} className="click-row">
+                          <td>
+                            <div className="ticket-id">
+                              <span className="ticket-symbol" style={{ background: 'var(--emerald-50)', color: 'var(--emerald-700)' }}>
+                                <CheckCircle2 size={16} />
+                              </span>
+                              <div>
+                                <strong>{t.ticket_number}</strong>
+                                <small className="mono">{t.customer_phone || t.customer_email || t.customer_id.slice(0, 8)}</small>
+                              </div>
+                            </div>
+                          </td>
+                          <td>
+                            <strong>{t.item_name || 'Product Item'}</strong>
+                            <small className="subline">{t.order_id || '—'} · {t.item_category}</small>
+                          </td>
+                          <td className="amount">{money(t.claimed_amount, t.currency)}</td>
+                          <td>
+                            <span className="pill green"><i />{t.payment_verification}</span>
+                            <small className="subline" style={{ maxWidth: '240px', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                              {t.policy_evaluation_reason || 'Verified'}
+                            </small>
+                          </td>
+                          <td><StatusPill value={t.status} /></td>
+                          <td>
+                            <div className="row-actions" onClick={e => e.stopPropagation()}>
+                              {t.status !== 'RESOLVED' && (
+                                <>
+                                  <button
+                                    className="primary compact"
+                                    onClick={() => handleCS1DirectRefund(t)}
+                                    title="1-Click Direct Refund"
+                                    style={{ background: 'var(--emerald-700)', borderColor: 'var(--emerald-700)' }}
+                                  >
+                                    <Zap size={14} /> 1-Click Refund
+                                  </button>
+                                  <button
+                                    className="secondary compact"
+                                    onClick={() => setSelected(t)}
+                                    title="Manually Inspect"
+                                  >
+                                    Inspect & Decide
+                                  </button>
+                                </>
+                              )}
+                              {t.status === 'RESOLVED' && <span className="pill green"><i />REFUNDED</span>}
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                      {!cs1Tickets.length && (
+                        <tr>
+                          <td colSpan={6}>
+                            <Empty text="No pending genuine cases in the CS-1 queue right now." />
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </>
+          )}
+
+          {/* 🟡 CS-2 DESK: EXCEPTIONS & PROOF NEEDED */}
+          {page === 'cs2_desk' && (
+            <>
+              <div className="page-heading">
+                <div>
+                  <div className="eyebrow" style={{ color: 'var(--amber-700)' }}>🟡 CS-2 EXCEPTION & EVIDENCE DESK</div>
+                  <h1>Exceptions & Proof Needed Queue</h1>
+                  <p>Cases with order discrepancies, damaged package claims, or missing unboxing proof. The AI has drafted an SMS/email message for the customer's phone.</p>
+                </div>
+                <div className="heading-actions">
+                  <span className="pill amber" style={{ padding: '8px 14px', fontSize: '12px' }}>
+                    {cs2Tickets.length} Exception Cases
+                  </span>
+                </div>
+              </div>
+
+              <div className="panel table-panel">
+                <div className="panel-heading">
+                  <div>
+                    <h3>Exceptions Requiring Customer Verification</h3>
+                    <p>Review the AI-drafted message and click Send</p>
+                  </div>
+                </div>
+
+                <div className="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>TICKET</th>
+                        <th>ITEM & DISCREPANCY</th>
+                        <th>REQUIRED PROOF</th>
+                        <th>DESTINATION</th>
+                        <th>PROOF STATUS</th>
+                        <th>DISPATCH ACTION</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {cs2Tickets.map(t => (
+                        <tr key={t.id} onClick={() => setSelected(t)} className="click-row">
+                          <td>
+                            <div className="ticket-id">
+                              <span className="ticket-symbol" style={{ background: 'var(--amber-50)', color: 'var(--amber-700)' }}>
+                                <AlertTriangle size={16} />
+                              </span>
+                              <div>
+                                <strong>{t.ticket_number}</strong>
+                                <small className="mono">{t.order_id || '—'}</small>
+                              </div>
+                            </div>
+                          </td>
+                          <td>
+                            <strong>{t.item_name || 'Product'}</strong>
+                            <small className="subline" style={{ maxWidth: '220px', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                              {t.policy_evaluation_reason}
+                            </small>
+                          </td>
+                          <td>
+                            <span className="queue-cell" style={{ fontSize: '10px' }}>
+                              {t.proof_required?.replace(/_/g, ' ') || 'PHOTO PROOF'}
+                            </span>
+                          </td>
+                          <td>
+                            <span className="mono" style={{ color: 'var(--navy-900)', fontWeight: 600 }}>
+                              {t.customer_phone || t.customer_email || 'Mobile'}
+                            </span>
+                          </td>
+                          <td>
+                            <span className={`pill ${t.proof_status === 'REQUESTED' ? 'blue' : 'amber'}`}>
+                              <i />{t.proof_status || 'NOT REQUESTED'}
+                            </span>
+                          </td>
+                          <td>
+                            <div className="row-actions" onClick={e => e.stopPropagation()}>
+                              <button
+                                className="primary compact"
+                                onClick={() => {
+                                  setSelected(t)
+                                  handleCS2SendProof(t)
+                                }}
+                                style={{ background: 'var(--amber-600)', borderColor: 'var(--amber-600)' }}
+                              >
+                                <Send size={13} /> {t.proof_status === 'REQUESTED' ? 'Resend Proof SMS' : '1-Click Send Proof SMS'}
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                      {!cs2Tickets.length && (
+                        <tr>
+                          <td colSpan={6}>
+                            <Empty text="No exception cases in the CS-2 queue right now." />
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </>
+          )}
+
+          {/* 🔴 CS-3 DESK: NON-REFUNDABLE / DENIALS */}
+          {page === 'cs3_desk' && (
+            <>
+              <div className="page-heading">
+                <div>
+                  <div className="eyebrow" style={{ color: 'var(--rose-700)' }}>🔴 CS-3 RESOLUTION & POLICY DENIAL DESK</div>
+                  <h1>Non-Refundable / Ineligible Cases</h1>
+                  <p>Cases disqualified by store policy (expired return window, fake transaction ID, duplicate claim, or non-returnable hygiene items). Polite rejection notice pre-drafted.</p>
+                </div>
+                <div className="heading-actions">
+                  <span className="pill red" style={{ padding: '8px 14px', fontSize: '12px' }}>
+                    {cs3Tickets.length} Ineligible Cases
+                  </span>
+                </div>
+              </div>
+
+              <div className="panel table-panel">
+                <div className="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>TICKET</th>
+                        <th>ITEM & CATEGORY</th>
+                        <th>POLICY REJECTION REASON</th>
+                        <th>CUSTOMER CONTACT</th>
+                        <th>STATUS</th>
+                        <th>DISPATCH ACTION</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {cs3Tickets.map(t => (
+                        <tr key={t.id} onClick={() => setSelected(t)} className="click-row">
+                          <td>
+                            <div className="ticket-id">
+                              <span className="ticket-symbol" style={{ background: 'var(--rose-50)', color: 'var(--rose-700)' }}>
+                                <X size={16} />
+                              </span>
+                              <div>
+                                <strong>{t.ticket_number}</strong>
+                                <small className="mono">{t.order_id || '—'}</small>
+                              </div>
+                            </div>
+                          </td>
+                          <td>
+                            <strong>{t.item_name || 'Product'}</strong>
+                            <small className="subline">{t.item_category}</small>
+                          </td>
+                          <td>
+                            <span style={{ color: 'var(--rose-700)', fontSize: '12px', fontWeight: 600 }}>
+                              {t.policy_evaluation_reason}
+                            </span>
+                          </td>
+                          <td>
+                            <span className="mono">{t.customer_phone || t.customer_email || 'Customer'}</span>
+                          </td>
+                          <td><StatusPill value={t.status} /></td>
+                          <td>
+                            <div className="row-actions" onClick={e => e.stopPropagation()}>
+                              <button
+                                className="primary compact"
+                                onClick={() => {
+                                  setSelected(t)
+                                  handleCS3SendRejection(t)
+                                }}
+                                style={{ background: 'var(--rose-600)', borderColor: 'var(--rose-600)' }}
+                              >
+                                <Send size={13} /> {t.rejection_notice_sent_at ? 'Resend Notice' : '1-Click Send Denial Notice'}
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                      {!cs3Tickets.length && (
+                        <tr>
+                          <td colSpan={6}>
+                            <Empty text="No ineligible cases in the CS-3 queue right now." />
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </>
+          )}
+
+          {/* TICKETS QUEUE - STRICTLY ROLE FILTERED */}
+          {page === 'tickets' && (
+            <>
+              <div className="page-heading">
+                <div>
+                  <div className="eyebrow">
+                    {user.role === 'cs_1' ? '🟢 CS-1 DESK PIPELINE' :
+                     user.role === 'cs_2' ? '🟡 CS-2 DESK PIPELINE' :
+                     user.role === 'cs_3' ? '🔴 CS-3 DESK PIPELINE' : 'OMNICHANNEL CASE REPOSITORY'}
+                  </div>
+                  <h1>
+                    {user.role === 'cs_1' ? 'CS-1 Genuine Refund Queue' :
+                     user.role === 'cs_2' ? 'CS-2 Exception & Evidence Queue' :
+                     user.role === 'cs_3' ? 'CS-3 Denial & Ineligible Queue' : 'Master Ingested Tickets Queue'}
+                  </h1>
+                  <p>
+                    {user.role === 'cs_1' ? 'Showing only verified, policy-compliant claims assigned to the CS-1 fast-track queue.' :
+                     user.role === 'cs_2' ? 'Showing only discrepancy, damage, and evidence-pending claims assigned to the CS-2 desk.' :
+                     user.role === 'cs_3' ? 'Showing only non-refundable and policy-disqualified claims assigned to the CS-3 desk.' :
+                     'Master ledger of all refund cases across CS-1, CS-2, and CS-3 desks.'}
+                  </p>
+                </div>
+              </div>
+
+              <div className="filterbar">
+                <div className="searchbox">
+                  <Search size={16} />
+                  <input
+                    placeholder="Search ticket number, transaction, or description…"
+                    value={search}
+                    onChange={e => setSearch(e.target.value)}
+                  />
+                </div>
+
+                <div className="select-filter">
+                  <Filter size={15} />
+                  <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
+                    <option value="">All statuses</option>
+                    {['NEW', 'TRIAGED', 'IN_REVIEW', 'AWAITING_INFORMATION', 'ESCALATED', 'RESOLVED', 'REJECTED'].map(s => (
+                      <option key={s}>{s}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <button className="secondary compact" onClick={refresh}>
+                  <RefreshCw size={15} /> Refresh
+                </button>
+              </div>
+
+              <TicketTable tickets={displayedTickets} onSelect={setSelected} />
+            </>
+          )}
+
+          {/* FILE NEW CLAIM (CUSTOMER & STAFF) */}
+          {page === 'new' && (
+            <>
+              <div className="page-heading">
+                <div>
+                  <div className="eyebrow" style={{ color: 'var(--primary-700)' }}>ONLINE CLAIM INTAKE</div>
+                  <h1>File a Return or Refund Claim</h1>
+                  <p>Submit order information to trigger real-time ledger validation, category policy analysis, and instant desk routing.</p>
+                </div>
+                <div className="heading-actions">
+                  <button className="secondary" onClick={() => setPage(isCustomer ? 'dashboard' : 'tickets')}>
+                    Return to {isCustomer ? 'My Dashboard' : 'Tickets'}
+                  </button>
+                </div>
+              </div>
+
+              <div className="panel" style={{ maxWidth: '780px', margin: '0 auto', padding: '28px' }}>
+                <form onSubmit={submitTicket}>
+                  <div className="form-grid">
+                    <div>
+                      <label>Order Reference ID</label>
+                      <input
+                        placeholder="e.g. ORD-1001"
+                        value={form.order_id}
+                        onChange={e => setForm({ ...form, order_id: e.target.value })}
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label>Transaction ID (from payment receipt)</label>
+                      <input
+                        placeholder="e.g. TXN-1001"
+                        value={form.transaction_id}
+                        onChange={e => setForm({ ...form, transaction_id: e.target.value })}
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label>Claimed Refund Amount</label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        placeholder="1500.00"
+                        value={form.claimed_amount}
+                        onChange={e => setForm({ ...form, claimed_amount: e.target.value })}
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label>Currency</label>
+                      <select value={form.currency} onChange={e => setForm({ ...form, currency: e.target.value })}>
+                        <option value="INR">INR (₹)</option>
+                        <option value="USD">USD ($)</option>
+                        <option value="EUR">EUR (€)</option>
+                      </select>
+                    </div>
+                    <div className="span-2">
+                      <label>Reason & Description for Refund</label>
+                      <textarea
+                        rows={4}
+                        placeholder="Please describe why you are requesting a refund (e.g. order cancelled prior to dispatch, damaged item, etc.)..."
+                        value={form.description}
+                        onChange={e => setForm({ ...form, description: e.target.value })}
+                        required
+                      />
+                    </div>
+                  </div>
+
+                  <div style={{ marginTop: '24px', display: 'flex', gap: '12px', alignItems: 'center' }}>
+                    <button className="primary" type="submit" disabled={busy}>
+                      <Send size={15} /> Submit Claim for Automated AI Triage
+                    </button>
+                    <button className="secondary" type="button" onClick={() => setPage('dashboard')}>
+                      Cancel
+                    </button>
+                  </div>
+
+                  <div style={{ marginTop: '20px', padding: '14px', background: 'var(--navy-50)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)', fontSize: '12px', color: 'var(--navy-700)', display: 'flex', gap: '10px', alignItems: 'center' }}>
+                    <BrainCircuit size={20} color="var(--primary-700)" style={{ flexShrink: 0 }} />
+                    <span>
+                      <strong>Automated Processing:</strong> Once submitted, 8 specialized AI agents will verify payment ledger records, enforce return window policies, and route your claim into CS-1 Fast-Track, CS-2 Evidence, or CS-3 Ineligible desk in under 3 seconds.
+                    </span>
+                  </div>
+                </form>
+              </div>
+            </>
+          )}
+
+          {/* ECOMMERCE INTEGRATION HUB (ADMINISTRATOR & SUPERVISOR ONLY) */}
+          {page === 'ecommerce' && (
+            !['administrator', 'supervisor'].includes(user.role) ? (
+              <div className="panel" style={{ padding: '48px 24px', textAlign: 'center', maxWidth: '580px', margin: '48px auto' }}>
+                <ShieldAlert size={44} color="var(--rose-600)" style={{ margin: '0 auto 16px' }} />
+                <h2 style={{ fontSize: '20px', fontWeight: 800, color: 'var(--navy-900)' }}>Administrator Access Required</h2>
+                <p style={{ color: 'var(--navy-600)', margin: '10px 0 24px', lineHeight: 1.6, fontSize: '14px' }}>
+                  The eCommerce Webhook Hub, server-to-server API secrets, and live store simulation engine are strictly restricted to Platform Administrators and Supervisors.
+                </p>
+                <button
+                  className="primary"
+                  onClick={() => setPage(user.role === 'cs_1' ? 'cs1_desk' : user.role === 'cs_2' ? 'cs2_desk' : user.role === 'cs_3' ? 'cs3_desk' : 'dashboard')}
+                >
+                  Return to My Workspace
+                </button>
+              </div>
+            ) : (
+              <>
+                <div className="page-heading">
+                  <div>
+                    <div className="eyebrow">ECOMMERCE WEBHOOK & INTEGRATION API</div>
+                    <h1>Connect Your eCommerce Store</h1>
+                    <p>ShopFlow storefront integration and custom eCommerce webhooks. Server-to-server refund event ingestion with instant multi-agent triage.</p>
+                  </div>
+                </div>
+
+                {/* Native ShopFlow Integration Card */}
+                <div className="panel" style={{ padding: '24px', marginBottom: '24px', background: 'linear-gradient(135deg, #0f172a 0%, #1e293b 100%)', color: '#f8fafc', border: '1px solid rgba(255,255,255,0.1)' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '16px' }}>
+                    <div style={{ maxWidth: '640px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#38bdf8', fontSize: '11px', fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: '6px' }}>
+                        <Database size={16} /> Native eCommerce Integration
+                      </div>
+                      <h2 style={{ fontSize: '20px', fontWeight: 800, margin: 0, color: '#ffffff' }}>
+                        ShopFlow Storefront Connection
+                      </h2>
+                      <p style={{ margin: '6px 0 0', fontSize: '13px', color: '#94a3b8', lineHeight: 1.5 }}>
+                        ShopFlow acts as the System of Record (SoR). RITOS autonomously receives refund events, fetches rich claim context dossiers, runs the 8 specialist agents, and submits payment execution callbacks.
+                      </p>
+                    </div>
+
+                    <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                      <button
+                        className="primary"
+                        onClick={handleSyncShopflow}
+                        disabled={syncingShopflow}
+                        style={{ background: '#2563eb', borderColor: '#3b82f6', display: 'flex', alignItems: 'center', gap: '8px' }}
+                      >
+                        <RefreshCw size={14} className={syncingShopflow ? 'spin' : ''} />
+                        <span>{syncingShopflow ? 'Syncing ShopFlow...' : 'Sync Pending ShopFlow Tickets'}</span>
+                      </button>
+                      <button
+                        className="secondary"
+                        onClick={handleSimulateShopflowWebhook}
+                        disabled={busy}
+                        style={{ background: 'rgba(255,255,255,0.1)', color: '#f8fafc', borderColor: 'rgba(255,255,255,0.2)' }}
+                      >
+                        <Zap size={14} /> Test ShopFlow Webhook Ingestion
+                      </button>
+                    </div>
+                  </div>
+
+                  <div style={{ marginTop: '20px', paddingTop: '16px', borderTop: '1px solid rgba(255,255,255,0.1)', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px', fontSize: '12px' }}>
+                    <div>
+                      <small style={{ color: '#94a3b8', display: 'block', textTransform: 'uppercase', letterSpacing: '0.5px' }}>ShopFlow Instance URL</small>
+                      <strong style={{ color: '#ffffff', fontFamily: 'var(--font-mono)' }}>{shopflowStatus?.shopflow_base_url || 'http://localhost:3000'}</strong>
+                    </div>
+                    <div>
+                      <small style={{ color: '#94a3b8', display: 'block', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Connection State</small>
+                      <span className={`pill ${shopflowStatus?.connected ? 'green' : 'amber'}`}>
+                        <i />{shopflowStatus?.connected ? 'CONNECTED (HTTP 200)' : 'STANDBY / LISTENING'}
+                      </span>
+                    </div>
+                    <div>
+                      <small style={{ color: '#94a3b8', display: 'block', textTransform: 'uppercase', letterSpacing: '0.5px' }}>RITOS Webhook Target</small>
+                      <code style={{ color: '#38bdf8' }}>http://localhost:8000/webhook/refund-tickets</code>
+                    </div>
+                    <div>
+                      <small style={{ color: '#94a3b8', display: 'block', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Decision Callback</small>
+                      <code style={{ color: '#34d399' }}>POST /api/ritos/refund-decision</code>
+                    </div>
+                  </div>
+                </div>
+
+              <div className="dashboard-grid">
+                {/* Simulator */}
+                <div className="panel" style={{ padding: '24px' }}>
+                  <div className="panel-heading" style={{ padding: '0 0 16px', borderBottom: '1px solid var(--border-subtle)' }}>
+                    <div>
+                      <h3>Simulate Incoming eCommerce Ticket</h3>
+                      <p>Send a test order payload to observe instant multi-agent triage</p>
+                    </div>
+                  </div>
+
+                  <div className="form-grid" style={{ marginTop: '16px' }}>
+                    <div>
+                      <label>Order ID</label>
+                      <input value={simEcom.order_id} onChange={e => setSimEcom({ ...simEcom, order_id: e.target.value })} />
+                    </div>
+                    <div>
+                      <label>Transaction ID</label>
+                      <input value={simEcom.transaction_id} onChange={e => setSimEcom({ ...simEcom, transaction_id: e.target.value })} />
+                    </div>
+                    <div>
+                      <label>Customer Name</label>
+                      <input value={simEcom.customer_name} onChange={e => setSimEcom({ ...simEcom, customer_name: e.target.value })} />
+                    </div>
+                    <div>
+                      <label>Customer Mobile Phone</label>
+                      <input value={simEcom.customer_phone} onChange={e => setSimEcom({ ...simEcom, customer_phone: e.target.value })} />
+                    </div>
+                    <div>
+                      <label>Product Item Name</label>
+                      <input value={simEcom.item_name} onChange={e => setSimEcom({ ...simEcom, item_name: e.target.value })} />
+                    </div>
+                    <div>
+                      <label>Product Category</label>
+                      <select value={simEcom.item_category} onChange={e => setSimEcom({ ...simEcom, item_category: e.target.value })}>
+                        <option value="ELECTRONICS">ELECTRONICS (7-day window)</option>
+                        <option value="APPAREL">APPAREL (14-day window)</option>
+                        <option value="PERISHABLE">PERISHABLE (Final sale / 0d)</option>
+                        <option value="HYGIENE">HYGIENE (Non-returnable / 0d)</option>
+                        <option value="GENERAL">GENERAL (14-day window)</option>
+                      </select>
+                    </div>
+                    <div className="span-2">
+                      <label>Claimed Amount (INR)</label>
+                      <input type="number" value={simEcom.claimed_amount} onChange={e => setSimEcom({ ...simEcom, claimed_amount: e.target.value })} />
+                    </div>
+                    <div className="span-2">
+                      <label>Customer Complaint Description</label>
+                      <textarea rows={2} value={simEcom.description} onChange={e => setSimEcom({ ...simEcom, description: e.target.value })} />
+                    </div>
+                  </div>
+
+                  <button className="primary" style={{ marginTop: '16px' }} onClick={handleSimulateEcom} disabled={busy}>
+                    <Send size={15} /> Simulate eCommerce Webhook Ingestion
+                  </button>
+
+                  {ecomSimResult && (
+                    <div style={{ marginTop: '20px', padding: '16px', background: 'var(--navy-50)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)' }}>
+                      <strong>🎉 Ingestion Output:</strong>
+                      <div style={{ marginTop: '8px', display: 'grid', gap: '6px', fontSize: '13px' }}>
+                        <div><strong>Assigned Desk:</strong> <span className="pill blue" style={{ marginLeft: '6px' }}>{ecomSimResult.assigned_desk}</span></div>
+                        <div><strong>Decision Bucket:</strong> <b>{ecomSimResult.decision_bucket}</b></div>
+                        <div><strong>Policy Reason:</strong> <span>{ecomSimResult.policy_evaluation_reason}</span></div>
+                        <div><strong>Auto-Drafted Message:</strong> <p style={{ margin: '4px 0', fontSize: '12px', color: 'var(--navy-700)', fontStyle: 'italic' }}>"{ecomSimResult.customer_message_draft}"</p></div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* API Code Guide for Vercel/Render */}
+                <div className="panel" style={{ padding: '24px' }}>
+                  <div className="panel-heading" style={{ padding: '0 0 16px', borderBottom: '1px solid var(--border-subtle)' }}>
+                    <div>
+                      <h3>Render / Vercel Webhook Code</h3>
+                      <p>Copy this Node.js / Python snippet into your eCommerce backend</p>
+                    </div>
+                  </div>
+
+                  <div style={{ marginTop: '16px' }}>
+                    <small style={{ fontWeight: 700, color: 'var(--navy-700)', textTransform: 'uppercase', fontSize: '11px' }}>
+                      POST Endpoint URL
+                    </small>
+                    <div style={{ padding: '10px 12px', background: 'var(--navy-900)', color: '#93c5fd', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: '12px', margin: '6px 0 16px' }}>
+                      http://localhost:8000/api/v1/integrations/ecommerce/ticket
+                    </div>
+
+                    <small style={{ fontWeight: 700, color: 'var(--navy-700)', textTransform: 'uppercase', fontSize: '11px' }}>
+                      Node.js / Express Example (Vercel Backend)
+                    </small>
+                    <pre style={{ padding: '14px', background: 'var(--navy-900)', color: '#f1f5f9', borderRadius: 'var(--radius-md)', fontSize: '11px', overflowX: 'auto', lineHeight: '1.5' }}>
+{`// In your eCommerce Backend (Render / Vercel):
+await fetch('http://YOUR_RITOS_URL/api/v1/integrations/ecommerce/ticket', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+    'X-Ecommerce-Secret': process.env.ECOMMERCE_WEBHOOK_SECRET
+  },
+  body: JSON.stringify({
+    order_id: order.id,
+    transaction_id: order.payment_reference,
+    customer_name: customer.name,
+    customer_phone: customer.phone,
+    item_name: item.title,
+    item_category: item.category, // 'ELECTRONICS' | 'APPAREL'
+    claimed_amount: item.price,
+    purchase_date: order.created_at,
+    description: refundRequest.user_reason
+  })
+});`}
+                    </pre>
+                  </div>
+                </div>
+              </div>
+            </>
+            )
+          )}
+
+          {/* REFUND OPERATIONS REGISTER */}
+          {page === 'refunds' && (
+            <>
+              <div className="page-heading">
+                <div>
+                  <div className="eyebrow">FINANCIAL GOVERNANCE</div>
+                  <h1>{user.role === 'finance_approver' ? 'Refund Authorization Register' : 'Settlement Register'}</h1>
+                  <p>All executed and approved payment settlements across the payment gateway.</p>
+                </div>
+              </div>
+
+              <div className="panel table-panel">
+                <div className="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>REFUND ID</th>
+                        <th>AMOUNT</th>
+                        <th>STATUS</th>
+                        <th>PROVIDER REF.</th>
+                        <th>REASON</th>
+                        <th>DATE</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {refunds.map(r => (
+                        <tr key={r.id}>
+                          <td><span className="mono">{r.id.slice(0, 8).toUpperCase()}</span></td>
+                          <td className="amount">{money(r.amount, r.currency)}</td>
+                          <td><StatusPill value={r.status} /></td>
+                          <td><span className="mono">{r.provider_reference || '—'}</span></td>
+                          <td style={{ maxWidth: '280px', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.reason}</td>
+                          <td><span className="date-cell">{date(r.created_at)}</span></td>
+                        </tr>
+                      ))}
+                      {!refunds.length && (
+                        <tr>
+                          <td colSpan={6}><Empty text="No executed refunds recorded yet." /></td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </>
+          )}
+
+          {/* 8 SPECIALIST AGENTS REGISTRY */}
+          {page === 'automation' && (
+            !['administrator', 'supervisor', 'cs_1', 'cs_2', 'cs_3', 'refund_operations', 'finance_approver'].includes(user.role) ? (
+              <div className="panel" style={{ padding: '48px 24px', textAlign: 'center', maxWidth: '580px', margin: '48px auto' }}>
+                <ShieldAlert size={44} color="var(--rose-600)" style={{ margin: '0 auto 16px' }} />
+                <h2 style={{ fontSize: '20px', fontWeight: 800, color: 'var(--navy-900)' }}>Internal Operations Access Required</h2>
+                <p style={{ color: 'var(--navy-600)', margin: '10px 0 24px', lineHeight: 1.6, fontSize: '14px' }}>
+                  The 8 Specialist Agents Registry and pipeline control plane are restricted to operational staff and administrators.
+                </p>
+                <button
+                  className="primary"
+                  onClick={() => setPage('dashboard')}
+                >
+                  Return to Dashboard
+                </button>
+              </div>
+            ) : (
+              <>
+                <div className="page-heading">
+                  <div>
+                    <div className="eyebrow">AUTOMATION CONTROL PLANE</div>
+                    <h1>8 Specialist Agents Registry</h1>
+                    <p>Autonomous verification and classification agents coordinated by the Central Workflow Orchestrator.</p>
+                  </div>
+                  <div className="heading-actions">
+                    <button
+                      className="primary"
+                      onClick={handleRunAllAgents}
+                      disabled={runningAllAgents}
+                      style={{ background: '#2563eb', borderColor: '#3b82f6', display: 'flex', alignItems: 'center', gap: '8px' }}
+                    >
+                      {runningAllAgents ? <RefreshCw size={15} className="spin" /> : <Play size={15} />}
+                      <span>{runningAllAgents ? 'Executing 8 Agents...' : '▶ Run All 8 Agents Across Active Tickets'}</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Orchestrator Trigger & Telemetry Banner */}
+                <div className="panel" style={{ padding: '22px 24px', marginBottom: '24px', background: 'linear-gradient(135deg, #0f172a 0%, #1e293b 100%)', color: '#f8fafc', border: '1px solid rgba(255,255,255,0.1)' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '16px' }}>
+                    <div style={{ maxWidth: '620px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#38bdf8', fontSize: '11px', fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: '6px' }}>
+                        <BrainCircuit size={16} /> Autonomous Multi-Agent Orchestration
+                      </div>
+                      <h2 style={{ fontSize: '19px', fontWeight: 800, margin: 0, color: '#ffffff' }}>
+                        Deterministic Verification & AI Classification Pipeline
+                      </h2>
+                      <p style={{ margin: '6px 0 0', fontSize: '13px', color: '#94a3b8', lineHeight: 1.5 }}>
+                        Instantly triggers the deterministic ledger audit, duplicate matcher, category return window evaluator, fraud signal analyzer, and AI message drafter across active tickets.
+                      </p>
+                    </div>
+
+                    <button
+                      className="primary"
+                      onClick={handleRunAllAgents}
+                      disabled={runningAllAgents}
+                      style={{ background: '#2563eb', borderColor: '#3b82f6', padding: '12px 22px', fontSize: '13px', fontWeight: 700, borderRadius: 'var(--radius-md)', display: 'inline-flex', alignItems: 'center', gap: '8px', boxShadow: '0 4px 14px rgba(37,99,235,0.4)' }}
+                    >
+                      {runningAllAgents ? <RefreshCw size={16} className="spin" /> : <Play size={16} />}
+                      <span>{runningAllAgents ? 'Executing 8 Agents Pipeline...' : '▶ Run All 8 AI Agents Now'}</span>
+                    </button>
+                  </div>
+
+                  {allAgentsResult && (
+                    <div style={{ marginTop: '18px', paddingTop: '16px', borderTop: '1px solid rgba(255,255,255,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                        <span className="pill green"><i />ORCHESTRATOR COMPLETED</span>
+                        <span style={{ fontSize: '13px', color: '#e2e8f0' }}>
+                          Processed <strong>{allAgentsResult.processed_count}</strong> active tickets through <strong>{allAgentsResult.agents_count}</strong> specialist agents
+                        </span>
+                      </div>
+                      <div style={{ display: 'flex', gap: '8px' }}>
+                        <span className="pill green"><i />CS-1 Genuine</span>
+                        <span className="pill amber"><i />CS-2 Exceptions</span>
+                        <span className="pill red"><i />CS-3 Ineligible</span>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <div className="metric-grid" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
+                  {AGENT_CATALOG.map((agent, i) => (
+                    <div key={agent.id} className="metric-card click-row" onClick={() => setActiveAgentModal(agent)}>
+                      <div className="metric-top">
+                        <span className="metric-icon blue"><BrainCircuit size={18} /></span>
+                        <span className="pill green"><i />AGENT {i + 1}</span>
+                      </div>
+                      <div className="metric-label">{agent.mode}</div>
+                      <div className="metric-value" style={{ fontSize: '15px', margin: '4px 0' }}>{agent.name}</div>
+                      <div className="metric-note">{agent.purpose}</div>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )
+          )}
+
+          {/* AUDIT TRAIL (COMPLIANCE & GOVERNANCE ROLES ONLY) */}
+          {page === 'audit' && (
+            !['administrator', 'supervisor', 'auditor', 'finance_approver'].includes(user.role) ? (
+              <div className="panel" style={{ padding: '48px 24px', textAlign: 'center', maxWidth: '580px', margin: '48px auto' }}>
+                <ShieldAlert size={44} color="var(--rose-600)" style={{ margin: '0 auto 16px' }} />
+                <h2 style={{ fontSize: '20px', fontWeight: 800, color: 'var(--navy-900)' }}>Compliance Role Required</h2>
+                <p style={{ color: 'var(--navy-600)', margin: '10px 0 24px', lineHeight: 1.6, fontSize: '14px' }}>
+                  The Append-Only Audit Trail is restricted to System Administrators, Compliance Officers, and Financial Approvers.
+                </p>
+                <button
+                  className="primary"
+                  onClick={() => setPage(user.role === 'cs_1' ? 'cs1_desk' : user.role === 'cs_2' ? 'cs2_desk' : user.role === 'cs_3' ? 'cs3_desk' : 'dashboard')}
+                >
+                  Return to My Workspace
+                </button>
+              </div>
+            ) : (
+              <>
+                <div className="page-heading">
+                  <div>
+                    <div className="eyebrow">COMPLIANCE & GOVERNANCE</div>
+                    <h1>Append-Only Audit Trail</h1>
+                    <p>Permanent ledger of all triage runs, desk dispatches, and refund executions.</p>
+                  </div>
+                </div>
+
+              <div className="panel table-panel">
+                <div className="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>TIMESTAMP</th>
+                        <th>ACTOR</th>
+                        <th>ACTION</th>
+                        <th>ENTITY</th>
+                        <th>DETAILS</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {audit.map(a => (
+                        <tr key={a.id}>
+                          <td><span className="date-cell">{date(a.created_at)}</span></td>
+                          <td><span className="mono">{a.actor_id?.slice(0, 8) || 'SYSTEM'}</span></td>
+                          <td><strong>{a.action}</strong></td>
+                          <td>{a.entity_type} · <span className="mono">{a.entity_id?.slice(0, 8)}</span></td>
+                          <td><code style={{ fontSize: '11px', fontFamily: 'var(--font-mono)' }}>{JSON.stringify(a.details)}</code></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </>
+            )
+          )}
+        </div>
+
+        <footer className="footer">
+          <span>© 2026 RITOS · Automated eCommerce Refund Layer</span>
+          <span><Shield size={14} /> Production Grade · Local Active</span>
+        </footer>
+      </main>
+
+      {/* --- TICKET DETAILS / DESK ACTION DRAWER --- */}
+      {selected && (
+        <div className="drawer-backdrop" onClick={() => setSelected(null)}>
+          <aside className="ticket-drawer" onClick={e => e.stopPropagation()} style={{ width: 'min(680px, 100%)' }}>
+            <div className="drawer-top">
+              <div>
+                <div className="eyebrow">
+                  ASSIGNED DESK: <strong style={{ color: selected.assigned_desk === 'CS_1' ? 'var(--emerald-700)' : selected.assigned_desk === 'CS_2' ? 'var(--amber-700)' : 'var(--rose-700)' }}>
+                    {selected.assigned_desk} ({selected.decision_bucket?.replace(/_/g, ' ')})
+                  </strong>
+                </div>
+                <h2>{selected.ticket_number}</h2>
+              </div>
+              <button className="icon-btn" onClick={() => setSelected(null)}>
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="drawer-scroll">
+              <div className="drawer-badges">
+                <StatusPill value={selected.status} />
+                <PriorityPill value={selected.priority} />
+                <span className="pill blue"><i />{selected.item_category}</span>
+              </div>
+
+              <h3>{selected.item_name || selected.category.replace(/_/g, ' ')}</h3>
+              <p className="ticket-description">{selected.description}</p>
+
+              {/* ACTION BOX FOR CS-1 (GENUINE / REFUNDABLE) */}
+              {selected.decision_bucket === 'GENUINE_REFUNDABLE' && (
+                <div style={{ background: 'var(--emerald-50)', border: '1px solid var(--emerald-100)', padding: '18px', borderRadius: 'var(--radius-lg)', marginBottom: '22px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--emerald-700)', fontWeight: 800, fontSize: '14px', marginBottom: '8px' }}>
+                    <CheckCircle2 size={18} /> CS-1 Fast-Track Actions
+                  </div>
+                  <p style={{ fontSize: '12px', color: 'var(--emerald-800)', margin: '0 0 14px', lineHeight: '1.5' }}>
+                    {selected.policy_evaluation_reason}
+                  </p>
+
+                  {selected.status !== 'RESOLVED' ? (
+                    <div>
+                      <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                        <button
+                          className="primary"
+                          onClick={() => handleCS1DirectRefund(selected)}
+                          disabled={busy}
+                          style={{ background: 'var(--emerald-700)', borderColor: 'var(--emerald-700)' }}
+                        >
+                          <Zap size={15} /> 1-Click Direct Refund ({money(selected.claimed_amount, selected.currency)})
+                        </button>
+
+                        <button
+                          className="secondary"
+                          onClick={() => setShowCancelPrompt(!showCancelPrompt)}
+                        >
+                          Manual Verify & Cancel
+                        </button>
+                      </div>
+
+                      {showCancelPrompt && (
+                        <div style={{ marginTop: '14px', padding: '14px', background: '#ffffff', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)' }}>
+                          <label style={{ fontSize: '11px', fontWeight: 700, color: 'var(--rose-700)' }}>
+                            Reason for Cancelling / Denying Refund:
+                          </label>
+                          <textarea
+                            rows={2}
+                            value={manualCancelReason}
+                            onChange={e => setManualCancelReason(e.target.value)}
+                            placeholder="e.g. Package was already delivered intact per courier tracking proof…"
+                            style={{ width: '100%', marginTop: '6px' }}
+                          />
+                          <div style={{ display: 'flex', gap: '8px', marginTop: '10px' }}>
+                            <button
+                              className="primary compact"
+                              onClick={() => handleCS1ManualDecide(selected, 'CANCEL')}
+                              style={{ background: 'var(--rose-600)', borderColor: 'var(--rose-600)' }}
+                            >
+                              Confirm Denial
+                            </button>
+                            <button className="secondary compact" onClick={() => setShowCancelPrompt(false)}>
+                              Cancel
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div style={{ fontWeight: 700, color: 'var(--emerald-700)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <Check size={16} /> Refund has already been executed for this case.
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* ACTION BOX FOR CS-2 (EXCEPTIONS / PROOF NEEDED) */}
+              {selected.decision_bucket === 'EXCEPTIONAL_PROOF_NEEDED' && (
+                <div style={{ background: 'var(--amber-50)', border: '1px solid var(--amber-100)', padding: '18px', borderRadius: 'var(--radius-lg)', marginBottom: '22px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--amber-700)', fontWeight: 800, fontSize: '14px', marginBottom: '8px' }}>
+                    <AlertTriangle size={18} /> CS-2 Exception Dispatcher
+                  </div>
+                  <p style={{ fontSize: '12px', color: 'var(--amber-800)', margin: '0 0 12px' }}>
+                    <strong>Discrepancy:</strong> {selected.policy_evaluation_reason}
+                  </p>
+
+                  <label style={{ fontSize: '11px', fontWeight: 700, color: 'var(--navy-800)', display: 'block', marginBottom: '4px' }}>
+                    AI Pre-Drafted Message to Customer ({selected.customer_phone || selected.customer_email || 'Mobile'}):
+                  </label>
+                  <textarea
+                    rows={4}
+                    value={draftMessage}
+                    onChange={e => setDraftMessage(e.target.value)}
+                    style={{ width: '100%', background: '#ffffff', border: '1px solid var(--amber-200)', borderRadius: 'var(--radius-md)', padding: '10px', fontSize: '12px' }}
+                  />
+
+                  <div style={{ display: 'flex', gap: '10px', marginTop: '12px' }}>
+                    <button
+                      className="primary compact"
+                      onClick={() => handleCS2SendProof(selected)}
+                      disabled={busy}
+                      style={{ background: 'var(--amber-600)', borderColor: 'var(--amber-600)' }}
+                    >
+                      <Send size={14} /> Send Proof Request to Customer
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* ACTION BOX FOR CS-3 (NON-REFUNDABLE / DENIALS) */}
+              {selected.decision_bucket === 'NON_REFUNDABLE' && (
+                <div style={{ background: 'var(--rose-50)', border: '1px solid var(--rose-100)', padding: '18px', borderRadius: 'var(--radius-lg)', marginBottom: '22px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--rose-700)', fontWeight: 800, fontSize: '14px', marginBottom: '8px' }}>
+                    <X size={18} /> CS-3 Policy Denial Dispatcher
+                  </div>
+                  <p style={{ fontSize: '12px', color: 'var(--rose-800)', margin: '0 0 12px' }}>
+                    <strong>Policy Ineligibility:</strong> {selected.policy_evaluation_reason}
+                  </p>
+
+                  <label style={{ fontSize: '11px', fontWeight: 700, color: 'var(--navy-800)', display: 'block', marginBottom: '4px' }}>
+                    AI Pre-Drafted Rejection Notice to Customer:
+                  </label>
+                  <textarea
+                    rows={4}
+                    value={draftMessage}
+                    onChange={e => setDraftMessage(e.target.value)}
+                    style={{ width: '100%', background: '#ffffff', border: '1px solid var(--rose-200)', borderRadius: 'var(--radius-md)', padding: '10px', fontSize: '12px' }}
+                  />
+
+                  <div style={{ display: 'flex', gap: '10px', marginTop: '12px' }}>
+                    <button
+                      className="primary compact"
+                      onClick={() => handleCS3SendRejection(selected)}
+                      disabled={busy}
+                      style={{ background: 'var(--rose-600)', borderColor: 'var(--rose-600)' }}
+                    >
+                      <Send size={14} /> Send Denial Notice to Customer
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Data Grid */}
+              <div className="detail-grid">
+                <Detail label="Claimed Amount" value={money(selected.claimed_amount, selected.currency)} />
+                <Detail label="Order Reference" value={selected.order_id || '—'} />
+                <Detail label="Transaction Reference" value={selected.transaction_id} />
+                <Detail label="Customer Contact" value={selected.customer_phone || selected.customer_email || '—'} />
+                <Detail label="Product Category" value={selected.item_category || 'GENERAL'} />
+                <Detail label="Ledger Check" value={selected.payment_verification} />
+              </div>
+
+              {/* Multi-Agent Re-evaluation */}
+              <div className="pipeline-box">
+                <div className="pipeline-header">
+                  <strong><BrainCircuit size={17} /> AI Multi-Agent Triage Trace</strong>
+                  <button
+                    className="pipeline-run-btn"
+                    onClick={() => triggerAutomation(selected)}
+                    disabled={pipelineLoading}
+                  >
+                    {pipelineLoading ? <RefreshCw size={13} className="spin" /> : <Play size={13} />}
+                    <span>Re-Run AI Triage</span>
+                  </button>
+                </div>
+                <div style={{ fontSize: '12px', color: 'var(--navy-700)' }}>
+                  <div><strong>Decision Bucket:</strong> {selected.decision_bucket}</div>
+                  <div><strong>Assigned Desk:</strong> {selected.assigned_desk}</div>
+                  <div><strong>Policy Reasoning:</strong> {selected.policy_evaluation_reason}</div>
+                </div>
+              </div>
+
+              {/* Conversation & Notes */}
+              <div className="drawer-section">
+                <div className="section-title">
+                  <h4>Activity & Customer Communication Ledger</h4>
+                  <span>{selected.comments?.length || 0} entries</span>
+                </div>
+
+                {selected.comments?.map(c => (
+                  <div className={`comment ${c.internal ? 'internal' : ''}`} key={c.id}>
+                    <div className="comment-meta">
+                      <strong>{c.internal ? 'Staff Internal Note' : 'Customer Message / Dispatch'}</strong>
+                      <span>{date(c.created_at)}</span>
+                    </div>
+                    <p>{c.body}</p>
+                  </div>
+                ))}
+
+                <form onSubmit={addComment}>
+                  <textarea
+                    placeholder="Add an update or internal operational note…"
+                    value={comment}
+                    onChange={e => setComment(e.target.value)}
+                    required
+                  />
+                  <label className="checkbox-label">
+                    <input
+                      type="checkbox"
+                      checked={internal && !isCustomer}
+                      disabled={isCustomer}
+                      onChange={e => setInternal(e.target.checked)}
+                    />
+                    Internal note (staff only)
+                  </label>
+                  <button className="primary full" type="submit">
+                    Record Note
+                  </button>
+                </form>
+              </div>
+            </div>
+          </aside>
+        </div>
+      )}
+
+      {/* --- SYSTEM DOCUMENTATION MODAL --- */}
+      {showDocModal && (
+        <div className="modal-backdrop" onClick={() => setShowDocModal(false)}>
+          <div className="modal doc-modal" onClick={e => e.stopPropagation()}>
+            <div className="modal-heading">
+              <div>
+                <div className="eyebrow">RITOS AUTOMATION SPECIFICATION</div>
+                <h2>How RITOS Automates eCommerce Refunds</h2>
+                <p>3-Bucket Classification, Pre-Drafted Messaging, and Four-Eyes Governance.</p>
+              </div>
+              <button className="icon-btn" onClick={() => setShowDocModal(false)}>
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="doc-article">
+              <h3>1. The 3 Operational Desks</h3>
+              <div className="doc-agent-card" style={{ borderLeft: '4px solid #059669' }}>
+                <strong style={{ color: '#059669' }}>🟢 CS-1: Genuine & Refundable Desk</strong>
+                <p>
+                  For claims where the transaction is verified on the ledger, within the product return window, and zero risk flags.
+                  <strong>CS-1 can either 1-click execute the refund directly</strong>, or manually review and approve/cancel with audit notes.
+                </p>
+              </div>
+
+              <div className="doc-agent-card" style={{ borderLeft: '4px solid #d97706' }}>
+                <strong style={{ color: '#d97706' }}>🟡 CS-2: Exception & Proof Desk</strong>
+                <p>
+                  For claims involving damaged packaging, broken hinges, missing items, or wrong products delivered.
+                  <strong>The AI pre-drafts an SMS/email tailored with the order reference</strong> asking for the exact proof items. CS-2 reviews and clicks Send.
+                </p>
+              </div>
+
+              <div className="doc-agent-card" style={{ borderLeft: '4px solid #e11d48' }}>
+                <strong style={{ color: '#e11d48' }}>🔴 CS-3: Denial & Resolution Desk</strong>
+                <p>
+                  For claims past the return window (e.g. &gt;7 days for electronics), fake transaction IDs, or final-sale hygiene items.
+                  <strong>The AI writes a polite, legally compliant rejection explanation</strong>. CS-3 reviews and clicks Send.
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* --- AGENT DETAIL SPEC MODAL --- */}
+      {activeAgentModal && (
+        <div className="modal-backdrop" onClick={() => setActiveAgentModal(null)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <div className="modal-heading">
+              <div>
+                <div className="eyebrow">AGENT SPECIFICATION</div>
+                <h2>{activeAgentModal.name}</h2>
+                <p>{activeAgentModal.mode}</p>
+              </div>
+              <button className="icon-btn" onClick={() => setActiveAgentModal(null)}>
+                <X size={18} />
+              </button>
+            </div>
+
+            <div style={{ display: 'grid', gap: '16px' }}>
+              <div>
+                <strong>Operational Purpose:</strong>
+                <p style={{ margin: '4px 0 0', color: 'var(--navy-700)', fontSize: '13px', lineHeight: '1.6' }}>
+                  {activeAgentModal.purpose}
+                </p>
+              </div>
+              <div style={{ background: 'var(--emerald-50)', padding: '14px', borderRadius: 'var(--radius-md)', border: '1px solid var(--emerald-100)' }}>
+                <strong style={{ color: 'var(--emerald-700)' }}>Boundaries & Financial Guardrails:</strong>
+                <p style={{ margin: '4px 0 0', color: 'var(--emerald-800)', fontSize: '12px', lineHeight: '1.6' }}>
+                  {activeAgentModal.guardrail}
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// --- SUB-COMPONENTS ---
+function ShieldCheckIcon() {
+  return <BadgeCheck size={18} />
+}
+
+function Metric({ icon, label, value, note, tone, trend }: any) {
+  return (
+    <div className="metric-card">
+      <div className="metric-top">
+        <span className={`metric-icon ${tone || ''}`}>{icon}</span>
+        {trend && <span className="live-tag"><i />{trend}</span>}
+      </div>
+      <div className="metric-label">{label}</div>
+      <div className="metric-value">{value}</div>
+      <div className="metric-note">{note}</div>
+    </div>
+  )
+}
+
+function SectionTitle({ title, action, onAction }: any) {
+  return (
+    <div className="section-title">
+      <h3>{title}</h3>
+      {action && (
+        <button className="text-btn" onClick={onAction}>
+          {action} <ArrowUpRight size={14} />
+        </button>
+      )}
+    </div>
+  )
+}
+
+function StatusPill({ value }: any) {
+  const v = String(value || 'UNKNOWN')
+  const cls =
+    v.includes('REFUND') || v === 'ACTIVE' || v === 'RESOLVED' || v === 'APPROVED'
+      ? 'green'
+      : v.includes('REJECT') || v === 'FAILED' || v === 'CANCELLED'
+      ? 'red'
+      : v.includes('PENDING') || v.includes('AWAITING') || v === 'ESCALATED'
+      ? 'amber'
+      : 'blue'
+
+  return (
+    <span className={`pill ${cls}`}>
+      <i />{v.replace(/_/g, ' ')}
+    </span>
+  )
+}
+
+function PriorityPill({ value }: any) {
+  return <span className={`priority-pill ${String(value).toLowerCase()}`}>{value}</span>
+}
+
+function TicketTable({ tickets, onSelect }: { tickets: Ticket[]; onSelect: (t: Ticket) => void }) {
+  return (
+    <div className="panel table-panel">
+      <div className="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>TICKET</th>
+              <th>ORDER & ITEM</th>
+              <th>CLAIMED AMOUNT</th>
+              <th>ASSIGNED DESK</th>
+              <th>STATUS</th>
+              <th>CREATED</th>
+              <th />
+            </tr>
+          </thead>
+          <tbody>
+            {tickets.map(t => (
+              <tr key={t.id} onClick={() => onSelect(t)} className="click-row">
+                <td>
+                  <div className="ticket-id">
+                    <span className="ticket-symbol"><TicketIcon size={16} /></span>
+                    <div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <strong>{t.ticket_number}</strong>
+                        {t.classification_evidence?.source === 'SHOPFLOW' && (
+                          <span className="pill blue" style={{ padding: '1px 6px', fontSize: '10px' }}>ShopFlow</span>
+                        )}
+                      </div>
+                      <small className="mono">{t.customer_phone || t.transaction_id}</small>
+                    </div>
+                  </div>
+                </td>
+                <td>
+                  <div className="issue-cell">
+                    <strong>{t.item_name || t.category.replace(/_/g, ' ')}</strong>
+                    <small>{t.description}</small>
+                  </div>
+                </td>
+                <td>
+                  <span className="amount">{money(t.claimed_amount, t.currency)}</span>
+                </td>
+                <td>
+                  <span className={`pill ${t.assigned_desk === 'CS_1' ? 'green' : t.assigned_desk === 'CS_2' ? 'amber' : 'red'}`}>
+                    <i />{t.assigned_desk || 'CS-2'} ({t.decision_bucket?.replace(/_/g, ' ') || 'EXCEPTIONS'})
+                  </span>
+                </td>
+                <td><StatusPill value={t.status} /></td>
+                <td><span className="date-cell">{new Date(t.created_at).toLocaleDateString()}</span></td>
+                <td>
+                  <button
+                    className="icon-btn"
+                    style={{ width: '30px', height: '30px' }}
+                    onClick={e => {
+                      e.stopPropagation()
+                      onSelect(t)
+                    }}
+                  >
+                    <ArrowUpRight size={15} />
+                  </button>
+                </td>
+              </tr>
+            ))}
+            {!tickets.length && (
+              <tr>
+                <td colSpan={7}>
+                  <Empty text="No tickets found matching the criteria." />
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+      <div className="panel-foot">
+        <span>Showing <strong>{tickets.length}</strong> cases</span>
+        <span>Synced with RITOS Automation Engine</span>
+      </div>
+    </div>
+  )
+}
+
+function Empty({ text }: any) {
+  return (
+    <div className="empty">
+      <span><FileText size={22} /></span>
+      <strong>No Records Found</strong>
+      <p>{text}</p>
+    </div>
+  )
+}
+
+function Detail({ label, value }: any) {
+  return (
+    <div className="detail">
+      <small>{label}</small>
+      <strong>{value}</strong>
+    </div>
+  )
+}
+
 export default App
