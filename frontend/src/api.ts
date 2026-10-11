@@ -21,7 +21,7 @@ export type Ticket = {
   duplicate_of_id?: string | null
   assigned_to_id?: string | null
   recommended_action: string
-  classification_evidence: Record<string, unknown>
+  classification_evidence: Record<string, any>
   decision_bucket?: string
   assigned_desk?: string
   customer_name?: string | null

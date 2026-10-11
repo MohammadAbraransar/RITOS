@@ -1,31 +1,31 @@
 # Local Development & Testing Guide (`test_local.md`)
 
-Welcome! This guide is written step-by-step for a fresher or new team member to run the entire **RITOS** platform and the **ShopFlow eCommerce Demo** locally from scratch.
+Welcome! This guide is written step-by-step for any developer, fresher, or team member to run the entire **RITOS** platform and the **ShopFlow eCommerce Demo** locally from scratch.
 
 ---
 
-## ⚡ Super Fast Option: One-Click `.bat` Launch (Zero Confusion!)
+## ⚡ One-Click Batch Files (Recommended)
 
-If you want to run everything with **1 single click**:
-1. Simply double-click **`start_all.bat`** in the repository root.
-   - It will automatically launch 4 labeled terminal windows (1 for each service).
-   - After 5 seconds, it will automatically open both web portals in your default browser:
-     - RITOS Desk Portal: [http://localhost:5173](http://localhost:5173)
-     - ShopFlow Demo Store: [http://localhost:3000](http://localhost:3000)
-2. To stop all services cleanly without port errors, double-click **`stop_all.bat`**.
+Everything has been configured with Windows batch files in the repository root for zero confusion:
+
+| Batch File | What it does | When to run |
+| :--- | :--- | :--- |
+| **`setup.bat`** | Automatically installs Python packages, sets up `.venv`, initializes SQLite DB, and runs `npm install` for both frontends. | Run **once** when you first clone the project on a new machine. |
+| **`start_all.bat`** | Launches all 4 services in labeled terminal windows and automatically opens the browser tabs. | Run every time you want to start development or test locally. |
+| **`stop_all.bat`** | Kills all background processes on ports `5173`, `8000`, `3000`, and `3001` cleanly. | Run whenever you want to shut down or reload all services. |
 
 ---
 
 ## 🏗️ Architecture & Port Map
 
-You will run **4 separate terminals** so you can view real-time logs for all services:
+When running, the system operates across **4 services**:
 
 | Terminal | Service | Technology | Working Directory | Local URL |
 | :--- | :--- | :--- | :--- | :--- |
-| **Terminal 1** | **RITOS Frontend** (Desk Portal) | React + Vite + TypeScript | `f:\RITOS\frontend` | [http://localhost:5173](http://localhost:5173) |
-| **Terminal 2** | **RITOS Backend** (Decision Engine) | Python FastAPI + SQLite | `f:\RITOS\backend` | [http://localhost:8000](http://localhost:8000) |
-| **Terminal 3** | **ShopFlow Frontend** (eCommerce Store) | Next.js 14 + TailwindCSS | `f:\RITOS\shopflow` | [http://localhost:3000](http://localhost:3000) |
-| **Terminal 4** | **ShopFlow Backend** (Dedicated API) | Node.js Standalone Microservice | `f:\RITOS\shopflow` | [http://localhost:3001](http://localhost:3001) |
+| **Terminal 1** | **RITOS Frontend** (Desk Portal) | React + Vite + TypeScript | `frontend/` | [http://localhost:5173](http://localhost:5173) |
+| **Terminal 2** | **RITOS Backend** (Multi-Agent Engine) | Python FastAPI + SQLite | `backend/` | [http://localhost:8000](http://localhost:8000) |
+| **Terminal 3** | **ShopFlow Frontend** (eCommerce Store) | Next.js 14 + TailwindCSS | `shopflow/` | [http://localhost:3000](http://localhost:3000) |
+| **Terminal 4** | **ShopFlow Backend** (Dedicated API) | Node.js Standalone Microservice | `shopflow/` | [http://localhost:3001](http://localhost:3001) |
 
 ```
   [ShopFlow Storefront]          [ShopFlow Backend API]
@@ -48,34 +48,28 @@ You will run **4 separate terminals** so you can view real-time logs for all ser
 
 ---
 
-## ⚙️ Initial One-Time Setup (Before Opening Terminals)
+## ⚙️ Initial Setup (If Not Using `setup.bat`)
 
-If this is your first time setting up the repository on your machine, perform these 3 one-time installation steps:
+If you prefer to configure manually in PowerShell instead of double-clicking `setup.bat`:
 
-### 1. Python Virtual Environment & Backend Packages
-Open PowerShell in `f:\RITOS`:
+### 1. Python Virtual Environment & Backend
 ```powershell
-# Create virtual environment if it does not exist
 python -m venv .venv
-
-# Activate environment and install dependencies
 .\.venv\Scripts\Activate.ps1
 pip install --upgrade pip
 pip install -r backend\requirements.txt
-
-# Run database migration and seed initial data
 python backend\migrate_db.py
 python -m backend.app.seed
 ```
 
-### 2. Install RITOS Frontend Packages
+### 2. Install RITOS Frontend
 ```powershell
 cd frontend
 npm install
 cd ..
 ```
 
-### 3. Install ShopFlow Packages
+### 3. Install ShopFlow Dependencies
 ```powershell
 cd shopflow
 npm install
@@ -84,77 +78,50 @@ cd ..
 
 ---
 
-## 🚀 Running the 4 Terminals
+## 🚀 Running the 4 Terminals Manually
 
-Open 4 separate terminal windows or tabs (e.g. in VS Code or Windows Terminal).
-
----
+If you want to run each service in its own terminal manually:
 
 ### 💻 Terminal 1: RITOS Frontend (Desk Portal)
-This runs the operations portal where human agents manage tickets, review exceptions, and view audit events.
-
 ```powershell
-cd f:\RITOS\frontend
+cd frontend
 npm run dev
 ```
+- **Local URL:** [http://localhost:5173](http://localhost:5173)
 
-- **Status:** Running on [http://localhost:5173](http://localhost:5173)
-- **What to look for in terminal:** `VITE v5.x.x  ready in ... ms ➜ Local: http://localhost:5173/`
-
----
-
-### 💻 Terminal 2: RITOS Backend (API & Multi-Agent Engine)
-This runs the FastAPI core that adjudicates refund claims, enforces product policies, and manages desks.
-
+### 💻 Terminal 2: RITOS Backend (API & 8-Agent Pipeline)
 ```powershell
-cd f:\RITOS\backend
-& "..\.venv\Scripts\Activate.ps1"
+cd backend
+..\.venv\Scripts\Activate.ps1
 uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
+- **Local URL:** [http://localhost:8000](http://localhost:8000)
+- **Interactive Swagger Docs:** [http://localhost:8000/docs](http://localhost:8000/docs)
 
-- **Status:** Running on [http://localhost:8000](http://localhost:8000)
-- **Interactive Swagger API Docs:** [http://localhost:8000/docs](http://localhost:8000/docs)
-- **What to look for in terminal:** `INFO: Application startup complete. Uvicorn running on http://0.0.0.0:8000`
-
----
-
-### 💻 Terminal 3: ShopFlow Frontend (eCommerce Demo Store)
-This runs the dummy eCommerce storefront where customers place orders and submit refund claims.
-
+### 💻 Terminal 3: ShopFlow Frontend (eCommerce Store)
 ```powershell
-cd f:\RITOS\shopflow
+cd shopflow
 npm run dev -- -p 3000
 ```
+- **Local URL:** [http://localhost:3000](http://localhost:3000)
 
-- **Status:** Running on [http://localhost:3000](http://localhost:3000)
-- **What to look for in terminal:** `Ready in ... ms ➜ Local: http://localhost:3000`
-
----
-
-### 💻 Terminal 4: ShopFlow Backend (API & Callback Server)
-This runs the dedicated ShopFlow backend that feeds customer history context to RITOS and receives decision callbacks.
-
+### 💻 Terminal 4: ShopFlow Backend (API & Context Adapter)
 ```powershell
-cd f:\RITOS\shopflow
+cd shopflow
 node standalone-backend.js
 ```
-
-- **Status:** Running on [http://localhost:3001](http://localhost:3001)
-- **Health check:** [http://localhost:3001/api/health](http://localhost:3001/api/health)
-- **What to look for in terminal:** `[ShopFlow Standalone API] Running at http://localhost:3001`
+- **Local URL:** [http://localhost:3001](http://localhost:3001)
+- **Health Check:** [http://localhost:3001/api/health](http://localhost:3001/api/health)
 
 ---
 
-## 🧪 End-to-End Testing Walkthrough
-
-Follow these steps to verify that the complete end-to-end flow works:
+## 🧪 End-to-End Testing & Verification
 
 ### Step 1: Log in to RITOS Desk Portal
-1. Open your browser and navigate to **[http://localhost:5173](http://localhost:5173)**.
-2. Log in using any of the seeded demo accounts:
-   - **Administrator:** `admin@ritos.local` / `ChangeMe123!`
-   - **Support Agent:** `agent@ritos.local` / `ChangeMe123!`
-   - **Refund Specialist:** `refunds@ritos.local` / `ChangeMe123!`
+1. Open [http://localhost:5173](http://localhost:5173).
+2. Log in with:
+   - **Email:** `admin@ritos.local` (or `agent@ritos.local` / `refunds@ritos.local`)
+   - **Password:** `ChangeMe123!`
 3. You will see the live RITOS operations dashboard with the 3 Decision Desks:
    - **CS-1:** Fast-Track Auto-Approved Refunds
    - **CS-2:** Human Review & Proof Needed
@@ -162,67 +129,51 @@ Follow these steps to verify that the complete end-to-end flow works:
 
 ---
 
-### Step 2: Open ShopFlow Store & Raise Refund Claims
-1. Open a new browser tab and navigate to **[http://localhost:3000](http://localhost:3000)**.
-2. In the **"My Recent Orders"** section, click **"⚡ Raise Refund Ticket"** on the demo order cards:
+### Step 2: Open ShopFlow & Submit Claims
+1. Open [http://localhost:3000](http://localhost:3000).
+2. Scroll to **"My Recent Orders"** and click **"⚡ Raise Refund Ticket"**:
 
-| Card | Order ID | Product Item | Expected Desk | Why? |
-| :--- | :--- | :--- | :--- | :--- |
-| **Order #1** | `ORD-88201` | Executive Laptop Sleeve | **CS-1 (Auto-Approved)** | Verified defective item within the 14-day policy window. |
-| **Order #2** | `ORD-88202` | Wireless ANC Headphones | **CS-2 (More Proof Needed)** | High-value item requiring photo proof / serial check. |
-| **Order #3** | `ORD-88203` | RGB Gaming Keyboard | **CS-3 (Rejected)** | Return window expired (26 days elapsed, 14-day max). |
-
-3. Click **"Submit Claim to RITOS"** in the modal.
-4. You will instantly see the live response badge showing:
-   - The ticket ID (e.g. `sf_tkt_...`)
-   - The assigned desk (`CS_1`, `CS_2`, or `CS_3`)
-   - The deterministic policy evaluation reason.
+| Order ID | Product Item | Expected Desk | Reason |
+| :--- | :--- | :--- | :--- |
+| `ORD-88201` | Executive Laptop Sleeve | **CS-1 (Approved)** | Verified payment within 14-day policy window. |
+| `ORD-88202` | Wireless ANC Headphones | **CS-2 (Proof Needed)** | Electronics return requiring serial check / photo proof. |
+| `ORD-88203` | RGB Gaming Keyboard | **CS-3 (Rejected)** | Window expired (26 days elapsed, 14-day policy max). |
 
 ---
 
-### Step 3: Test the Composite Duplicate Key Logic
-RITOS prevents duplicate claims based on **BOTH** `order_id` / `transaction_id` **AND** the purchased `item_name`:
+### Step 3: Strict 3-Point Duplicate Verification
+RITOS strictly requires that **all three criteria** match simultaneously before marking a ticket as a duplicate:
+1. `transaction_id` matches
+2. `order_id` matches
+3. `item_name` matches (purchased product model)
 
-1. Find the **Multi-Item Order (`ORD-88204`)** on the ShopFlow page.
-2. **Action 1:** Raise a refund for **Item #1: Precision Stylus Pen Pro**.
-   - Result: Lands in **CS-1 (Approved)** as a valid first claim.
-3. **Action 2:** Raise a refund for **Item #2: MagSafe Wireless Stand** (same order `ORD-88204`!).
-   - Result: **NOT** marked as a duplicate! It evaluates on its own merits and lands in **CS-1 (Approved)** because the product model is different.
-4. **Action 3:** Raise a refund for **Item #1: Precision Stylus Pen Pro** AGAIN (same order `ORD-88204` + same model name!).
-   - Result: **Immediately detected as a duplicate claim!**
-   - Automatically routed to **CS-3 (NON_REFUNDABLE)** with policy reason:
-     > *"Duplicate claim rejected: An active or resolved claim (#...) already exists for this exact product item/model in order/transaction."*
-
----
-
-### Step 4: Verify in RITOS Desk Portal
-1. Switch back to your [RITOS Portal tab](http://localhost:5173).
-2. Go to **Desks** or **Tickets**.
-3. Locate the tickets you just raised from ShopFlow.
-4. Click on any ticket to view:
-   - **Financial Verification:** Transaction ID check against ledger.
-   - **Assigned Desk:** CS-1, CS-2, or CS-3.
-   - **8-Agent Pipeline Trace:** Triage classification, risk signals, and auto-generated customer message draft.
-   - **Audit Events:** Immutable timeline of actions.
+#### Verification Scenarios:
+- **Same Order & Transaction, but Different Item** (e.g. `Precision Stylus Pen Pro` vs `MagSafe Wireless Stand` in order `ORD-88204`):
+  - **Result:** **NOT a duplicate!** Evaluates on its own merits as a distinct product claim.
+- **Same Order, Same Transaction, and Same Item** submitted a second time:
+  - **Result:** **Immediately flagged as a Duplicate!**
+  - **Desk:** Routed to **CS-3 (NON_REFUNDABLE)**
+  - **Policy Reason:** *"Duplicate claim rejected: An active or resolved claim (#...) already exists with identical transaction ID, order ID, and product model."*
 
 ---
 
-## 🛠️ Handy Troubleshooting & FAQ
+### Step 4: Verification of 8 Specialist Agents
+When a ticket is created, RITOS executes an 8-agent pipeline:
+1. **Agent 1 (Transaction Data Fetcher):** Verifies transaction ID against payment gateway/ledger.
+2. **Agent 2 (Duplicate Intelligence):** Strict 3-point composite check (`transaction_id` + `order_id` + `item_name`).
+3. **Agent 3 (Issue Classification):** NLP classification & sentiment analysis.
+4. **Agent 4 (Risk & Fraud Signals):** Multi-factor velocity and return history scoring.
+5. **Agent 5 (Refund Eligibility & Policy):** Deterministic desk routing (`CS-1`, `CS-2`, `CS-3`).
+6. **Agent 6 (Routing & SLA):** Assigns team queue, priority (`P1`-`P4`), and SLA window.
+7. **Agent 7 (Visual Evidence Adapter):** Extracts and inspects customer image proofs.
+8. **Agent 8 (Reconciliation & Communication):** Drafts personalized customer messages and writes immutable audit logs.
 
-### 1. "Port already in use" Error?
-- If port `8000`, `5173`, `3000`, or `3001` is blocked by an old background process on Windows, find and kill it:
-  ```powershell
-  # Find PID using port 8000 (replace with 3000, 3001, or 5173 as needed)
-  Get-Process -Id (Get-NetTCPConnection -LocalPort 8000).OwningProcess | Stop-Process -Force
-  ```
+All 8 agents' telemetry traces can be inspected directly in the RITOS UI under the ticket details modal.
 
-### 2. How do I reset or re-seed the RITOS database?
+---
+
+## 🛑 Clean Shutdown
+To stop all 4 services at once, double-click **`stop_all.bat`** or run:
 ```powershell
-cd f:\RITOS\backend
-python migrate_db.py
-python -m app.seed
+.\stop_all.bat
 ```
-
-### 3. What are the shared secrets / API keys?
-- **RITOS Webhook Bearer Key:** `Bearer ritos_dev_key_secret_2026`
-- **Default Seed Password:** `ChangeMe123!`

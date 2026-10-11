@@ -6,10 +6,23 @@ echo =====================================================================
 echo          RITOS ^& SHOPFLOW ONE-CLICK LOCAL LAUNCHER
 echo =====================================================================
 echo.
-echo Starting all 4 services in dedicated terminal windows...
-echo.
 
 set ROOT_DIR=%~dp0
+
+:: Check if setup has been run
+if not exist "%ROOT_DIR%.venv\Scripts\activate.bat" (
+    color 0C
+    echo [WARNING] Python virtual environment was not found!
+    echo Please run "setup.bat" first to install dependencies and migrate the database.
+    echo.
+    choice /M "Would you like to run setup.bat right now"
+    if errorlevel 2 goto :skip_setup
+    call "%ROOT_DIR%setup.bat"
+)
+:skip_setup
+
+echo Starting all 4 services in dedicated terminal windows...
+echo.
 
 :: 1. RITOS Frontend (Port 5173)
 echo [1/4] Launching RITOS Frontend (Port 5173)...
@@ -17,7 +30,7 @@ start "1. RITOS Frontend (Port 5173)" cmd /k "cd /d %ROOT_DIR%frontend && title 
 
 :: 2. RITOS Backend (Port 8000)
 echo [2/4] Launching RITOS Backend (Port 8000)...
-start "2. RITOS Backend (Port 8000)" cmd /k "cd /d %ROOT_DIR%backend && title RITOS Backend :8000 && if exist ..\.venv\Scripts\activate.bat (call ..\.venv\Scripts\activate.bat) else (call .venv\Scripts\activate.bat) && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+start "2. RITOS Backend (Port 8000)" cmd /k "cd /d %ROOT_DIR%backend && title RITOS Backend :8000 && call "%ROOT_DIR%.venv\Scripts\activate.bat" && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
 
 :: 3. ShopFlow Frontend (Port 3000)
 echo [3/4] Launching ShopFlow Storefront (Port 3000)...
