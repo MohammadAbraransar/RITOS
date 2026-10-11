@@ -50,9 +50,9 @@ npm --version
 :: 3. Python Virtual Environment Setup
 echo.
 echo [3/6] Setting up Python virtual environment (.venv)...
-if not exist "%ROOT_DIR%.venv\Scripts\python.exe" (
+if not exist ".venv\Scripts\python.exe" (
     echo Creating virtual environment at .venv...
-    python -m venv "%ROOT_DIR%.venv"
+    python -m venv .venv
     if %errorlevel% neq 0 (
         color 0C
         echo [ERROR] Failed to create virtual environment!
@@ -66,9 +66,9 @@ if not exist "%ROOT_DIR%.venv\Scripts\python.exe" (
 :: 4. Install Backend Dependencies & Migrate Database
 echo.
 echo [4/6] Installing backend Python packages and setting up database...
-call "%ROOT_DIR%.venv\Scripts\activate.bat"
+call .venv\Scripts\activate.bat
 python -m pip install --upgrade pip --quiet
-pip install -r "%ROOT_DIR%backend\requirements.txt"
+pip install -r backend\requirements.txt
 if %errorlevel% neq 0 (
     color 0C
     echo [ERROR] Failed to install backend dependencies!
@@ -80,7 +80,7 @@ echo Initializing database schema and seed data...
 cd /d "%ROOT_DIR%backend"
 python migrate_db.py
 python -m app.seed
-cd /d %ROOT_DIR%
+cd /d "%ROOT_DIR%"
 
 :: 5. Install RITOS Frontend Packages
 echo.
@@ -93,7 +93,7 @@ if %errorlevel% neq 0 (
     pause
     exit /b 1
 )
-cd /d %ROOT_DIR%
+cd /d "%ROOT_DIR%"
 
 :: 6. Install ShopFlow Dependencies
 echo.
@@ -106,7 +106,7 @@ if %errorlevel% neq 0 (
     pause
     exit /b 1
 )
-cd /d %ROOT_DIR%
+cd /d "%ROOT_DIR%"
 
 echo.
 echo =====================================================================
