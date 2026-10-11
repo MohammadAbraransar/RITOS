@@ -4,6 +4,18 @@ Welcome! This guide is written step-by-step for a fresher or new team member to 
 
 ---
 
+## ⚡ Super Fast Option: One-Click `.bat` Launch (Zero Confusion!)
+
+If you want to run everything with **1 single click**:
+1. Simply double-click **`start_all.bat`** in the repository root.
+   - It will automatically launch 4 labeled terminal windows (1 for each service).
+   - After 5 seconds, it will automatically open both web portals in your default browser:
+     - RITOS Desk Portal: [http://localhost:5173](http://localhost:5173)
+     - ShopFlow Demo Store: [http://localhost:3000](http://localhost:3000)
+2. To stop all services cleanly without port errors, double-click **`stop_all.bat`**.
+
+---
+
 ## 🏗️ Architecture & Port Map
 
 You will run **4 separate terminals** so you can view real-time logs for all services:
