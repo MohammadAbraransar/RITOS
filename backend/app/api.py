@@ -14,7 +14,10 @@ from .schemas import (
     CS1DecisionIn, ProofRequestIn, RejectionNoticeIn, EcommerceTicketIn
 )
 from .security import verify_password, create_access_token, get_current_user, require_roles
-from .services import classify, verify_transaction, calculate_priority, find_duplicate, record_event, audit, refund_key, ROUTES
+from .services import (
+    classify, verify_transaction, calculate_priority, find_duplicate,
+    record_event, audit, refund_key, ROUTES, generate_customer_message_draft
+)
 from .agents import AGENTS, ORCHESTRATOR, run_ticket_pipeline
 from .config import settings
 
@@ -764,6 +767,11 @@ def handle_proof_action(ticket_id: str, payload: ProofActionPayload, db: Session
         t.assigned_desk = AssignedDesk.CS_3.value
         t.rejection_notice_sent_at = datetime.now(timezone.utc)
         t.policy_evaluation_reason = f"Human Agent ({user.email}) denied exception: {payload.note}"
+        t.customer_message_draft = generate_customer_message_draft(
+            customer_name=t.customer_name, order_id=t.order_id, item_name=t.item_name,
+            claimed_amount=float(t.claimed_amount), currency=t.currency, decision_bucket=t.decision_bucket,
+            reason=t.policy_evaluation_reason
+        )
         record_event(db, t.id, user.id, "CLAIM_DENIED_BY_AGENT", {"note": payload.note})
         audit(db, user.id, "CLAIM_DENIED_BY_AGENT", "ticket", t.id, {"note": payload.note})
 
