@@ -1,7 +1,7 @@
 import re, uuid, hashlib
 from decimal import Decimal
 from sqlalchemy.orm import Session
-from sqlalchemy import select
+from sqlalchemy import select, func
 from .models import Ticket, Transaction, TicketEvent, AuditLog, RefundRequest, RefundStatus, TicketStatus
 
 KEYWORDS = {
@@ -68,21 +68,33 @@ def calculate_priority(category: str, description: str, created_at=None):
     if category in ("MISSING_DOCUMENTATION","REFUND_STATUS_INQUIRY"): return "P4"
     return "P3"
 
-def find_duplicate(db: Session, customer_id: str, transaction_id: str, category: str, description: str, item_name: str | None = None):
-    # Conservative matching: exact same customer + transaction + matching purchased product/item
+def find_duplicate(db: Session, customer_id: str, transaction_id: str, category: str, description: str, item_name: str | None = None, order_id: str | None = None):
+    # Strict 3-point composite matching:
+    # A claim is ONLY flagged duplicate if ALL THREE match:
+    # 1. Exact transaction_id
+    # 2. Exact order_id (if present)
+    # 3. Exact item_name / purchased product model
     active = [TicketStatus.NEW.value, TicketStatus.TRIAGED.value, TicketStatus.IN_REVIEW.value,
               TicketStatus.AWAITING_INFORMATION.value, TicketStatus.ESCALATED.value, TicketStatus.REOPENED.value, TicketStatus.RESOLVED.value]
-    existing = db.scalars(select(Ticket).where(Ticket.customer_id==customer_id,
-       Ticket.transaction_id==transaction_id, Ticket.status.in_(active)).order_by(Ticket.created_at.desc())).all()
-    normalized = lambda s: re.sub(r"[^a-z0-9]", "", s.lower()) if s else ""
-    for ticket in existing:
-        if item_name and ticket.item_name:
-            if normalized(ticket.item_name) == normalized(item_name):
+    query = select(Ticket).where(
+        Ticket.customer_id == customer_id,
+        Ticket.transaction_id == transaction_id,
+        Ticket.status.in_(active)
+    )
+    if order_id and order_id.strip():
+        query = query.where(Ticket.order_id == order_id.strip())
+    if item_name and item_name.strip():
+        norm_item = item_name.strip().lower()
+        query = query.where(func.lower(func.trim(Ticket.item_name)) == norm_item)
+    else:
+        normalized = lambda s: re.sub(r"[^a-z0-9]", "", s.lower()) if s else ""
+        existing = db.scalars(query.order_by(Ticket.created_at.desc())).all()
+        for ticket in existing:
+            if normalized(ticket.description) == normalized(description):
                 return ticket
-        elif not item_name and not ticket.item_name:
-            if normalized(ticket.description) == normalized(description) or ticket.transaction_id == transaction_id:
-                return ticket
-    return None
+        return None
+
+    return db.scalar(query.order_by(Ticket.created_at.desc()))
 
 def record_event(db: Session, ticket_id: str, actor_id: str|None, event_type: str, details: dict):
     db.add(TicketEvent(ticket_id=ticket_id, actor_id=actor_id, event_type=event_type, details=details))
@@ -141,7 +153,7 @@ def evaluate_three_buckets(
         return {
             "decision_bucket": "NON_REFUNDABLE",
             "assigned_desk": "CS_3",
-            "policy_reason": f"Duplicate claim rejected: An active or resolved claim (#{duplicate_ticket_id[:12]}) already exists for this exact product item/model in order/transaction.",
+            "policy_reason": f"Duplicate claim rejected: An active or resolved claim (#{duplicate_ticket_id[:12]}) already exists with identical transaction ID, order ID, and product model.",
             "proof_required": None,
             "eligible": False
         }

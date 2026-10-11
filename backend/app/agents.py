@@ -167,26 +167,29 @@ def run_ticket_pipeline(db: Session, ticket: Ticket, actor_id: str | None = None
     }
 
     # -------------------------------------------------------------
-    # AGENT 2: Duplicate Intelligence (Composite Key Check)
+    # AGENT 2: Duplicate Intelligence (Strict 3-Point Composite Check)
+    # A claim is ONLY a duplicate if ALL THREE match:
+    # 1. Exact transaction_id
+    # 2. Exact order_id
+    # 3. Exact purchased item_name / product model
     # -------------------------------------------------------------
     prior_statuses = [
         TicketStatus.NEW.value, TicketStatus.TRIAGED.value, TicketStatus.IN_REVIEW.value,
         TicketStatus.AWAITING_INFORMATION.value, TicketStatus.ESCALATED.value,
         TicketStatus.REOPENED.value, TicketStatus.RESOLVED.value
     ]
-    duplicate_query = select(Ticket).where(
+    conditions = [
         Ticket.id != ticket.id,
-        or_(
-            Ticket.transaction_id == ticket.transaction_id,
-            (Ticket.order_id.isnot(None)) & (Ticket.order_id == ticket.order_id)
-        ),
+        Ticket.transaction_id == ticket.transaction_id,
         Ticket.status.in_(prior_statuses)
-    )
+    ]
+    if ticket.order_id and ticket.order_id.strip():
+        conditions.append(Ticket.order_id == ticket.order_id.strip())
     if ticket.item_name and ticket.item_name.strip():
         norm_item = ticket.item_name.strip().lower()
-        duplicate_query = duplicate_query.where(
-            func.lower(func.trim(Ticket.item_name)) == norm_item
-        )
+        conditions.append(func.lower(func.trim(Ticket.item_name)) == norm_item)
+
+    duplicate_query = select(Ticket).where(*conditions)
     duplicate = db.scalar(duplicate_query.order_by(Ticket.created_at.desc()))
     if duplicate:
         ticket.duplicate_of_id = duplicate.id

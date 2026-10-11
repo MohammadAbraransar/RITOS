@@ -85,7 +85,7 @@ def create_ticket(payload: TicketCreate, db: Session=Depends(get_db), user: User
     result=verify_transaction(db,payload.transaction_id,user.id,payload.claimed_amount,payload.currency.upper())
     triage=classify(payload.description)
     priority=calculate_priority(triage["category"],payload.description)
-    duplicate=find_duplicate(db,user.id,payload.transaction_id,triage["category"],payload.description,item_name=getattr(payload,"item_name",None))
+    duplicate=find_duplicate(db,user.id,payload.transaction_id,triage["category"],payload.description,item_name=getattr(payload,"item_name",None),order_id=payload.order_id)
     t=Ticket(ticket_number=f"RIT-{datetime.now(timezone.utc):%y%m%d}-{uuid4().hex[:6].upper()}",
        customer_id=user.id,transaction_id=payload.transaction_id,order_id=payload.order_id,
        claimed_amount=payload.claimed_amount,currency=payload.currency.upper(),description=payload.description,
@@ -141,7 +141,7 @@ def ecommerce_ticket_webhook(payload: dict, x_ritos_webhook_secret: str | None =
     result = verify_transaction(db, transaction_id, customer.id, amount, currency)
     triage = classify(description)
     priority = calculate_priority(triage["category"], description)
-    duplicate = find_duplicate(db, customer.id, transaction_id, triage["category"], description, item_name=payload.get("item_name"))
+    duplicate = find_duplicate(db, customer.id, transaction_id, triage["category"], description, item_name=payload.get("item_name"), order_id=payload.get("order_id"))
     t = Ticket(ticket_number=f"RIT-{datetime.now(timezone.utc):%y%m%d}-{uuid4().hex[:6].upper()}",
         customer_id=customer.id, transaction_id=transaction_id, order_id=payload.get("order_id"),
         claimed_amount=amount, currency=currency, description=description, category=triage["category"],
@@ -363,7 +363,7 @@ def duplicate_check(ticket_id:str,db:Session=Depends(get_db),
                     user:User=Depends(require_roles(Role.SUPPORT.value,Role.SUPERVISOR.value,Role.ADMIN.value,Role.RISK.value))):
     t=db.get(Ticket,ticket_id)
     if not t: raise HTTPException(404,"Ticket not found")
-    candidate=find_duplicate(db,t.customer_id,t.transaction_id,t.category,t.description,item_name=t.item_name)
+    candidate=find_duplicate(db,t.customer_id,t.transaction_id,t.category,t.description,item_name=t.item_name,order_id=t.order_id)
     if candidate and candidate.id==t.id: candidate=None
     if candidate and not t.duplicate_of_id:
         t.duplicate_of_id=candidate.id
