@@ -21,6 +21,21 @@ if not exist "%ROOT_DIR%.venv\Scripts\activate.bat" (
 )
 :skip_setup
 
+echo Checking and freeing ports 5173, 8000, 3000, and 3001 to prevent conflicts...
+powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+  "foreach ($port in @(5173, 8000, 3000, 3001)) { ^
+     try { ^
+       $pids = (Get-NetTCPConnection -LocalPort $port -ErrorAction SilentlyContinue).OwningProcess | Select-Object -Unique; ^
+       foreach ($p in $pids) { ^
+         if ($p -and $p -ne 0) { ^
+           Stop-Process -Id $p -Force -ErrorAction SilentlyContinue ^
+         } ^
+       } ^
+     } catch {} ^
+   }"
+
+timeout /t 1 >nul
+
 echo Starting all 4 services in dedicated terminal windows...
 echo.
 
