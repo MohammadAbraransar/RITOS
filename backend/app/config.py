@@ -1,0 +1,12 @@
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+class Settings(BaseSettings):
+    app_env: str = "development"
+    jwt_secret: str = "development-only-change-this-secret"
+    seed_password: str = "ChangeMe123!"
+    database_url: str = "sqlite:///./ritos.db"
+    cors_origins: str = "http://localhost:5173"
+    access_token_minutes: int = 45
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+settings = Settings()
