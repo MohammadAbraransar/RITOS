@@ -1,0 +1,54 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ritos
+      POSTGRES_USER: ritos
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-local_only_change_me}
+    ports: ["5432:5432"]
+    volumes: [ritos_pg:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ritos -d ritos"]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+  api:
+    build: ./backend
+    environment:
+      APP_ENV: development
+      JWT_SECRET: ${JWT_SECRET:-local_compose_secret_replace_me}
+      DATABASE_URL: postgresql+psycopg://ritos:${POSTGRES_PASSWORD:-local_only_change_me}@postgres:5432/ritos
+      CORS_ORIGINS: http://localhost:5173
+      REDIS_URL: redis://redis:6379/0
+      SEED_PASSWORD: ${SEED_PASSWORD:-ChangeMe123!}
+    ports: ["8000:8000"]
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+  worker:
+    build: ./backend
+    command: celery -A app.worker.celery_app worker --loglevel=INFO --queues=ticket-automation
+    environment:
+      APP_ENV: development
+      JWT_SECRET: ${JWT_SECRET:-local_compose_secret_replace_me}
+      DATABASE_URL: postgresql+psycopg://ritos:${POSTGRES_PASSWORD:-local_only_change_me}@postgres:5432/ritos
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+  frontend:
+    build: ./frontend
+    environment:
+      VITE_API_URL: http://localhost:8000/api/v1
+    ports: ["5173:5173"]
+    depends_on: [api]
+volumes:
+  ritos_pg:
