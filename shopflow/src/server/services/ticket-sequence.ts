@@ -1,10 +1,11 @@
 import { prisma } from "@/server/db";
+import { qualified } from "@/server/db-schema";
 
 export async function peekNextTicketId(tx?: any): Promise<string> {
   const client = tx || prisma;
   try {
     const res = (await client.$queryRawUnsafe(
-      `SELECT last_value FROM refund_ticket_seq;`
+      `SELECT last_value FROM ${qualified("refund_ticket_seq")};`
     )) as Array<{ last_value: string | number }>;
     const seqVal = parseInt(String(res[0]?.last_value || 122), 10);
     return `RIT-2026-${String(seqVal + 1).padStart(6, "0")}`;
@@ -19,7 +20,7 @@ export async function getNextTicketId(tx?: any): Promise<string> {
     let num = 123;
     try {
       const res = (await client.$queryRawUnsafe(
-        `SELECT nextval('refund_ticket_seq')::text as next_val;`
+        `SELECT nextval('${qualified("refund_ticket_seq")}')::text as next_val;`
       )) as Array<{ next_val: string }>;
       num = parseInt(res[0]?.next_val || "123", 10);
     } catch {

@@ -1,23 +1,29 @@
 # Local Development & Testing Guide (`test_local.md`)
 
-Welcome! This guide is written step-by-step for any developer, fresher, or team member to run the entire **RITOS** platform and the **ShopFlow eCommerce Demo** locally from scratch.
+How to run **RITOS** and the **ShopFlow** demo store locally. Everything runs from the repository root with `pnpm`.
+
+Prerequisites: Node.js 20+, pnpm, Python 3.11+.
 
 ---
 
-## ⚡ One Terminal: `pnpm dev` (Recommended)
-
-After `setup.bat` has been run once, start everything from the repository root:
+## 🚀 Quick Start
 
 ```powershell
-pnpm install   # first time only (installs the launcher)
-pnpm dev       # opens the split view below
+pnpm install      # root launcher tools (first time)
+pnpm bootstrap    # Python venv, all packages, .env files, database migrations (first time, safe to repeat)
+pnpm dev          # start everything
 ```
+
+---
+
+## ⚡ `pnpm dev`
 
 ```
  links               │  RITOS + ShopFlow  3/3 running
  api                 │  ● RITOS Desk Portal     http://localhost:5173
  desk                │  ● RITOS API (Swagger)   http://localhost:8000/docs
  shop                │  ● ShopFlow Store        http://localhost:3000
+ shop-fallback       │
 ```
 
 The left list holds the services and the right pane shows the selected one's live logs. `links` is a live status page with every URL and the demo logins.
@@ -29,36 +35,30 @@ The left list holds the services and the right pane shows the selected one's liv
 | `r` / `x` / `s` | Restart / stop / start the selected service |
 | `Ctrl+C` (or `q`) | Stop every service and exit, wherever the focus is |
 
-| Command | What it runs |
-| :--- | :--- |
-| `pnpm dev` | Split view with all three services |
-| `pnpm dev:plain` | All services in one combined, prefixed log stream (no split view) |
-| `pnpm dev:api` / `pnpm dev:desk` / `pnpm dev:shop` | One service only |
-| `pnpm stop` | Frees ports 5173, 8000, 3000, 3001 if anything was left behind |
-
 ---
 
-## ⚡ One-Click Batch Files (separate windows)
+## 🧰 All Commands
 
-Everything has been configured with Windows batch files in the repository root for zero confusion:
-
-| Batch File | What it does | When to run |
-| :--- | :--- | :--- |
-| **`setup.bat`** | Automatically installs Python packages, sets up `.venv`, initializes SQLite DB, and runs `npm install` for both frontends. | Run **once** when you first clone the project on a new machine. |
-| **`start_all.bat`** | Launches all 3 services in labeled terminal windows and automatically opens the browser tabs. | Run every time you want to start development or test locally. |
-| **`stop_all.bat`** | Kills all background processes on ports `5173`, `8000`, `3000`, and `3001` cleanly. | Run whenever you want to shut down or reload all services. |
+| Command | What it does |
+| :--- | :--- |
+| `pnpm bootstrap` | Full setup: Python venv + packages, npm packages, `.env` files, migrations, demo data if the store is empty |
+| `pnpm dev` | Split view with all services |
+| `pnpm dev:plain` | All services in one combined, prefixed log stream |
+| `pnpm dev:api` / `pnpm dev:desk` / `pnpm dev:shop` | One service only |
+| `pnpm db:migrate` | Apply pending database migrations (RITOS Alembic + ShopFlow Prisma) without reinstalling packages |
+| `pnpm db:seed` | **Reset both demo databases**: ShopFlow store data and RITOS ticket history (RITOS user accounts are kept) |
+| `pnpm stop` | Free ports 5173, 8000, 3000, 3001 if anything was left behind |
 
 ---
 
 ## 🏗️ Architecture & Port Map
 
-When running, the system operates across **3 services** sharing one Supabase Postgres database (`shopflow` and `ritos` schemas):
-
-| Terminal | Service | Technology | Working Directory | Local URL |
-| :--- | :--- | :--- | :--- | :--- |
-| **Terminal 1** | **RITOS Frontend** (Desk Portal) | React + Vite + TypeScript | `frontend/` | [http://localhost:5173](http://localhost:5173) |
-| **Terminal 2** | **RITOS Backend** (Multi-Agent Engine) | Python FastAPI + SQLite | `backend/` | [http://localhost:8000](http://localhost:8000) |
-| **Terminal 3** | **ShopFlow Frontend** (eCommerce Store) | Next.js 14 + TailwindCSS | `shopflow/` | [http://localhost:3000](http://localhost:3000) |
+| Service | Technology | Directory | URL |
+| :--- | :--- | :--- | :--- |
+| **RITOS Desk Portal** | React + Vite + TypeScript | `frontend/` | [http://localhost:5173](http://localhost:5173) |
+| **RITOS API** (orchestrator + 8 agents) | Python FastAPI | `backend/` | [http://localhost:8000/docs](http://localhost:8000/docs) |
+| **ShopFlow Store** | Next.js 14 + Prisma | `shopflow/` | [http://localhost:3000](http://localhost:3000) |
+| ShopFlow fallback API | Node (used by the storefront demo when RITOS is offline) | `shopflow/standalone-backend.js` | http://localhost:3001 |
 
 ```
  ShopFlow store (:3000)  ── outbox event: refund.ticket.created ──►  RITOS API (:8000)
@@ -72,82 +72,29 @@ When running, the system operates across **3 services** sharing one Supabase Pos
 
 ---
 
-## 🗄️ Database: Supabase (one project, two schemas)
+## 🗄️ Database: Supabase
 
-1. Create a free project at supabase.com and note the database password.
-2. Open **Connect** in the Supabase dashboard and copy the **Transaction pooler** (port 6543) and **Session pooler** (port 5432) connection strings.
-3. `shopflow/.env` (copied from `shopflow/.env.example`):
-   - `DATABASE_URL` = transaction pooler string + `?pgbouncer=true&schema=shopflow`
-   - `DIRECT_URL` = session pooler string + `?schema=shopflow`
-4. `backend/.env`:
-   - `DATABASE_URL` = session pooler string (no query string)
-   - `DB_SCHEMA=ritos`
-5. `RITOS_API_KEY` must be identical in `backend/.env` and `shopflow/.env`.
-6. Run `setup.bat` again: it creates the ShopFlow tables and seed data. RITOS creates its own tables on first start.
+One Supabase project (region ap-northeast-2) holds both apps in separate Postgres schemas:
 
-Adding real customer data later: insert customers, products/policies and orders into the `shopflow` schema (Prisma seed script or Supabase table editor). RITOS reads every claim's facts from the store, so no RITOS change is needed.
+| Schema | Owner | Migrations |
+| :--- | :--- | :--- |
+| `ritos` | RITOS API (SQLAlchemy) | Alembic: `backend/migrations/versions/` |
+| `shopflow` | ShopFlow store (Prisma) | Prisma: `shopflow/prisma/migrations/` |
 
----
+Connection settings live in `backend/.env` and `shopflow/.env` (both git-ignored; ask the team for them, or copy the `.env.example` files and fill in the Supabase **Connect** strings):
 
-## ⚙️ Initial Setup (If Not Using `setup.bat`)
+- `backend/.env`: `DATABASE_URL` = session pooler (port 5432), `DB_SCHEMA=ritos`
+- `shopflow/.env`: `DATABASE_URL` = transaction pooler (port 6543) + `?pgbouncer=true&schema=shopflow`, `DIRECT_URL` = session pooler + `?schema=shopflow`
+- `RITOS_API_KEY` must be identical in both files.
+- A `@` in the database password must be written as `%40` in the URLs.
 
-If you prefer to configure manually in PowerShell instead of double-clicking `setup.bat`:
+Changing the schema:
+- **RITOS:** edit `backend/app/models.py`, then `cd backend` and `..\.venv\Scripts\python -m alembic revision --autogenerate -m "describe change"`, review the file, then `pnpm db:migrate`.
+- **ShopFlow:** edit `shopflow/prisma/schema.prisma`, then `cd shopflow` and `npx prisma migrate diff --from-schema-datasource prisma/schema.prisma --to-schema-datamodel prisma/schema.prisma --script > prisma/migrations/<timestamp>_<name>/migration.sql`, review it, then `pnpm db:migrate`.
 
-### 1. Python Virtual Environment & Backend
-```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install --upgrade pip
-pip install -r backend\requirements.txt
-python backend\migrate_db.py
-python -m backend.app.seed
-```
+Performance note: the project runs in Seoul (ap-northeast-2); each query from India takes about 145 ms, so one claim takes roughly 5–7 s from store to decision. Right after `pnpm db:seed`, the store first sends its ~12 historical demo tickets to RITOS, so a new claim can take a minute or two to be decided.
 
-### 2. Install RITOS Frontend
-```powershell
-cd frontend
-npm install
-cd ..
-```
-
-### 3. Install ShopFlow Dependencies and Database
-```powershell
-cd shopflow
-npm install
-copy .env.example .env   # then paste your Supabase URLs
-npx prisma db push
-npm run db:seed
-cd ..
-```
-
----
-
-## 🚀 Running the 4 Terminals Manually
-
-If you want to run each service in its own terminal manually:
-
-### 💻 Terminal 1: RITOS Frontend (Desk Portal)
-```powershell
-cd frontend
-npm run dev
-```
-- **Local URL:** [http://localhost:5173](http://localhost:5173)
-
-### 💻 Terminal 2: RITOS Backend (API & 8-Agent Pipeline)
-```powershell
-cd backend
-..\.venv\Scripts\Activate.ps1
-uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
-```
-- **Local URL:** [http://localhost:8000](http://localhost:8000)
-- **Interactive Swagger Docs:** [http://localhost:8000/docs](http://localhost:8000/docs)
-
-### 💻 Terminal 3: ShopFlow Frontend (eCommerce Store)
-```powershell
-cd shopflow
-npm run dev -- -p 3000
-```
-- **Local URL:** [http://localhost:3000](http://localhost:3000)
+Adding real customer data later: insert customers, products/policies and orders into the `shopflow` schema (Supabase table editor or a script). RITOS reads every claim's facts from the store, so no RITOS change is needed. Do not run `pnpm db:seed` after that: it resets the store.
 
 ---
 
@@ -218,7 +165,7 @@ All 8 agents' telemetry traces can be inspected directly in the RITOS UI under t
 ---
 
 ## 🛑 Clean Shutdown
-To stop all services at once, double-click **`stop_all.bat`** or run:
+Press `Ctrl+C` in the `pnpm dev` window. If a port is still busy afterwards, run:
 ```powershell
-.\stop_all.bat
+pnpm stop
 ```

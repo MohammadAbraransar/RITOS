@@ -31,11 +31,7 @@ export async function GET(
     is_clearance: product.isClearance,
     refund_policy: product.policy
       ? {
-<<<<<<< HEAD
           policy_version: "version" in product.policy ? product.policy.version : 1,
-=======
-          policy_version: (product.policy as any).version ?? 1,
->>>>>>> e1de4905cacc8e83ae5261d9468d857a9233cbff
           policy_type: product.policy.policyType,
           refund_percentage: product.policy.refundPercentage,
           return_window_days: product.policy.returnWindowDays,

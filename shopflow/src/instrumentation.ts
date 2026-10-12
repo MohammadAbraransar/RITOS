@@ -15,7 +15,7 @@ export async function register() {
       if (running) return;
       running = true;
       try {
-        const results = await processOutboxBatch(5);
+        const results = await processOutboxBatch(10);
         for (const r of results) {
           if (r.error) console.warn(`[ShopFlow outbox] ${r.id} ${r.status}: ${r.error}`);
         }

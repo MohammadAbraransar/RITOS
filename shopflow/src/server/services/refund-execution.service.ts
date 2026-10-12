@@ -2,6 +2,7 @@ import { prisma } from "@/server/db";
 import { transitionTicket } from "@/server/state-machine/ticket-state-machine";
 import { emitOutboxEvent } from "@/server/outbox/outbox-dispatcher";
 import { TicketStatus, RefundTxStatus, PaymentStatus } from "@prisma/client";
+import { qualified } from "@/server/db-schema";
 
 export interface RefundExecutionParams {
   transaction_id: string;
@@ -16,7 +17,7 @@ export async function executeRefundTransaction(params: RefundExecutionParams) {
   return prisma.$transaction(async (tx) => {
     // 1. Concurrency-safe lock on the payment row using raw query FOR UPDATE
     const paymentRows = await tx.$queryRawUnsafe<any[]>(
-      `SELECT * FROM payments WHERE transaction_id = $1 FOR UPDATE;`,
+      `SELECT * FROM ${qualified("payments")} WHERE transaction_id = $1 FOR UPDATE;`,
       transaction_id
     );
 

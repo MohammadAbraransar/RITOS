@@ -421,7 +421,7 @@ function App() {
         claimed_amount: Number(simEcom.claimed_amount),
         purchase_date: new Date().toISOString()
       }
-      const res = await api.ecommerceTicketIntake(payload, 'ritos_ecommerce_secret_live_2026')
+      const res = await api.ecommerceTicketIntake(payload)
       setEcomSimResult(res)
       setNotice(`🚀 eCommerce Ticket Ingested! Ticket #${res.ticket_number} triaged to ${res.assigned_desk} (${res.decision_bucket}).`)
       await load()

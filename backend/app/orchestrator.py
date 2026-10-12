@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from sqlalchemy import select
 from sqlalchemy.orm import Session
-from .agents import AGENTS, ORCHESTRATOR, STEP_FUNCTIONS, PipelineState, is_eligible
+from .agents import AGENTS, ORCHESTRATOR, STEP_FUNCTIONS, PipelineState, is_eligible, build_routing_steps
 from .config import settings
 from .models import Ticket, TicketEvent, AuditLog, TicketStatus, WorkflowRun, WorkflowStep
 
@@ -116,6 +116,8 @@ def run_workflow(db: Session, ticket: Ticket, trigger: str = "MANUAL", actor_id:
     evidence["agents"] = trace
     evidence["visual_analysis"] = state.vision
     evidence["idempotency_key"] = state.idempotency_key
+    routing_steps = build_routing_steps(state)
+    evidence["routing_steps"] = routing_steps
     evidence["workflow"] = {"run_id": run.id, "trigger": trigger, "status": run.status,
                             "next_action": next_action, "gate_reason": gate_reason}
     ticket.classification_evidence = evidence
@@ -155,6 +157,7 @@ def run_workflow(db: Session, ticket: Ticket, trigger: str = "MANUAL", actor_id:
         "priority": ticket.priority,
         "queue": ticket.queue,
         "idempotency_key": state.idempotency_key,
+        "routing_steps": routing_steps,
         "evaluated_at": _now().isoformat(),
     }
 

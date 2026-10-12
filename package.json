@@ -4,6 +4,9 @@
   "description": "Runs RITOS API, RITOS desk portal and the ShopFlow demo store together",
   "scripts": {
     "dev": "node scripts/dev/start.mjs",
+    "bootstrap": "node scripts/dev/setup.mjs",
+    "db:migrate": "node scripts/dev/setup.mjs --skip-install",
+    "db:seed": "node scripts/dev/reset-demo.mjs",
     "dev:plain": "node scripts/dev/free-ports.mjs && concurrently --names API,DESK,SHOP,READY --prefix-colors blue.bold,magenta.bold,green.bold,yellow.bold --prefix \"[{name}]\" \"node scripts/dev/run-api.mjs\" \"npm --prefix frontend run dev\" \"npm --prefix shopflow run dev -- -p 3000\" \"node scripts/dev/ready.mjs\"",
     "dev:api": "node scripts/dev/run-api.mjs",
     "dev:desk": "npm --prefix frontend run dev",

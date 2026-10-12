@@ -6,6 +6,7 @@ import path from "path";
 import { PRODUCTS_SEED_DATA } from "./seed-data/products";
 import { USERS_SEED_DATA } from "./seed-data/customers";
 import { ensureSeedAssets } from "../scripts/generate-seed-assets";
+import { qualified } from "../src/server/db-schema";
 
 const prisma = new PrismaClient();
 
@@ -36,29 +37,29 @@ async function main() {
   console.log("Cleaning database tables...");
   await prisma.$executeRawUnsafe(`
     TRUNCATE TABLE 
-      audit_events,
-      integration_events,
-      ritos_exchanges,
-      idempotency_keys,
-      notifications,
-      refund_transactions,
-      refund_decisions,
-      refund_evidence,
-      refund_tickets,
-      order_items,
-      payments,
-      orders,
-      refund_policies,
-      products,
-      sessions,
-      users
+      ${qualified("audit_events")},
+      ${qualified("integration_events")},
+      ${qualified("ritos_exchanges")},
+      ${qualified("idempotency_keys")},
+      ${qualified("notifications")},
+      ${qualified("refund_transactions")},
+      ${qualified("refund_decisions")},
+      ${qualified("refund_evidence")},
+      ${qualified("refund_tickets")},
+      ${qualified("order_items")},
+      ${qualified("payments")},
+      ${qualified("orders")},
+      ${qualified("refund_policies")},
+      ${qualified("products")},
+      ${qualified("sessions")},
+      ${qualified("users")}
     CASCADE;
   `);
 
   // Ensure PostgreSQL sequence for ticket IDs exists and set to 122
   console.log("Configuring refund ticket sequence...");
-  await prisma.$executeRawUnsafe(`CREATE SEQUENCE IF NOT EXISTS refund_ticket_seq START WITH 1;`);
-  await prisma.$executeRawUnsafe(`SELECT setval('refund_ticket_seq', 122, true);`);
+  await prisma.$executeRawUnsafe(`CREATE SEQUENCE IF NOT EXISTS ${qualified("refund_ticket_seq")} START WITH 1;`);
+  await prisma.$executeRawUnsafe(`SELECT setval('${qualified("refund_ticket_seq")}', 122, true);`);
 
   // 3. Seed Users
   console.log("Seeding users...");
@@ -1311,7 +1312,7 @@ async function main() {
 
   // Double check sequence state
   const seqRes = await prisma.$queryRawUnsafe<{ next_preview: string }[]>(
-    `SELECT 'RIT-2026-' || LPAD((last_value + 1)::text, 6, '0') as next_preview FROM refund_ticket_seq;`
+    `SELECT 'RIT-2026-' || LPAD((last_value + 1)::text, 6, '0') as next_preview FROM ${qualified("refund_ticket_seq")};`
   );
   console.log("Seeding complete!");
   console.log(`Next ticket sequence preview: ${seqRes[0]?.next_preview}`);

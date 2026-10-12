@@ -192,3 +192,54 @@ def test_outbox_retries_in_order_then_marks_failed(store, monkeypatch):
         outbox.deliver_due(db)
         assert calls == ["STATUS", "STATUS", "NOTIFICATION"]
         assert {m.status for m in db.scalars(select(OutboxMessage).where(OutboxMessage.ticket_id == data["ritos_ticket_id"]))} == {"SENT"}
+
+
+def test_reused_store_ticket_number_starts_a_new_ticket(store):
+    store["SF-REUSE"] = store_context("SF-REUSE")
+    first = send_event("SF-REUSE")
+    # the store resets its data and hands the same ticket number to a different order
+    ctx = store_context("SF-REUSE")
+    ctx["order"]["order_id"] = "ORD-NEW-AFTER-RESET"
+    ctx["transaction"]["transaction_id"] = "TXN-NEW-AFTER-RESET"
+    store["SF-REUSE"] = ctx
+    second = send_event("SF-REUSE")
+    assert second["ritos_ticket_id"] != first["ritos_ticket_id"]
+    assert second["next_action"] == "AUTO_APPROVE"
+    assert outbox_kinds(second["ritos_ticket_id"]) == ["DECISION"]
+    with SessionLocal() as db:
+        assert db.get(Ticket, first["ritos_ticket_id"]).ticket_number.startswith("SF-REUSE~")
+
+
+def test_slow_store_is_retried_not_guessed(monkeypatch):
+    def unavailable(tid):
+        raise shopflow.StoreUnavailable("timed out")
+    monkeypatch.setattr(shopflow, "fetch_shopflow_context", unavailable)
+    r = client.post("/webhook/refund-tickets", json={"event_id": "EVT-SLOW-1", "ticket_id": "SF-SLOW"}, headers=KEY)
+    assert r.status_code == 503
+    with SessionLocal() as db:
+        assert db.scalar(select(Ticket).where(Ticket.ticket_number == "SF-SLOW")) is None
+
+
+def test_store_event_without_context_or_facts_is_retried(store):
+    # 404 from the store and no claim details in the event: nothing to evaluate, so ask for a retry
+    r = client.post("/webhook/refund-tickets", json={"event_id": "EVT-NOFACTS-1", "ticket_id": "SF-NOFACTS"}, headers=KEY)
+    assert r.status_code == 503
+
+
+ECOM = {"order_id": "ORD-ECOM-1", "transaction_id": "TXN-ECOM-1", "claimed_amount": 499, "currency": "INR",
+        "description": "Item arrived damaged in transit", "item_name": "Desk Lamp", "item_category": "GENERAL"}
+
+
+def test_ecommerce_intake_accepts_secret_or_staff_only():
+    from app.config import settings
+    url = "/api/v1/integrations/ecommerce/ticket"
+    assert client.post(url, json=ECOM).status_code == 401
+    assert client.post(url, json=ECOM, headers={"X-Ecommerce-Secret": "wrong"}).status_code == 401
+    assert client.post(url, json=ECOM, headers=login("customer@ritos.local")).status_code == 401
+    assert client.post(url, json=ECOM, headers=login("agent@ritos.local")).status_code == 200
+    settings.ecommerce_webhook_secret = "server-secret"
+    try:
+        assert client.post(url, json={**ECOM, "order_id": "ORD-ECOM-2", "transaction_id": "TXN-ECOM-2"},
+                           headers={"X-Ecommerce-Secret": "server-secret"}).status_code == 200
+    finally:
+        settings.ecommerce_webhook_secret = ""

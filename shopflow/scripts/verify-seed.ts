@@ -1,4 +1,5 @@
 import { PrismaClient } from "@prisma/client";
+import { qualified } from "../src/server/db-schema";
 
 const prisma = new PrismaClient();
 
@@ -20,7 +21,7 @@ async function verify() {
   const outbox = await prisma.integrationEvent.count();
   const refundTxs = await prisma.refundTransaction.count();
   const seqRes = await prisma.$queryRawUnsafe<{ next_preview: string }[]>(
-    "SELECT 'RIT-2026-' || LPAD((last_value + 1)::text, 6, '0') as next_preview FROM refund_ticket_seq;"
+    `SELECT 'RIT-2026-' || LPAD((last_value + 1)::text, 6, '0') as next_preview FROM ${qualified("refund_ticket_seq")};`
   );
 
   console.log(

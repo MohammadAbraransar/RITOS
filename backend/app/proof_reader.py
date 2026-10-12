@@ -247,6 +247,7 @@ def inspect_evidence_file(evidence_item: Any, claim_description: str = "") -> Di
         doc = extract_document_and_receipt_data(image, "uploaded_photo.jpg", claim_description)
         
         has_damage = visual["damage_detected"] or doc["document_type"] == "PHYSICAL_PRODUCT_DEFECT"
+        features = list(visual.get("damage_markers") or [])
         if doc["document_type"] != "UNKNOWN":
             features.append(f"DOCUMENT_TYPE:{doc['document_type']}")
 

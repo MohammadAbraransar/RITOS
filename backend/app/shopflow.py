@@ -29,54 +29,30 @@ def get_auth_headers() -> Dict[str, str]:
     return {"Authorization": f"Bearer {settings.ritos_api_key}", "Content-Type": "application/json"}
 
 
+class StoreUnavailable(RuntimeError):
+    """The store could not answer right now; the webhook returns 503 so the store's outbox retries."""
+
+
 def fetch_shopflow_context(ticket_id: str) -> Optional[Dict[str, Any]]:
-    """Fetch the complete claim context dossier from the store."""
+    """Fetch the complete claim context dossier from the store.
+
+    Returns None only when the store says the ticket does not exist (404: storefront demo claims).
+    Raises StoreUnavailable on timeouts, connection errors and server errors, so a slow store is
+    retried instead of being mistaken for a demo claim.
+    """
     url = f"{settings.shopflow_base_url}/api/ritos/refund-tickets/{ticket_id}/context"
     try:
-        with httpx.Client(timeout=2.0) as client:
+        with httpx.Client(timeout=20.0) as client:
             resp = client.get(url, headers=get_auth_headers())
-            if resp.status_code == 200:
-                return resp.json()
-            logger.info("ShopFlow context for %s returned %s", ticket_id, resp.status_code)
-            return None
-    except Exception as e:
-        logger.warning("Failed to reach ShopFlow at %s: %s", url, e)
-        return None
-
-<<<<<<< HEAD
-=======
-def post_shopflow_decision(ticket_id: str, decision_payload: Dict[str, Any]) -> Dict[str, Any]:
-    """Submit AI adjudication decision callback to ShopFlow."""
-    url = f"{settings.shopflow_base_url}/api/ritos/refund-decision"
-    idempotency_key = f"ritos-dec-{ticket_id}-{int(datetime.now().timestamp())}"
-    headers = {
-        **get_auth_headers(),
-        "Idempotency-Key": idempotency_key
-    }
-    with httpx.Client(timeout=2.5) as client:
-        resp = client.post(url, json=decision_payload, headers=headers)
-        if not resp.is_success:
-            logger.error(f"ShopFlow decision callback failed ({resp.status_code}): {resp.text}")
-            raise RuntimeError(f"ShopFlow callback failed ({resp.status_code}): {resp.text}")
+    except httpx.HTTPError as e:
+        raise StoreUnavailable(f"ShopFlow context request failed: {e}") from e
+    if resp.status_code == 200:
         return resp.json()
+    if resp.status_code == 404:
+        logger.info("ShopFlow has no ticket %s; using the event payload", ticket_id)
+        return None
+    raise StoreUnavailable(f"ShopFlow context for {ticket_id} returned HTTP {resp.status_code}")
 
-def post_shopflow_notification(ticket_id: str, title: str, body: str) -> bool:
-    """Send in-app progress update to customer's ShopFlow live timeline."""
-    url = f"{settings.shopflow_base_url}/api/ritos/notifications"
-    payload = {
-        "ticket_id": ticket_id,
-        "title": title,
-        "body": body,
-        "channel": "IN_APP"
-    }
-    try:
-        with httpx.Client(timeout=1.5) as client:
-            resp = client.post(url, json=payload, headers=get_auth_headers())
-            return resp.is_success
-    except Exception as e:
-        logger.warning(f"Could not dispatch notification to ShopFlow: {e}")
-        return False
->>>>>>> e1de4905cacc8e83ae5261d9468d857a9233cbff
 
 def check_shopflow_health() -> Dict[str, Any]:
     url = f"{settings.shopflow_base_url}/api/health"
@@ -194,6 +170,9 @@ def is_store_linked(t: Ticket) -> bool:
 
 def intake(db: Session, ext_id: str, payload: Dict[str, Any], event_id: Optional[str]) -> Dict[str, Any]:
     ctx = fetch_shopflow_context(ext_id)
+    if not ctx and not (payload.get("claimed_amount") or payload.get("claimed_amount_minor")):
+        # A real store event carries no claim facts; never invent them.
+        raise StoreUnavailable(f"No context for {ext_id} and the event carries no claim details")
     f = _fields_from_context(ctx) if ctx else _fields_from_payload(ext_id, payload)
 
     # Ledger entry: mirrors the store's payment record (store-linked) or the authenticated payload (demo).
@@ -213,8 +192,15 @@ def intake(db: Session, ext_id: str, payload: Dict[str, Any], event_id: Optional
         tx.amount = Decimal(str(tx.amount)) + f["claimed_amount"]
     db.flush()
 
-<<<<<<< HEAD
     t = db.scalar(select(Ticket).where(Ticket.ticket_number == ext_id))
+    if t and t.order_id != f["order_id"]:
+        # The store reused this ticket number for a different order (e.g. its demo data was reset):
+        # archive the old RITOS ticket under a suffixed number instead of merging two different claims.
+        old_number = f"{ext_id}~{t.id[:6]}"[:24]
+        record_event(db, t.id, None, "STORE_TICKET_NUMBER_REUSED", {"archived_as": old_number, "new_order_id": f["order_id"]})
+        t.ticket_number = old_number
+        db.flush()
+        t = None
     trigger = "STORE_RESEND" if t else "INTAKE"
     evidence = {
         "source": SOURCE,
@@ -233,59 +219,6 @@ def intake(db: Session, ext_id: str, payload: Dict[str, Any], event_id: Optional
     t.currency = "INR"
     t.classification_evidence = {**(t.classification_evidence or {}), **evidence}
     db.flush()
-=======
-    # 2. Find or create Ticket in RITOS database
-    t = db.scalar(select(Ticket).where(Ticket.ticket_number == ticket_id))
-    p_date = None
-    date_str = fb.get("purchase_date") or order_info.get("ordered_at")
-    if date_str:
-        try:
-            p_date = datetime.fromisoformat(str(date_str).replace("Z", "+00:00"))
-        except Exception:
-            p_date = datetime.now(timezone.utc)
-
-    item_cat = str(fb.get("item_category") or product_info.get("category") or "GENERAL").upper()
-
-    if not t:
-        t = Ticket(
-            ticket_number=ticket_id,
-            customer_id=cust_id,
-            transaction_id=tx.id,
-            order_id=order_info.get("order_id"),
-            item_name=product_info.get("name") or "ShopFlow Product",
-            item_category=item_cat,
-            claimed_amount=amount_inr,
-            currency="INR",
-            customer_name=customer_info.get("name"),
-            customer_email=customer_info.get("email"),
-            customer_phone=customer_info.get("phone"),
-            purchase_date=p_date,
-            description=ticket_info.get("description") or f"ShopFlow return request for {order_info.get('order_id')}",
-            classification_evidence={
-                "source": "SHOPFLOW",
-                "shopflow_ticket_id": ticket_id,
-                "event_id": event_id,
-                "evidence_count": len(evidence_list),
-                "evidence_images": fb.get("evidence_images") or [],
-                "derived_facts": derived_facts
-            }
-        )
-        db.add(t)
-        db.flush()
-    else:
-        # Update with newest details if provided
-        ev = dict(t.classification_evidence or {})
-        if fb.get("evidence_images"):
-            ev["evidence_images"] = fb.get("evidence_images")
-        t.classification_evidence = ev
-        if p_date:
-            t.purchase_date = p_date
-        if fb.get("item_category"):
-            t.item_category = item_cat
-        if fb.get("description"):
-            t.description = fb.get("description")
-        db.flush()
->>>>>>> e1de4905cacc8e83ae5261d9468d857a9233cbff
 
     system_user_id = _system_user_id(db)
     result = run_workflow(db, t, trigger=trigger, actor_id=system_user_id)
@@ -309,8 +242,10 @@ def intake(db: Session, ext_id: str, payload: Dict[str, Any], event_id: Optional
         "customer_message_draft": t.customer_message_draft,
         "proof_status": t.proof_status,
         "workflow_run_id": result["run_id"],
+        "routing_steps": result.get("routing_steps"),
         "agents_trace": result["agents_trace"],
         "visual_evidence": result["visual_evidence"],
+        "classification_evidence": t.classification_evidence,
         "callbacks": callbacks,
     }
 
@@ -438,7 +373,7 @@ def handle_event(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
         result = {"status": "ACKNOWLEDGED", "event_type": event_type}
 
     if event_id:
-        summary = {k: v for k, v in result.items() if k not in {"agents_trace", "visual_evidence"}}
+        summary = {k: v for k, v in result.items() if k not in {"agents_trace", "visual_evidence", "classification_evidence"}}
         db.add(InboundEvent(id=event_id, source=SOURCE, event_type=event_type, external_ticket_id=ext_id, result=summary))
     try:
         db.commit()
@@ -453,38 +388,9 @@ def handle_event(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
     return result
 
 
-<<<<<<< HEAD
 # Backwards-compatible name used by the sync endpoint.
 def process_shopflow_event(db: Session, ticket_id: str, event_id: Optional[str] = None,
                            fallback_payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     payload = {**(fallback_payload or {}), "ticket_id": ticket_id, "event_id": event_id,
                "event_type": (fallback_payload or {}).get("event_type") or "refund.ticket.created"}
     return handle_event(db, payload)
-=======
-    # 7. Audit & commit
-    audit(db, system_user_id, "SHOPFLOW_TICKET_PROCESSED", "ticket", t.id, {
-        "shopflow_ticket_id": ticket_id,
-        "decision": decision,
-        "assigned_desk": t.assigned_desk,
-        "decision_bucket": t.decision_bucket
-    })
-    db.commit()
-    db.refresh(t)
-
-    return {
-        "ticket_id": ticket_id,
-        "ritos_ticket_number": t.ticket_number,
-        "assigned_desk": t.assigned_desk,
-        "decision_bucket": t.decision_bucket,
-        "decision": decision,
-        "refund_amount_minor": refund_amt,
-        "policy_evaluation_reason": t.policy_evaluation_reason,
-        "customer_message_draft": t.customer_message_draft,
-        "proof_status": t.proof_status,
-        "routing_steps": (t.classification_evidence or {}).get("routing_steps") or pipeline_res.get("routing_steps"),
-        "agents_trace": pipeline_res.get("agents_trace", []),
-        "visual_evidence": (t.classification_evidence or {}).get("visual_analysis") or pipeline_res.get("visual_evidence", {}),
-        "classification_evidence": t.classification_evidence,
-        "shopflow_response": shopflow_cb_res
-    }
->>>>>>> e1de4905cacc8e83ae5261d9468d857a9233cbff

@@ -3,6 +3,7 @@ import bcrypt from "bcryptjs";
 import { PRODUCTS_SEED_DATA } from "./seed-data/products";
 import { USERS_SEED_DATA } from "./seed-data/customers";
 import { ensureSeedAssets } from "../scripts/generate-seed-assets";
+import { qualified } from "../src/server/db-schema";
 
 const prisma = new PrismaClient();
 
@@ -16,29 +17,29 @@ async function main() {
   console.log("Truncating all mock data tables...");
   await prisma.$executeRawUnsafe(`
     TRUNCATE TABLE 
-      audit_events,
-      integration_events,
-      ritos_exchanges,
-      idempotency_keys,
-      notifications,
-      refund_transactions,
-      refund_decisions,
-      refund_evidence,
-      refund_tickets,
-      order_items,
-      payments,
-      orders,
-      refund_policies,
-      products,
-      sessions,
-      users
+      ${qualified("audit_events")},
+      ${qualified("integration_events")},
+      ${qualified("ritos_exchanges")},
+      ${qualified("idempotency_keys")},
+      ${qualified("notifications")},
+      ${qualified("refund_transactions")},
+      ${qualified("refund_decisions")},
+      ${qualified("refund_evidence")},
+      ${qualified("refund_tickets")},
+      ${qualified("order_items")},
+      ${qualified("payments")},
+      ${qualified("orders")},
+      ${qualified("refund_policies")},
+      ${qualified("products")},
+      ${qualified("sessions")},
+      ${qualified("users")}
     CASCADE;
   `);
 
   // 2. Reset ticket ID sequence so real tickets start at RIT-2026-000001
   console.log("Resetting refund ticket sequence to 0...");
-  await prisma.$executeRawUnsafe(`CREATE SEQUENCE IF NOT EXISTS refund_ticket_seq START WITH 1;`);
-  await prisma.$executeRawUnsafe(`SELECT setval('refund_ticket_seq', 1, false);`);
+  await prisma.$executeRawUnsafe(`CREATE SEQUENCE IF NOT EXISTS ${qualified("refund_ticket_seq")} START WITH 1;`);
+  await prisma.$executeRawUnsafe(`SELECT setval('${qualified("refund_ticket_seq")}', 1, false);`);
 
   // 3. Seed Users (Base Login Accounts)
   console.log("Seeding base users...");

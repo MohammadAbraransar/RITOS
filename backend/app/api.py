@@ -715,11 +715,23 @@ def cs3_send_rejection_notice(ticket_id:str, payload:RejectionNoticeIn, db:Sessi
 def ecommerce_ticket_intake(
     payload: EcommerceTicketIn,
     db: Session = Depends(get_db),
-    x_ecommerce_secret: str | None = Header(None, alias="X-Ecommerce-Secret")
+    x_ecommerce_secret: str | None = Header(None, alias="X-Ecommerce-Secret"),
+    authorization: Optional[str] = Header(None)
 ):
-    # Verify optional webhook secret
-    if settings.ecommerce_webhook_secret and x_ecommerce_secret != settings.ecommerce_webhook_secret:
-        raise HTTPException(401, "Invalid or missing X-Ecommerce-Secret header")
+    # Store servers send the shared secret; staff can also use this from the desk portal's simulator
+    # with their own login (the secret must never be shipped to the browser).
+    expected = settings.ecommerce_webhook_secret
+    secret_ok = bool(expected) and hmac.compare_digest(x_ecommerce_secret or "", expected)
+    if not secret_ok:
+        token = authorization[7:].strip() if authorization and authorization.lower().startswith("bearer ") else ""
+        staff = None
+        if token:
+            try:
+                staff = get_current_user(token, db)
+            except HTTPException:
+                staff = None
+        if not staff or staff.role not in STAFF_ROLES:
+            raise HTTPException(401, "Invalid or missing X-Ecommerce-Secret header")
 
     # Find customer or create fallback customer
     cust = db.scalar(select(User).where(User.email == (payload.customer_email or "customer@ritos.local")))
@@ -892,7 +904,7 @@ def authorize_payout(ticket_id: str, db: Session = Depends(get_db), user: User =
 # ==========================================
 # SHOPFLOW INTEGRATION ENDPOINTS
 # ==========================================
-from .shopflow import process_shopflow_event, check_shopflow_health, handle_event
+from .shopflow import process_shopflow_event, check_shopflow_health, handle_event, StoreUnavailable
 
 class ShopflowWebhookPayload(BaseModel):
     model_config = {"extra": "allow"}
@@ -930,6 +942,9 @@ def shopflow_webhook(payload: ShopflowWebhookPayload,
         result = handle_event(db, payload.model_dump())
     except HTTPException:
         raise
+    except StoreUnavailable as e:
+        db.rollback()
+        raise HTTPException(503, f"Store temporarily unavailable, retry later: {e}")
     except Exception as e:
         db.rollback()
         raise HTTPException(500, f"ShopFlow processing error: {e}")

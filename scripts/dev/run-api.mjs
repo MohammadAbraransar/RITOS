@@ -10,7 +10,7 @@ const python = process.platform === "win32"
   : join(root, ".venv", "bin", "python");
 
 if (!existsSync(python)) {
-  console.error(`Python virtualenv not found at ${python}. Run "pnpm setup:all" (or setup.bat) first.`);
+  console.error(`Python virtualenv not found at ${python}. Run "pnpm bootstrap" first.`);
   process.exit(1);
 }
 

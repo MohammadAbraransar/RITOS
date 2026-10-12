@@ -11,7 +11,7 @@ export async function processOutboxBatch(limit = 10) {
 
   const results: Array<{ id: string; status: string; error?: string }> = [];
 
-  for (const event of pendingEvents) {
+  const handle = async (event: (typeof pendingEvents)[number]) => {
     try {
       if (process.env.MOCK_RITOS === "true") {
         // Direct mock dispatch
@@ -93,7 +93,18 @@ export async function processOutboxBatch(limit = 10) {
       });
       results.push({ id: event.id, status: "RETRY", error: err.message });
     }
+  };
+
+  // Different tickets are delivered in parallel; events of the same ticket stay in creation order.
+  const byTicket = new Map<string, typeof pendingEvents>();
+  for (const event of pendingEvents) {
+    byTicket.set(event.ticketId, [...(byTicket.get(event.ticketId) || []), event]);
   }
+  await Promise.all(
+    Array.from(byTicket.values()).map(async (events) => {
+      for (const event of events) await handle(event);
+    })
+  );
 
   return results;
 }
