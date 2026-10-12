@@ -297,10 +297,10 @@ export default function ShopFlowStorePage() {
               <Sparkles size={12} /> End-to-End Autonomous Adjudication
             </div>
             <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight">
-              Customer Orders &amp; Return Center
+              Customer Orders &amp; Refund Center
             </h1>
             <p className="text-sm text-slate-300 leading-relaxed">
-              Select any delivered item below and submit a return request. RITOS’s 8 specialist agents 
+              Select any delivered item below and submit a refund request. RITOS’s 8 specialist agents 
               autonomously verify the financial ledger, inspect photo evidence, enforce category return policies, 
               assess risk signals, and route the case dynamically in real time.
             </p>
@@ -309,7 +309,7 @@ export default function ShopFlowStorePage() {
       </div>
 
       {/* 4. ORDERS SECTION (CLEAN ECOMMERCE DESIGN) */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-8">
+      <div id="customer-orders-section" className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-8">
         <div className="flex items-center justify-between mb-4">
           <div>
             <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2">
@@ -317,7 +317,7 @@ export default function ShopFlowStorePage() {
               My Delivered Purchases
             </h2>
             <p className="text-xs text-slate-500 mt-0.5">
-              Select an item to request a replacement or refund:
+              Select an item to request a refund:
             </p>
           </div>
         </div>
@@ -368,7 +368,7 @@ export default function ShopFlowStorePage() {
                   onClick={() => openClaimModal(order)}
                   className="w-full py-2.5 px-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 shadow-sm transition"
                 >
-                  <RotateCcw size={14} /> Request Return / Refund
+                  <RotateCcw size={14} /> Request Refund
                 </button>
               </div>
             </div>
@@ -404,7 +404,7 @@ export default function ShopFlowStorePage() {
                 onClick={() => handleInstantBuyAndClaim(item)}
                 className="w-full py-1.5 bg-slate-100 hover:bg-indigo-50 text-slate-700 hover:text-indigo-600 rounded-lg text-[11px] font-semibold transition border border-slate-200"
               >
-                Buy &amp; Request Return
+                Buy &amp; Request Refund
               </button>
             </div>
           ))}
@@ -464,14 +464,17 @@ export default function ShopFlowStorePage() {
           <div className="bg-white rounded-2xl max-w-2xl w-full p-6 shadow-2xl border border-slate-200 space-y-5 animate-in fade-in zoom-in-95 duration-150 my-8">
             <div className="flex justify-between items-start border-b border-slate-100 pb-3">
               <div>
-                <span className="text-xs font-semibold text-indigo-600">Customer Return Request</span>
+                <span className="text-xs font-semibold text-indigo-600">Customer Refund Request</span>
                 <h3 className="font-extrabold text-lg text-slate-900">{selectedOrder.itemName}</h3>
                 <span className="text-xs text-slate-500 font-mono">
                   Order: {selectedOrder.orderId} • Claim Amount: ₹{selectedOrder.amount.toLocaleString()}
                 </span>
               </div>
               <button 
-                onClick={() => setSelectedOrder(null)}
+                onClick={() => {
+                  setSelectedOrder(null);
+                  setTicketResult(null);
+                }}
                 className="text-slate-400 hover:text-slate-600 p-1 rounded-lg text-sm"
               >
                 ✕
@@ -479,241 +482,99 @@ export default function ShopFlowStorePage() {
             </div>
 
             {ticketResult ? (
-              /* REAL-TIME 8-AGENT ADJUDICATION RESULTS */
-              <div className="space-y-4 pt-1 max-h-[75vh] overflow-y-auto pr-1">
-                {/* Result Status Banner */}
-                <div className={`p-4 rounded-xl border flex items-start gap-3 ${
-                  ticketResult.ritos_response?.data?.assigned_desk === "CS_1"
-                    ? "bg-emerald-50 border-emerald-200 text-emerald-900"
-                    : ticketResult.ritos_response?.data?.assigned_desk === "CS_2"
-                    ? "bg-amber-50 border-amber-200 text-amber-900"
-                    : "bg-rose-50 border-rose-200 text-rose-900"
-                }`}>
-                  {ticketResult.ritos_response?.data?.assigned_desk === "CS_1" ? (
-                    <CheckCircle2 size={24} className="text-emerald-600 shrink-0 mt-0.5" />
-                  ) : ticketResult.ritos_response?.data?.assigned_desk === "CS_2" ? (
-                    <AlertTriangle size={24} className="text-amber-600 shrink-0 mt-0.5" />
-                  ) : (
-                    <XCircle size={24} className="text-rose-600 shrink-0 mt-0.5" />
+              /* CLEAN PROFESSIONAL CUSTOMER CONFIRMATION */
+              <div className="space-y-5 pt-2 text-center sm:text-left">
+                {/* 1. Success Announcement */}
+                <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-5 flex flex-col sm:flex-row items-center sm:items-start gap-4">
+                  <div className="w-12 h-12 rounded-full bg-emerald-100 border border-emerald-300 flex items-center justify-center shrink-0 text-emerald-600 shadow-xs">
+                    <CheckCircle2 size={28} />
+                  </div>
+                  <div className="space-y-1 text-center sm:text-left">
+                    <h4 className="font-extrabold text-base text-emerald-950">
+                      Ticket Raised Successfully!
+                    </h4>
+                    <p className="text-xs text-emerald-800 leading-relaxed">
+                      Your refund claim has been securely registered in the system with Reference ID{" "}
+                      <span className="font-mono font-bold bg-white/90 px-2 py-0.5 rounded border border-emerald-200 text-emerald-900">
+                        #{ticketResult.ticket_id}
+                      </span>.
+                    </p>
+                    <div className="pt-1.5 flex flex-wrap gap-2 justify-center sm:justify-start">
+                      <span className="inline-flex items-center gap-1 text-[11px] font-semibold bg-emerald-600 text-white px-2.5 py-0.5 rounded-full shadow-2xs">
+                        <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse"></span>
+                        Under Active Review
+                      </span>
+                      <span className="text-[11px] text-emerald-700 bg-white/70 px-2 py-0.5 rounded font-medium border border-emerald-200">
+                        Estimated turnaround: 24–48 hours
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 2. Order & Claim Snapshot */}
+                <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 text-xs space-y-3">
+                  <span className="font-bold text-slate-800 text-[11px] uppercase tracking-wider block">
+                    Claim Summary
+                  </span>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div className="bg-white p-3 rounded-lg border border-slate-200">
+                      <span className="text-slate-500 text-[10px] block">Order Number</span>
+                      <span className="font-bold text-slate-900 font-mono text-xs">{selectedOrder.orderId}</span>
+                    </div>
+                    <div className="bg-white p-3 rounded-lg border border-slate-200">
+                      <span className="text-slate-500 text-[10px] block">Item Name</span>
+                      <span className="font-bold text-slate-900 text-xs truncate block">{selectedOrder.itemName}</span>
+                    </div>
+                    <div className="bg-white p-3 rounded-lg border border-slate-200">
+                      <span className="text-slate-500 text-[10px] block">Refund Claimed</span>
+                      <span className="font-extrabold text-indigo-600 text-xs font-mono">₹{claimAmount.toLocaleString()}</span>
+                    </div>
+                  </div>
+
+                  {ticketResult.ritos_response?.data?.customer_message_draft && (
+                    <div className="bg-white p-3 rounded-lg border border-slate-200 space-y-1">
+                      <span className="text-[10px] font-semibold text-slate-500">Official Notice:</span>
+                      <p className="text-slate-700 text-xs italic leading-relaxed">
+                        &quot;{ticketResult.ritos_response?.data?.customer_message_draft}&quot;
+                      </p>
+                    </div>
                   )}
+                </div>
+
+                {/* 3. Customer Tab Tracking Guidance */}
+                <div className="bg-indigo-50/70 border border-indigo-100 rounded-xl p-4 flex items-start gap-3 text-xs">
+                  <div className="w-8 h-8 rounded-lg bg-indigo-100 text-indigo-700 flex items-center justify-center shrink-0 mt-0.5">
+                    <Package size={18} />
+                  </div>
                   <div className="space-y-1">
-                    <div className="flex items-center gap-2">
-                      <h4 className="font-bold text-sm">
-                        {ticketResult.ritos_response?.data?.assigned_desk === "CS_1" && "CS-1: Fast-Track Auto-Approval"}
-                        {ticketResult.ritos_response?.data?.assigned_desk === "CS_2" && "CS-2: Exceptions & Proof Inspection Needed"}
-                        {ticketResult.ritos_response?.data?.assigned_desk === "CS_3" && "CS-3: Non-Refundable / Policy Denial"}
-                      </h4>
-                      <span className="text-[10px] px-2 py-0.5 rounded font-mono font-bold bg-white/80 border border-current shadow-2xs">
-                        Desk: {ticketResult.ritos_response?.data?.assigned_desk || "CS_2"}
-                      </span>
-                    </div>
-                    <p className="text-xs leading-relaxed opacity-90">
-                      {ticketResult.ritos_response?.data?.policy_evaluation_reason}
+                    <h5 className="font-bold text-indigo-950 text-xs">
+                      For more info &amp; live updates, go to Customer Tab:
+                    </h5>
+                    <p className="text-indigo-800 text-[11px] leading-relaxed">
+                      You can view all your ordered purchases, claim history, and real-time refund status anytime directly in your customer dashboard.
                     </p>
                   </div>
                 </div>
 
-                {/* 3-STEP ROUTING DECISION TREE (RITOS ARCHITECTURE) */}
-                <div className="bg-slate-900 text-white rounded-xl p-4 space-y-3 shadow-md border border-slate-800">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-bold flex items-center gap-1.5 text-indigo-300">
-                      <GitFork size={14} className="text-indigo-400" />
-                      RITOS Autonomous Decision Tree Routing
-                    </span>
-                    <span className="text-[10px] font-mono text-slate-400">
-                      Engine v2.6 • 3-Stage Verification
-                    </span>
-                  </div>
-
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5">
-                    {/* Step 1: Ledger Verification */}
-                    <div className={`p-3 rounded-lg border text-xs space-y-1.5 ${
-                      ticketResult.ritos_response?.data?.routing_steps?.step_1?.status === "PASSED"
-                        ? "bg-emerald-950/40 border-emerald-600/40 text-emerald-200"
-                        : "bg-rose-950/40 border-rose-600/40 text-rose-200"
-                    }`}>
-                      <div className="flex items-center justify-between">
-                        <span className="font-bold text-[11px] flex items-center gap-1">
-                          <span className="w-4 h-4 rounded-full bg-slate-800 flex items-center justify-center text-[10px] text-white">1</span>
-                          Ledger Verification
-                        </span>
-                        <span className={`text-[9px] px-1.5 py-0.5 rounded font-bold uppercase ${
-                          ticketResult.ritos_response?.data?.routing_steps?.step_1?.status === "PASSED"
-                            ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
-                            : "bg-rose-500/20 text-rose-300 border border-rose-500/30"
-                        }`}>
-                          {ticketResult.ritos_response?.data?.routing_steps?.step_1?.status || "PASSED"}
-                        </span>
-                      </div>
-                      <p className="text-[11px] text-slate-300 leading-snug">
-                        {ticketResult.ritos_response?.data?.routing_steps?.step_1?.summary || "Transaction 100% verified in gateway; unrefunded balance exists."}
-                      </p>
-                    </div>
-
-                    {/* Step 2: Policy Window */}
-                    <div className={`p-3 rounded-lg border text-xs space-y-1.5 ${
-                      ticketResult.ritos_response?.data?.routing_steps?.step_2?.status === "WITHIN_WINDOW"
-                        ? "bg-emerald-950/40 border-emerald-600/40 text-emerald-200"
-                        : "bg-rose-950/40 border-rose-600/40 text-rose-200"
-                    }`}>
-                      <div className="flex items-center justify-between">
-                        <span className="font-bold text-[11px] flex items-center gap-1">
-                          <span className="w-4 h-4 rounded-full bg-slate-800 flex items-center justify-center text-[10px] text-white">2</span>
-                          Policy Window
-                        </span>
-                        <span className={`text-[9px] px-1.5 py-0.5 rounded font-bold uppercase ${
-                          ticketResult.ritos_response?.data?.routing_steps?.step_2?.status === "WITHIN_WINDOW"
-                            ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
-                            : "bg-rose-500/20 text-rose-300 border border-rose-500/30"
-                        }`}>
-                          {ticketResult.ritos_response?.data?.routing_steps?.step_2?.status || "WITHIN WINDOW"}
-                        </span>
-                      </div>
-                      <p className="text-[11px] text-slate-300 leading-snug">
-                        {ticketResult.ritos_response?.data?.routing_steps?.step_2?.summary || "Filing date is within return policy window (<= 14-30 days)."}
-                      </p>
-                    </div>
-
-                    {/* Step 3: Risk & Evidence Check */}
-                    <div className={`p-3 rounded-lg border text-xs space-y-1.5 ${
-                      ticketResult.ritos_response?.data?.routing_steps?.step_3?.status === "ALL_CLEAR"
-                        ? "bg-emerald-950/40 border-emerald-600/40 text-emerald-200"
-                        : ticketResult.ritos_response?.data?.routing_steps?.step_3?.status === "FLAGGED"
-                        ? "bg-amber-950/40 border-amber-600/40 text-amber-200"
-                        : "bg-rose-950/40 border-rose-600/40 text-rose-200"
-                    }`}>
-                      <div className="flex items-center justify-between">
-                        <span className="font-bold text-[11px] flex items-center gap-1">
-                          <span className="w-4 h-4 rounded-full bg-slate-800 flex items-center justify-center text-[10px] text-white">3</span>
-                          Risk &amp; Proof Check
-                        </span>
-                        <span className={`text-[9px] px-1.5 py-0.5 rounded font-bold uppercase ${
-                          ticketResult.ritos_response?.data?.routing_steps?.step_3?.status === "ALL_CLEAR"
-                            ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
-                            : "bg-amber-500/20 text-amber-300 border border-amber-500/30"
-                        }`}>
-                          {ticketResult.ritos_response?.data?.routing_steps?.step_3?.status || "EVALUATED"}
-                        </span>
-                      </div>
-                      <p className="text-[11px] text-slate-300 leading-snug">
-                        {ticketResult.ritos_response?.data?.routing_steps?.step_3?.summary || "Visual proof verified and zero risk signals detected."}
-                      </p>
-                    </div>
-                  </div>
-                </div>
-
-                {/* REAL COMPUTER VISION PROOF READING CARD */}
-                {(ticketResult.ritos_response?.data?.visual_evidence?.has_visual_proof || customPhotoBase64) && (
-                  <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-3">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
-                        <Camera size={14} className="text-indigo-600" />
-                        Real-Time Visual Proof Telemetry (Pillow Vision Engine)
-                      </span>
-                      <span className="text-[10px] bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded font-semibold">
-                        {ticketResult.ritos_response?.data?.proof_status || "PROOF_INSPECTED"}
-                      </span>
-                    </div>
-
-                    <div className="flex flex-col sm:flex-row gap-3 items-start">
-                      {/* Image Preview */}
-                      {(ticketResult.ritos_response?.data?.visual_evidence?.image_preview_url || customPhotoBase64) && (
-                        <div className="w-28 h-28 rounded-lg overflow-hidden border border-slate-300 shrink-0 bg-slate-200 relative shadow-inner">
-                          {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img 
-                            src={ticketResult.ritos_response?.data?.visual_evidence?.image_preview_url || customPhotoBase64 || ""} 
-                            alt="Visual Evidence Proof"
-                            className="w-full h-full object-cover"
-                          />
-                          <div className="absolute bottom-0 inset-x-0 bg-black/60 text-[9px] text-white text-center py-0.5 font-mono">
-                            Vision Read
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Vision Metrics */}
-                      <div className="flex-1 space-y-1.5 text-xs">
-                        <div className="grid grid-cols-2 gap-2 text-[11px]">
-                          <div className="p-2 bg-white rounded border border-slate-200">
-                            <span className="text-slate-500 block text-[10px]">Tamper / Authenticity</span>
-                            <span className="font-bold text-slate-800">
-                              {ticketResult.ritos_response?.data?.visual_evidence?.tamper_detected ? "⚠️ Suspicious" : "✓ Authenticated"}
-                            </span>
-                          </div>
-                          <div className="p-2 bg-white rounded border border-slate-200">
-                            <span className="text-slate-500 block text-[10px]">Physical Defect Detection</span>
-                            <span className="font-bold text-slate-800">
-                              {ticketResult.ritos_response?.data?.visual_evidence?.damage_detected ? "✓ Physical Defect Confirmed" : "Normal / Undetected"}
-                            </span>
-                          </div>
-                        </div>
-
-                        {ticketResult.ritos_response?.data?.visual_evidence?.findings && (
-                          <p className="text-[11px] text-slate-600 bg-white p-2 rounded border border-slate-200 leading-relaxed font-mono">
-                            {ticketResult.ritos_response?.data?.visual_evidence?.findings}
-                          </p>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {/* 8-Agent Execution Telemetry Grid */}
-                <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-3">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
-                      <Cpu size={14} className="text-indigo-600" />
-                      RITOS 8 Specialist Agents Live Trace
-                    </span>
-                    <span className="text-[10px] bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded font-mono font-semibold">
-                      Ticket #{ticketResult.ticket_id}
-                    </span>
-                  </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
-                    {ticketResult.ritos_response?.data?.agents_trace?.map((ag: any, idx: number) => (
-                      <div key={idx} className="bg-white p-2.5 rounded-lg border border-slate-200 space-y-1 shadow-2xs">
-                        <div className="flex items-center justify-between">
-                          <span className="font-bold text-[11px] text-slate-800 flex items-center gap-1">
-                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
-                            Agent {idx + 1}: {ag.agent_name}
-                          </span>
-                          <span className="text-[9px] bg-slate-100 px-1.5 py-0.5 rounded font-mono text-slate-600">
-                            {ag.status}
-                          </span>
-                        </div>
-                        <p className="text-[11px] text-slate-600 leading-snug">
-                          {ag.findings}
-                        </p>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Customer Notification Draft Generated by Agent 8 */}
-                {ticketResult.ritos_response?.data?.customer_message_draft && (
-                  <div className="p-3.5 bg-indigo-50/50 border border-indigo-100 rounded-xl space-y-1.5 text-xs">
-                    <span className="font-bold text-indigo-900 flex items-center gap-1 text-[11px]">
-                      <FileCheck2 size={13} className="text-indigo-600" />
-                      Agent 8 Generated Customer Resolution Notice:
-                    </span>
-                    <p className="text-slate-700 text-xs italic bg-white p-2.5 rounded border border-indigo-100 leading-relaxed">
-                      &quot;{ticketResult.ritos_response?.data?.customer_message_draft}&quot;
-                    </p>
-                  </div>
-                )}
-
-                <div className="flex gap-3 pt-2">
-                  <Link
-                    href="http://localhost:5173"
-                    target="_blank"
+                {/* 4. Action Buttons */}
+                <div className="flex flex-col sm:flex-row gap-3 pt-2">
+                  <button
+                    onClick={() => {
+                      setSelectedOrder(null);
+                      setTicketResult(null);
+                      const el = document.getElementById("customer-orders-section");
+                      if (el) el.scrollIntoView({ behavior: "smooth" });
+                    }}
                     className="flex-1 py-2.5 px-4 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-lg text-xs text-center shadow-sm flex items-center justify-center gap-1.5 transition"
                   >
-                    Inspect in RITOS Console <ExternalLink size={13} />
-                  </Link>
+                    <Package size={14} /> Go to Customer Orders Tab
+                  </button>
                   <button
-                    onClick={() => setSelectedOrder(null)}
-                    className="py-2.5 px-4 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded-lg text-xs transition"
+                    onClick={() => {
+                      setSelectedOrder(null);
+                      setTicketResult(null);
+                    }}
+                    className="py-2.5 px-5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded-lg text-xs transition"
                   >
                     Done
                   </button>
@@ -724,7 +585,7 @@ export default function ShopFlowStorePage() {
               <form onSubmit={handleDispatchTicket} className="space-y-4">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    Reason for Return
+                    Reason for Refund
                   </label>
                   <select
                     value={claimCategory}
@@ -894,7 +755,7 @@ export default function ShopFlowStorePage() {
                       </>
                     ) : (
                       <>
-                        <Bot size={14} /> Submit Return Request
+                        <Bot size={14} /> Submit Refund Request
                       </>
                     )}
                   </button>
