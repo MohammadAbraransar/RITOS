@@ -33,8 +33,12 @@ export default function RegisterPage() {
         return;
       }
 
-      router.push("/products");
-      router.refresh();
+      if (data.user) {
+        const { setStoredAuthUser } = await import("@/client/auth");
+        setStoredAuthUser(data.user);
+      }
+
+      window.location.href = "/products";
     } catch {
       setError("An error occurred during registration.");
     } finally {

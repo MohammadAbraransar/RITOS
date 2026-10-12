@@ -131,6 +131,7 @@ export default function ShopFlowStorePage() {
   const [photoName, setPhotoName] = useState("damage_defect_photo.jpg");
   const [customPhotoBase64, setCustomPhotoBase64] = useState<string | null>(null);
   const [customPhotoName, setCustomPhotoName] = useState<string | null>(null);
+  const [submitError, setSubmitError] = useState<string | null>(null);
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -156,6 +157,7 @@ export default function ShopFlowStorePage() {
     setCustomPhotoName(null);
     setAttachPhoto(true);
     setTicketResult(null);
+    setSubmitError(null);
   };
 
   const handleInstantBuyAndClaim = (catalogItem: any) => {
@@ -181,6 +183,7 @@ export default function ShopFlowStorePage() {
 
     setSubmitting(true);
     setTicketResult(null);
+    setSubmitError(null);
 
     const purchaseDate = new Date(Date.now() - selectedOrder.deliveredDaysAgo * 86400000).toISOString();
     const evidenceImages = attachPhoto ? [customPhotoBase64 || photoName] : [];
@@ -205,14 +208,14 @@ export default function ShopFlowStorePage() {
       });
 
       const data = await res.json();
-      if (!res.ok) {
+      if (!res.ok && !data.success) {
         throw new Error(data.error || "RITOS ingestion failed");
       }
 
       setTicketResult(data);
       setRecentClaims(prev => [data, ...prev]);
     } catch (err: any) {
-      alert(`Error submitting claim to RITOS: ${err.message}`);
+      setSubmitError(err.message || "Failed to submit return request");
     } finally {
       setSubmitting(false);
     }
@@ -863,6 +866,13 @@ export default function ShopFlowStorePage() {
                     </div>
                   )}
                 </div>
+
+                {submitError && (
+                  <div className="p-3 bg-rose-50 border border-rose-200 text-rose-800 rounded-lg text-xs flex items-center gap-2">
+                    <AlertTriangle size={15} className="shrink-0 text-rose-600" />
+                    <span>{submitError}</span>
+                  </div>
+                )}
 
                 <div className="flex gap-3 pt-2">
                   <button

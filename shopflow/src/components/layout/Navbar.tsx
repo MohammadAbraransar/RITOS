@@ -4,14 +4,31 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { ShoppingBag, User as UserIcon, LogOut, ShieldCheck } from "lucide-react";
 
+import { getStoredAuthUser, setStoredAuthUser, clearStoredAuth } from "@/client/auth";
+
 export function Navbar() {
   const [user, setUser] = useState<{ name: string; role: string } | null>(null);
   const [cartCount, setCartCount] = useState(0);
 
   useEffect(() => {
+    // 1. Instant hydration from sessionStorage
+    const cached = getStoredAuthUser();
+    if (cached) {
+      setUser(cached);
+    }
+
+    // 2. Authoritative sync with backend /api/me
     fetch("/api/me")
       .then((res) => (res.ok ? res.json() : null))
-      .then((data) => setUser(data))
+      .then((data) => {
+        if (data && data.name) {
+          setUser(data);
+          setStoredAuthUser(data);
+        } else {
+          setUser(null);
+          clearStoredAuth();
+        }
+      })
       .catch(() => {});
 
     fetch("/api/cart")
@@ -21,6 +38,7 @@ export function Navbar() {
   }, []);
 
   const handleLogout = async () => {
+    clearStoredAuth();
     await fetch("/api/auth/logout", { method: "POST" });
     window.location.href = "/login";
   };

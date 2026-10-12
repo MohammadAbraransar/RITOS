@@ -6,7 +6,7 @@ import {
   Filter, Gauge, Headphones, HelpCircle, Info, LayoutDashboard, Lock, LogOut,
   Mail, Menu, MessageSquare, Phone, Play, Plus, RefreshCw, Search, Send,
   Shield, ShieldAlert, Sparkles, Ticket as TicketIcon, Users, WalletCards, X, Zap,
-  Camera, Cpu, GitFork
+  Camera, Cpu, GitFork, UploadCloud, Trash2
 } from 'lucide-react'
 import { api, getToken, setToken, type Ticket, type User } from './api'
 import { isClosedStatus, priorityRank } from './logic'
@@ -143,10 +143,32 @@ function App() {
   const [form, setForm] = useState({
     transaction_id: 'TXN-1001',
     order_id: 'ORD-1001',
+    item_name: 'Fastrack Smartwatch Reflex',
+    item_category: 'ELECTRONICS',
     claimed_amount: '1500',
     currency: 'INR',
-    description: 'Order cancelled before dispatch. Refund has not reached my account.'
+    category: 'DEFECTIVE_PRODUCT',
+    description: 'Product received with display defect and erratic touch response out of the box.',
+    custom_photo_base64: '' as string,
+    custom_photo_name: '' as string,
+    evidence_image_preset: 'stitching_loose_zipper.jpg'
   })
+
+  const handleClaimFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (file) {
+      const reader = new FileReader()
+      reader.onload = (ev) => {
+        const b64 = ev.target?.result as string
+        setForm(prev => ({
+          ...prev,
+          custom_photo_base64: b64,
+          custom_photo_name: file.name
+        }))
+      }
+      reader.readAsDataURL(file)
+    }
+  }
 
   const [customerTxs, setCustomerTxs] = useState<any[]>([])
   const [runningAllAgents, setRunningAllAgents] = useState(false)
@@ -453,13 +475,14 @@ function App() {
   }
 
   function handleRequestRefundForOrder(tx: any) {
-    setForm({
+    setForm(prev => ({
+      ...prev,
       transaction_id: tx.id,
       order_id: tx.order_id,
       claimed_amount: String(Number(tx.amount) - Number(tx.refunded_amount)),
       currency: tx.currency,
       description: `Refund requested for Order ${tx.order_id} (${tx.id}).`
-    })
+    }))
     setPage('new')
   }
 
@@ -503,11 +526,23 @@ function App() {
   async function submitTicket(e: FormEvent) {
     e.preventDefault()
     try {
-      await api.createTicket({ ...form, claimed_amount: Number(form.claimed_amount) })
+      const evidence = form.custom_photo_base64
+        ? [form.custom_photo_base64]
+        : (form.evidence_image_preset ? [form.evidence_image_preset] : [])
+      const created = await api.createTicket({
+        transaction_id: form.transaction_id,
+        order_id: form.order_id,
+        claimed_amount: Number(form.claimed_amount),
+        currency: form.currency,
+        description: form.description,
+        item_name: form.item_name,
+        item_category: form.item_category,
+        evidence_images: evidence
+      })
       setShowNew(false)
       setPage('tickets')
       await load()
-      setNotice('Ticket submitted and automated 3-bucket triage completed.')
+      setNotice(`✓ Claim ${created.ticket_number} submitted! Triage & computer vision inspection complete.`)
     } catch (e) {
       setNotice((e as Error).message)
     }
@@ -558,97 +593,138 @@ function App() {
   if (!user) {
     return (
       <div className="login-shell">
-        <div className="login-art">
-          <div className="brand large">
-            <span className="brand-mark"><Command size={24} /></span>
-            <span>RITOS</span>
-            <span className="brand-tag">ECOM OPS</span>
-          </div>
+        <div className="login-container">
+          {/* LEFT ART & BRAND SHOWCASE */}
+          <div className="login-art">
+            <div className="login-art-top">
+              <div className="login-brand-badge">
+                <div className="login-brand-icon">
+                  <Command size={22} />
+                </div>
+                <div>
+                  <div className="login-brand-title">RITOS</div>
+                  <span className="login-brand-tag">ECOM OPS GOVERNANCE</span>
+                </div>
+              </div>
 
-          <div className="login-copy">
-            <div className="eyebrow light">ENTERPRISE REFUND INTELLIGENCE ORCHESTRATION</div>
-            <h1 style={{ fontSize: '38px', lineHeight: 1.18, fontWeight: 800 }}>
-              Autonomous Refund Operations.<br />
-              <em>Governed by Ledger Proof.</em>
-            </h1>
-            <p style={{ fontSize: '14.5px', lineHeight: 1.6, color: '#94a3b8', marginTop: '16px', maxWidth: '440px' }}>
-              Real-time payment gateway ledger audits, category-level return policy arbitration, and four-eyes financial governance for modern commerce.
-            </p>
+              {/* RITOS FULL ABBREVIATION BANNER */}
+              <div className="login-abbreviation-box">
+                <h3>Full System Specification</h3>
+                <p>
+                  <strong>RITOS</strong>: <strong>R</strong>efund <strong>I</strong>ntelligence &amp; <strong>T</strong>riage <strong>O</strong>rchestration <strong>S</strong>ystem
+                </p>
+              </div>
 
-            <div className="login-stat-strip" style={{ marginTop: '36px', display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '16px', borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: '24px' }}>
+              <div className="login-hero-text">
+                <h1>
+                  Autonomous Refund Operations.<br />
+                  <span>Governed by Ledger Proof.</span>
+                </h1>
+                <p>
+                  Multi-agent deterministic pipeline arbitrating eCommerce returns, computer vision defect inspection, and four-eyes financial settlement.
+                </p>
+              </div>
+
+              {/* 3 CORE ARCHITECTURE PILLARS */}
+              <div className="login-pillars-grid">
+                <div className="login-pillar-item">
+                  <Shield size={16} color="#38bdf8" style={{ flexShrink: 0, marginTop: '2px' }} />
+                  <div>
+                    <strong>Ledger Ground Truth:</strong> Real-time payment gateway ledger audits eliminate duplicate and ghost refund losses.
+                  </div>
+                </div>
+                <div className="login-pillar-item">
+                  <Camera size={16} color="#34d399" style={{ flexShrink: 0, marginTop: '2px' }} />
+                  <div>
+                    <strong>Pillow Vision Engine:</strong> Computer vision inspects physical tears, cracks, and EXIF tamper tokens.
+                  </div>
+                </div>
+                <div className="login-pillar-item">
+                  <CircleDollarSign size={16} color="#f472b6" style={{ flexShrink: 0, marginTop: '2px' }} />
+                  <div>
+                    <strong>Four-Eyes Governance:</strong> Segregation of duties prevents unauthorized money movement.
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* STAT STRIP */}
+            <div className="login-stat-strip">
               <div>
-                <div style={{ fontSize: '24px', fontWeight: 800, color: '#38bdf8' }}>0%</div>
-                <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '2px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Hallucination Risk</div>
+                <div className="login-stat-val" style={{ color: '#38bdf8' }}>0%</div>
+                <div className="login-stat-lbl">Hallucination Risk</div>
               </div>
               <div>
-                <div style={{ fontSize: '24px', fontWeight: 800, color: '#34d399' }}>&lt; 3s</div>
-                <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '2px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Multi-Agent Triage</div>
+                <div className="login-stat-val" style={{ color: '#34d399' }}>&lt; 3s</div>
+                <div className="login-stat-lbl">Multi-Agent Triage</div>
               </div>
               <div>
-                <div style={{ fontSize: '24px', fontWeight: 800, color: '#f472b6' }}>100%</div>
-                <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '2px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Idempotent Payouts</div>
+                <div className="login-stat-val" style={{ color: '#f472b6' }}>100%</div>
+                <div className="login-stat-lbl">Idempotent Payouts</div>
               </div>
+            </div>
+
+            <div className="login-foot" style={{ marginTop: '20px' }}>
+              RITOS CORE ENGINE · PRODUCTION GRADE · LOCAL ACTIVE
             </div>
           </div>
 
-          <div className="login-foot" style={{ fontSize: '11px', letterSpacing: '0.06em', color: '#64748b' }}>
-            RITOS CORE ENGINE · PRODUCTION GRADE · LOCAL ACTIVE
+          {/* RIGHT SIGN IN PANEL */}
+          <div className="login-panel">
+            <form className="login-card" onSubmit={login}>
+              <div className="eyebrow" style={{ color: 'var(--primary-700)', fontWeight: 800 }}>WORKSPACE ACCESS</div>
+              <h2>Sign in to Operational Hub</h2>
+              <p>Select any desk persona below for 1-click credential configuration:</p>
+
+              {loginError && <div className="error-box"><AlertTriangle size={15} /> {loginError}</div>}
+
+              {/* 1-CLICK PERSONA PICKER */}
+              <div className="divider-text" style={{ margin: '0 0 10px' }}>SELECT DESK PERSONA</div>
+              <div className="role-pills-grid" style={{ marginBottom: '18px' }}>
+                {roles.map(r => (
+                  <button
+                    type="button"
+                    key={r.role}
+                    className={`role-pill-btn ${email === r.email ? 'active' : ''}`}
+                    onClick={() => {
+                      setEmail(r.email)
+                      setPassword('ChangeMe123!')
+                    }}
+                  >
+                    <strong style={{ fontSize: '11px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <r.icon size={13} /> {r.label}
+                    </strong>
+                    <small style={{ color: 'var(--text-muted)' }}>{r.desc}</small>
+                  </button>
+                ))}
+              </div>
+
+              <label>Email Address</label>
+              <input
+                type="email"
+                value={email}
+                onChange={e => setEmail(e.target.value)}
+                required
+                placeholder="e.g. cs1@ritos.local"
+              />
+
+              <label style={{ marginTop: '10px' }}>Password</label>
+              <input
+                type="password"
+                value={password}
+                onChange={e => setPassword(e.target.value)}
+                required
+              />
+
+              <button className="primary full" disabled={busy} style={{ marginTop: '16px' }}>
+                {busy ? 'Authenticating…' : 'Sign in to RITOS Workspace'}
+              </button>
+
+              <div className="hint" style={{ marginTop: '14px', textAlign: 'center' }}>
+                Enterprise Default Password: <code>ChangeMe123!</code>
+              </div>
+            </form>
           </div>
-        </div>
-
-        <div className="login-panel">
-          <form className="login-card" onSubmit={login}>
-            <div className="eyebrow">WELCOME TO RITOS</div>
-            <h2>Sign in to Operational Hub</h2>
-            <p className="muted">Select any desk persona below to launch their isolated pipeline.</p>
-
-            {loginError && <div className="error-box"><AlertTriangle size={15} /> {loginError}</div>}
-
-            <label>Email address</label>
-            <input
-              type="email"
-              value={email}
-              onChange={e => setEmail(e.target.value)}
-              required
-              placeholder="e.g. cs1@ritos.local"
-            />
-
-            <label>Password</label>
-            <input
-              type="password"
-              value={password}
-              onChange={e => setPassword(e.target.value)}
-              required
-            />
-
-            <button className="primary full" disabled={busy}>
-              {busy ? 'Signing in securely…' : 'Sign in to Workspace'}
-            </button>
-
-            <div className="divider-text">SELECT DEMO PERSONA</div>
-            <div className="role-pills-grid" style={{ gridTemplateColumns: 'repeat(2, 1fr)', gap: '8px' }}>
-              {roles.map(r => (
-                <button
-                  type="button"
-                  key={r.role}
-                  className={`role-pill-btn ${email === r.email ? 'active' : ''}`}
-                  onClick={() => {
-                    setEmail(r.email)
-                    setPassword('ChangeMe123!')
-                  }}
-                >
-                  <strong style={{ fontSize: '11px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    <r.icon size={13} /> {r.label}
-                  </strong>
-                  <small style={{ color: 'var(--text-muted)' }}>{r.desc}</small>
-                </button>
-              ))}
-            </div>
-
-            <div className="hint">
-              Default password: <code>ChangeMe123!</code>
-            </div>
-          </form>
         </div>
       </div>
     )
@@ -1720,14 +1796,14 @@ function App() {
             </>
           )}
 
-          {/* FILE NEW CLAIM (CUSTOMER & STAFF) */}
+          {/* FILE NEW CLAIM (PROFESSIONAL CUSTOMER & STAFF PORTAL) */}
           {page === 'new' && (
             <>
               <div className="page-heading">
                 <div>
-                  <div className="eyebrow" style={{ color: 'var(--primary-700)' }}>ONLINE CLAIM INTAKE</div>
+                  <div className="eyebrow" style={{ color: 'var(--primary-700)', fontWeight: 800 }}>ONLINE CLAIM &amp; RETURN INTAKE</div>
                   <h1>File a Return or Refund Claim</h1>
-                  <p>Submit order information to trigger real-time ledger validation, category policy analysis, and instant desk routing.</p>
+                  <p>Submit order details for real-time payment gateway ledger verification, category policy window compliance, and 8-agent automated triage.</p>
                 </div>
                 <div className="heading-actions">
                   <button className="secondary" onClick={() => setPage(isCustomer ? 'dashboard' : 'tickets')}>
@@ -1736,74 +1812,338 @@ function App() {
                 </div>
               </div>
 
-              <div className="panel" style={{ maxWidth: '780px', margin: '0 auto', padding: '28px' }}>
-                <form onSubmit={submitTicket}>
-                  <div className="form-grid">
-                    <div>
-                      <label>Order Reference ID</label>
-                      <input
-                        placeholder="e.g. ORD-1001"
-                        value={form.order_id}
-                        onChange={e => setForm({ ...form, order_id: e.target.value })}
-                        required
-                      />
-                    </div>
-                    <div>
-                      <label>Transaction ID (from payment receipt)</label>
-                      <input
-                        placeholder="e.g. TXN-1001"
-                        value={form.transaction_id}
-                        onChange={e => setForm({ ...form, transaction_id: e.target.value })}
-                        required
-                      />
-                    </div>
-                    <div>
-                      <label>Claimed Refund Amount</label>
-                      <input
-                        type="number"
-                        step="0.01"
-                        placeholder="1500.00"
-                        value={form.claimed_amount}
-                        onChange={e => setForm({ ...form, claimed_amount: e.target.value })}
-                        required
-                      />
-                    </div>
-                    <div>
-                      <label>Currency</label>
-                      <select value={form.currency} onChange={e => setForm({ ...form, currency: e.target.value })}>
-                        <option value="INR">INR (₹)</option>
-                        <option value="USD">USD ($)</option>
-                        <option value="EUR">EUR (€)</option>
-                      </select>
-                    </div>
-                    <div className="span-2">
-                      <label>Reason & Description for Refund</label>
-                      <textarea
-                        rows={4}
-                        placeholder="Please describe why you are requesting a refund (e.g. order cancelled prior to dispatch, damaged item, etc.)..."
-                        value={form.description}
-                        onChange={e => setForm({ ...form, description: e.target.value })}
-                        required
-                      />
-                    </div>
-                  </div>
-
-                  <div style={{ marginTop: '24px', display: 'flex', gap: '12px', alignItems: 'center' }}>
-                    <button className="primary" type="submit" disabled={busy}>
-                      <Send size={15} /> Submit Claim for Automated AI Triage
-                    </button>
-                    <button className="secondary" type="button" onClick={() => setPage('dashboard')}>
-                      Cancel
-                    </button>
-                  </div>
-
-                  <div style={{ marginTop: '20px', padding: '14px', background: 'var(--navy-50)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)', fontSize: '12px', color: 'var(--navy-700)', display: 'flex', gap: '10px', alignItems: 'center' }}>
-                    <BrainCircuit size={20} color="var(--primary-700)" style={{ flexShrink: 0 }} />
-                    <span>
-                      <strong>Automated Processing:</strong> Once submitted, 8 specialized AI agents will verify payment ledger records, enforce return window policies, and route your claim into CS-1 Fast-Track, CS-2 Evidence, or CS-3 Ineligible desk in under 3 seconds.
+              {/* QUICK RECENT ORDERS SELECTOR (FOR CUSTOMER) */}
+              {customerTxs && customerTxs.length > 0 && (
+                <div style={{ marginBottom: '20px', padding: '16px', background: 'var(--slate-50)', border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-lg)' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
+                    <span style={{ fontSize: '12px', fontWeight: 800, color: 'var(--navy-900)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <Clock3 size={14} color="var(--primary-700)" />
+                      1-Click Select From Your Verified Orders:
                     </span>
+                    <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Click to auto-fill verified ledger facts</span>
                   </div>
-                </form>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '10px' }}>
+                    {customerTxs.map(tx => (
+                      <div
+                        key={tx.id}
+                        onClick={() => handleRequestRefundForOrder(tx)}
+                        style={{
+                          padding: '10px 12px',
+                          background: form.transaction_id === tx.id ? 'var(--primary-50)' : '#ffffff',
+                          border: `1px solid ${form.transaction_id === tx.id ? 'var(--primary-600)' : 'var(--border-subtle)'}`,
+                          borderRadius: 'var(--radius-md)',
+                          cursor: 'pointer',
+                          transition: 'all 0.15s ease'
+                        }}
+                      >
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <strong style={{ fontSize: '12px', color: 'var(--navy-900)' }}>{tx.order_id || tx.id}</strong>
+                          <span style={{ fontSize: '11px', fontWeight: 800, color: 'var(--emerald-700)' }}>{money(tx.amount, tx.currency)}</span>
+                        </div>
+                        <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '2px', fontFamily: 'monospace' }}>
+                          Txn: {tx.id}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* DUAL-COLUMN INTAKE CONTAINER */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: '24px', alignItems: 'start' }}>
+                {/* LEFT: PRIMARY INTAKE FORM */}
+                <div className="panel" style={{ padding: '24px' }}>
+                  <form onSubmit={submitTicket}>
+                    <h3 style={{ fontSize: '16px', fontWeight: 800, color: 'var(--navy-900)', margin: '0 0 16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <TicketIcon size={18} color="var(--primary-700)" /> Claim Details &amp; Item Specification
+                    </h3>
+
+                    <div className="form-grid">
+                      {/* Order and Transaction */}
+                      <div>
+                        <label>Order Reference ID</label>
+                        <input
+                          placeholder="e.g. ORD-1001"
+                          value={form.order_id}
+                          onChange={e => setForm({ ...form, order_id: e.target.value })}
+                          required
+                        />
+                      </div>
+                      <div>
+                        <label>Transaction ID (Gateway Receipt)</label>
+                        <input
+                          placeholder="e.g. TXN-1001"
+                          value={form.transaction_id}
+                          onChange={e => setForm({ ...form, transaction_id: e.target.value })}
+                          required
+                        />
+                      </div>
+
+                      {/* Product Name */}
+                      <div className="span-2">
+                        <label>Product Name / Item Description</label>
+                        <input
+                          placeholder="e.g. Executive Leather Laptop Sleeve 15-inch"
+                          value={form.item_name}
+                          onChange={e => setForm({ ...form, item_name: e.target.value })}
+                          required
+                        />
+                      </div>
+
+                      {/* Product Category Selector */}
+                      <div className="span-2">
+                        <label style={{ marginBottom: '6px' }}>Product Category &amp; Return Policy Window</label>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))', gap: '8px' }}>
+                          {[
+                            { id: 'ELECTRONICS', label: '💻 Electronics', window: '7-Day Policy' },
+                            { id: 'APPAREL', label: '👕 Apparel', window: '14-Day Policy' },
+                            { id: 'ACCESSORIES', label: '🎒 Accessories', window: '14-Day Policy' },
+                            { id: 'PERISHABLES', label: '🍎 Perishables', window: 'Final Sale (0d)' },
+                            { id: 'DIGITAL', label: '⚡ Digital / Code', window: 'Non-refundable' },
+                          ].map(cat => (
+                            <button
+                              type="button"
+                              key={cat.id}
+                              onClick={() => setForm({ ...form, item_category: cat.id })}
+                              style={{
+                                padding: '8px 10px',
+                                borderRadius: 'var(--radius-md)',
+                                textAlign: 'left',
+                                background: form.item_category === cat.id ? 'var(--primary-50)' : 'var(--slate-50)',
+                                border: `1px solid ${form.item_category === cat.id ? 'var(--primary-600)' : 'var(--border-subtle)'}`,
+                                cursor: 'pointer',
+                                transition: 'all 0.15s ease'
+                              }}
+                            >
+                              <div style={{ fontSize: '11px', fontWeight: 800, color: form.item_category === cat.id ? 'var(--primary-700)' : 'var(--navy-900)' }}>
+                                {cat.label}
+                              </div>
+                              <div style={{ fontSize: '9px', color: 'var(--text-muted)', marginTop: '2px' }}>
+                                {cat.window}
+                              </div>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Claim Category Reason */}
+                      <div className="span-2">
+                        <label>Primary Reason for Return</label>
+                        <select
+                          value={form.category}
+                          onChange={e => setForm({ ...form, category: e.target.value })}
+                        >
+                          <option value="DEFECTIVE_PRODUCT">Defective Product / Hardware Malfunction</option>
+                          <option value="PRODUCT_DAMAGED">Damaged in Transit / Broken Packaging</option>
+                          <option value="WRONG_ITEM">Received Incorrect Item</option>
+                          <option value="SIZE_FIT_ISSUE">Size or Fitting Discrepancy</option>
+                          <option value="ORDER_CANCELLED">Order Cancelled Prior to Dispatch</option>
+                        </select>
+                      </div>
+
+                      {/* Claimed Amount and Currency */}
+                      <div>
+                        <label>Claimed Refund Amount</label>
+                        <input
+                          type="number"
+                          step="0.01"
+                          placeholder="1500.00"
+                          value={form.claimed_amount}
+                          onChange={e => setForm({ ...form, claimed_amount: e.target.value })}
+                          required
+                        />
+                      </div>
+                      <div>
+                        <label>Currency</label>
+                        <select value={form.currency} onChange={e => setForm({ ...form, currency: e.target.value })}>
+                          <option value="INR">INR (₹)</option>
+                          <option value="USD">USD ($)</option>
+                          <option value="EUR">EUR (€)</option>
+                        </select>
+                      </div>
+
+                      {/* Description Statement */}
+                      <div className="span-2">
+                        <label>Customer Statement &amp; Issue Details</label>
+                        <textarea
+                          rows={3}
+                          placeholder="Explain what happened with the product upon opening or delivery..."
+                          value={form.description}
+                          onChange={e => setForm({ ...form, description: e.target.value })}
+                          required
+                        />
+                      </div>
+
+                      {/* Photo Evidence & Computer Vision Proof Uploader */}
+                      <div className="span-2" style={{ padding: '14px', background: 'var(--slate-50)', border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-lg)' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                          <span style={{ fontSize: '12px', fontWeight: 800, color: 'var(--navy-900)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                            <Camera size={14} color="var(--primary-700)" />
+                            Photo Proof (Pillow Computer Vision Engine)
+                          </span>
+                          <span style={{ fontSize: '10px', background: 'var(--emerald-50)', color: 'var(--emerald-700)', padding: '2px 6px', borderRadius: '4px', fontWeight: 700 }}>
+                            Agent 7 Verified
+                          </span>
+                        </div>
+
+                        {/* Drag and Drop Dropzone */}
+                        <div style={{
+                          border: '2px dashed var(--primary-200)',
+                          borderRadius: 'var(--radius-md)',
+                          padding: '12px',
+                          background: '#ffffff',
+                          textAlign: 'center',
+                          position: 'relative',
+                          cursor: 'pointer',
+                          marginBottom: '8px'
+                        }}>
+                          <input
+                            type="file"
+                            accept="image/*"
+                            onChange={handleClaimFileUpload}
+                            style={{ position: 'absolute', inset: 0, opacity: 0, cursor: 'pointer', width: '100%', height: '100%' }}
+                            title="Upload real damage photo"
+                          />
+
+                          {form.custom_photo_base64 ? (
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', textAlign: 'left' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                <img
+                                  src={form.custom_photo_base64}
+                                  alt="Custom Upload Preview"
+                                  style={{ width: '48px', height: '48px', objectFit: 'cover', borderRadius: '4px', border: '1px solid var(--border-subtle)' }}
+                                />
+                                <div>
+                                  <strong style={{ fontSize: '12px', color: 'var(--navy-900)', display: 'block', maxWidth: '220px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                    {form.custom_photo_name || 'custom_uploaded_photo.jpg'}
+                                  </strong>
+                                  <span style={{ fontSize: '10px', color: 'var(--emerald-600)', fontWeight: 700 }}>
+                                    ✓ Live File Loaded for Vision AI Inspection
+                                  </span>
+                                </div>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={(ev) => {
+                                  ev.stopPropagation()
+                                  setForm(prev => ({ ...prev, custom_photo_base64: '', custom_photo_name: '' }))
+                                }}
+                                className="icon-btn"
+                                title="Remove photo"
+                                style={{ color: 'var(--rose-600)' }}
+                              >
+                                <Trash2 size={16} />
+                              </button>
+                            </div>
+                          ) : (
+                            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px' }}>
+                              <UploadCloud size={24} color="var(--primary-600)" />
+                              <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--navy-800)' }}>
+                                Click or drag real defect image here
+                              </span>
+                              <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+                                PNG, JPG, or WEBP • Inspected for physical edge fractures &amp; EXIF tampering
+                              </span>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Defect Preset Dropdown */}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <span style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+                            Or Select Preset Sample:
+                          </span>
+                          <select
+                            value={form.evidence_image_preset}
+                            onChange={e => setForm({ ...form, evidence_image_preset: e.target.value, custom_photo_base64: '', custom_photo_name: '' })}
+                            style={{ fontSize: '11px', padding: '4px 8px', height: 'auto', background: '#ffffff' }}
+                          >
+                            <option value="stitching_loose_zipper.jpg">📸 stitching_loose_zipper.jpg (Seam Fracture Defect)</option>
+                            <option value="earcup_cushion_tear.jpg">📸 earcup_cushion_tear.jpg (Acoustic Hardware Tear)</option>
+                            <option value="damage_broken_box.jpg">📦 damage_broken_box.jpg (Transit Package Damage)</option>
+                            <option value="shipping_label_barcode.jpg">🏷️ shipping_label_barcode.jpg (Serial/Box Label Proof)</option>
+                            <option value="clean_unopened_package.jpg">📦 clean_unopened_package.jpg (Unopened Product Photo)</option>
+                          </select>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div style={{ marginTop: '20px', display: 'flex', gap: '12px', alignItems: 'center' }}>
+                      <button className="primary" type="submit" disabled={busy} style={{ flex: 1, padding: '12px 18px', fontSize: '13px' }}>
+                        <Send size={15} /> Submit Claim to RITOS 8-Agent Orchestrator
+                      </button>
+                      <button className="secondary" type="button" onClick={() => setPage(isCustomer ? 'dashboard' : 'tickets')}>
+                        Cancel
+                      </button>
+                    </div>
+                  </form>
+                </div>
+
+                {/* RIGHT: AUTONOMOUS TRIAGE RADAR & POLICY RULES */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                  {/* Decision Tree Routing Radar */}
+                  <div style={{
+                    background: '#0f172a',
+                    borderRadius: 'var(--radius-lg)',
+                    padding: '20px',
+                    color: '#ffffff',
+                    boxShadow: '0 4px 14px rgba(0,0,0,0.15)',
+                    border: '1px solid #1e293b'
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '14px' }}>
+                      <span style={{ fontSize: '12px', fontWeight: 800, color: '#38bdf8', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <GitFork size={15} /> 3-Step Decision Tree Architecture
+                      </span>
+                      <span style={{ fontSize: '10px', background: 'rgba(56, 189, 248, 0.2)', color: '#7dd3fc', padding: '2px 6px', borderRadius: '4px', fontFamily: 'monospace' }}>
+                        v2.6 Real Engine
+                      </span>
+                    </div>
+
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', fontSize: '11px' }}>
+                      {/* Step 1 */}
+                      <div style={{ padding: '10px 12px', background: 'rgba(30, 41, 59, 0.7)', borderRadius: '8px', borderLeft: '3px solid #10b981' }}>
+                        <strong style={{ color: '#6ee7b7', display: 'block' }}>Step 1: Ledger Verification</strong>
+                        <span style={{ color: '#cbd5e1' }}>Does transaction exist in payment gateway? Is unrefunded balance &gt; claimed amount?</span>
+                      </div>
+
+                      {/* Step 2 */}
+                      <div style={{ padding: '10px 12px', background: 'rgba(30, 41, 59, 0.7)', borderRadius: '8px', borderLeft: '3px solid #3b82f6' }}>
+                        <strong style={{ color: '#93c5fd', display: 'block' }}>Step 2: Category Policy Window</strong>
+                        <span style={{ color: '#cbd5e1' }}>Is filing date within category limit (Electronics: 7d, Apparel: 14d, Perishable: 0d)?</span>
+                      </div>
+
+                      {/* Step 3 */}
+                      <div style={{ padding: '10px 12px', background: 'rgba(30, 41, 59, 0.7)', borderRadius: '8px', borderLeft: '3px solid #f59e0b' }}>
+                        <strong style={{ color: '#fcd34d', display: 'block' }}>Step 3: Risk &amp; Proof Inspection</strong>
+                        <span style={{ color: '#cbd5e1' }}>Velocity check (&lt; 3 claims/30d), Pillow edge anomaly analysis, and EXIF authenticity.</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Expected Destination Desks */}
+                  <div className="panel" style={{ padding: '18px' }}>
+                    <h4 style={{ fontSize: '13px', fontWeight: 800, color: 'var(--navy-900)', margin: '0 0 10px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <BrainCircuit size={15} color="var(--primary-700)" />
+                      Expected Desk Routing
+                    </h4>
+
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '11px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 10px', background: 'var(--emerald-50)', borderRadius: '6px', border: '1px solid var(--emerald-100)' }}>
+                        <strong style={{ color: 'var(--emerald-800)' }}>🟢 CS-1 (Fast-Track)</strong>
+                        <span style={{ color: 'var(--emerald-700)' }}>1-Click Auto Payout</span>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 10px', background: 'var(--amber-50)', borderRadius: '6px', border: '1px solid var(--amber-100)' }}>
+                        <strong style={{ color: 'var(--amber-800)' }}>🟡 CS-2 (Exceptions)</strong>
+                        <span style={{ color: 'var(--amber-700)' }}>Photo Proof / Human Inspection</span>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 10px', background: 'var(--rose-50)', borderRadius: '6px', border: '1px solid var(--rose-100)' }}>
+                        <strong style={{ color: 'var(--rose-800)' }}>🔴 CS-3 (Denials)</strong>
+                        <span style={{ color: 'var(--rose-700)' }}>Policy Window Expired / Ineligible</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
               </div>
             </>
           )}

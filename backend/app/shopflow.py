@@ -23,7 +23,7 @@ def fetch_shopflow_context(ticket_id: str) -> Optional[Dict[str, Any]]:
     """Fetch complete claim context dossier from ShopFlow SoR."""
     url = f"{settings.shopflow_base_url}/api/ritos/refund-tickets/{ticket_id}/context"
     try:
-        with httpx.Client(timeout=10.0) as client:
+        with httpx.Client(timeout=2.0) as client:
             resp = client.get(url, headers=get_auth_headers())
             if resp.status_code == 200:
                 return resp.json()
@@ -41,7 +41,7 @@ def post_shopflow_decision(ticket_id: str, decision_payload: Dict[str, Any]) -> 
         **get_auth_headers(),
         "Idempotency-Key": idempotency_key
     }
-    with httpx.Client(timeout=10.0) as client:
+    with httpx.Client(timeout=2.5) as client:
         resp = client.post(url, json=decision_payload, headers=headers)
         if not resp.is_success:
             logger.error(f"ShopFlow decision callback failed ({resp.status_code}): {resp.text}")
@@ -58,7 +58,7 @@ def post_shopflow_notification(ticket_id: str, title: str, body: str) -> bool:
         "channel": "IN_APP"
     }
     try:
-        with httpx.Client(timeout=5.0) as client:
+        with httpx.Client(timeout=1.5) as client:
             resp = client.post(url, json=payload, headers=get_auth_headers())
             return resp.is_success
     except Exception as e:
@@ -69,7 +69,7 @@ def check_shopflow_health() -> Dict[str, Any]:
     """Test connection to ShopFlow instance."""
     url = f"{settings.shopflow_base_url}/api/health"
     try:
-        with httpx.Client(timeout=6.0) as client:
+        with httpx.Client(timeout=2.0) as client:
             resp = client.get(url)
             is_ok = resp.is_success
             data = {}

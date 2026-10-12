@@ -33,6 +33,11 @@ function LoginForm() {
         return;
       }
 
+      if (data.user) {
+        const { setStoredAuthUser } = await import("@/client/auth");
+        setStoredAuthUser(data.user);
+      }
+
       window.location.href = redirect;
     } catch {
       setError("An error occurred during sign in.");

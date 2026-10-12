@@ -11,6 +11,9 @@ class TicketCreate(BaseModel):
     claimed_amount: float = Field(gt=0, le=100000000)
     currency: str = Field(default="INR", min_length=3, max_length=3)
     description: str = Field(min_length=8, max_length=5000)
+    item_name: Optional[str] = None
+    item_category: Optional[str] = None
+    evidence_images: Optional[list] = None
 
 class CommentCreate(BaseModel):
     body: str = Field(min_length=1, max_length=5000)
