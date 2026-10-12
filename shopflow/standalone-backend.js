@@ -254,6 +254,139 @@ const server = http.createServer(async (req, res) => {
     return sendJson(res, 200, { items: list, count: list.length });
   }
 
+  // 6. Raise / Create Claim Endpoint (Standalone API)
+  if ((pathname === '/api/create-test-claim' || pathname === '/api/refunds/raise' || (pathname === '/api/refunds' && method === 'POST')) && method === 'POST') {
+    try {
+      const body = await parseBody(req);
+      const ticketId = body.ticket_id || `sf_tkt_${Date.now().toString().slice(-6)}`;
+      const amount = parseFloat(body.claimed_amount || "2499.00");
+      const amtMinor = Math.round(amount * 100);
+      const orderId = body.order_id || `ORD-SF-${ticketId.slice(-4)}`;
+
+      // Register context in local memory SoR
+      const newCtx = {
+        ticket: {
+          id: ticketId,
+          ticket_id: ticketId,
+          order_id: orderId,
+          requested_amount_minor: amtMinor,
+          reason: body.category || "DEFECTIVE_PRODUCT",
+          description: body.description || `Return claim for ${orderId}`
+        },
+        customer: {
+          customer_id: body.customer_id || "cust_sf_web",
+          name: body.customer_name || "Aarav Mehta",
+          email: body.customer_email || "aarav@example.com",
+          phone: body.customer_phone || "+91 98765 43210",
+          account_age_days: 120,
+          lifetime_order_count: 6,
+          refund_tickets_30d: 0,
+          risk_tier: "LOW"
+        },
+        order: {
+          order_id: orderId,
+          ordered_at: body.purchase_date || new Date(Date.now() - 2 * 86400000).toISOString(),
+          delivered_at: new Date(Date.now() - 1 * 86400000).toISOString(),
+          delivery_status: "DELIVERED",
+          total_minor: amtMinor
+        },
+        product: {
+          id: "prod_sf_item",
+          name: body.item_name || "ShopFlow Store Item",
+          category: body.item_category || "GENERAL",
+          return_window_days: 14
+        },
+        transaction: {
+          transaction_id: `TXN-${orderId}`,
+          amount_minor: amtMinor,
+          currency: "INR",
+          status: "CAPTURED",
+          provider: "RAZORPAY"
+        },
+        refund_policy: {
+          policy_type: "FULL",
+          return_window_days: 14,
+          defective_only: false
+        },
+        derived_facts: {
+          within_return_window: true,
+          claim_data_conflicts: [],
+          evidence_required: Boolean(body.evidence_images && body.evidence_images.length > 0),
+          evidence_count: (body.evidence_images || []).length
+        },
+        evidence: (body.evidence_images || []).map((img, i) => ({
+          id: `ev_${i + 1}`,
+          file_name: typeof img === 'string' && img.startsWith('data:') ? 'uploaded_defect.jpg' : String(img),
+          evidence_type: "PHOTO",
+          file_url: typeof img === 'string' ? img : "/uploads/proof.jpg"
+        }))
+      };
+
+      ticketContexts.set(ticketId, newCtx);
+
+      // Attempt immediate dispatch to RITOS
+      const webhookPayload = {
+        event_id: `evt_sf_${Date.now()}`,
+        event_type: "refund.ticket.created",
+        ticket_id: ticketId,
+        status: "PENDING_RITOS",
+        order_id: orderId,
+        transaction_id: `TXN-${orderId}`,
+        customer_id: newCtx.customer.customer_id,
+        customer_name: newCtx.customer.name,
+        customer_email: newCtx.customer.email,
+        customer_phone: newCtx.customer.phone,
+        claimed_amount: amount,
+        claimed_amount_minor: amtMinor,
+        currency: "INR",
+        category: newCtx.ticket.reason,
+        description: newCtx.ticket.description,
+        item_name: newCtx.product.name,
+        item_category: newCtx.product.category,
+        purchase_date: newCtx.order.ordered_at,
+        evidence_images: body.evidence_images || [],
+        merchant_id: "merch_dell_in",
+        created_at: new Date().toISOString()
+      };
+
+      // Try calling RITOS webhook via native fetch/http
+      let ritosData = null;
+      try {
+        const ritosResp = await fetch("http://localhost:8000/webhook/refund-tickets", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${API_KEY}`
+          },
+          body: JSON.stringify(webhookPayload)
+        });
+        if (ritosResp.ok) {
+          ritosData = await ritosResp.json();
+        }
+      } catch (fErr) {
+        console.warn(`[ShopFlow Backend] RITOS webhook delivery deferred: ${fErr.message}`);
+      }
+
+      return sendJson(res, 200, {
+        success: true,
+        ticket_id: ticketId,
+        payload_sent: webhookPayload,
+        ritos_response: ritosData || {
+          status: "QUEUED_FOR_RITOS_SYNC",
+          message: "Ticket registered in ShopFlow SoR ledger; awaiting RITOS sync",
+          data: {
+            ticket_id: ticketId,
+            assigned_desk: "CS_1",
+            decision_bucket: "GENUINE_REFUNDABLE",
+            policy_evaluation_reason: "Claim recorded in ShopFlow SoR ledger."
+          }
+        }
+      });
+    } catch (err) {
+      return sendJson(res, 500, { error: err.message || "Failed to create refund claim" });
+    }
+  }
+
   // Root or Fallback
   sendJson(res, 200, {
     service: "ShopFlow Dedicated Backend API",

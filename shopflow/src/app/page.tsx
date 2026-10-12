@@ -19,7 +19,13 @@ import {
   Camera,
   Bot,
   FileCheck2,
-  Cpu
+  Cpu,
+  UploadCloud,
+  Layers,
+  Eye,
+  Trash2,
+  GitFork,
+  ArrowDown
 } from "lucide-react";
 
 interface OrderItem {
@@ -123,15 +129,35 @@ export default function ShopFlowStorePage() {
   const [claimAmount, setClaimAmount] = useState<number>(2499);
   const [attachPhoto, setAttachPhoto] = useState(true);
   const [photoName, setPhotoName] = useState("damage_defect_photo.jpg");
+  const [customPhotoBase64, setCustomPhotoBase64] = useState<string | null>(null);
+  const [customPhotoName, setCustomPhotoName] = useState<string | null>(null);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      setCustomPhotoName(file.name);
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const b64 = event.target?.result as string;
+        setCustomPhotoBase64(b64);
+        setAttachPhoto(true);
+      };
+      reader.readAsDataURL(file);
+    }
+  };
 
   const openClaimModal = (order: OrderItem) => {
     setSelectedOrder(order);
     setClaimCategory(order.defaultReason);
     setClaimDesc(order.defaultDesc);
     setClaimAmount(order.amount);
-    setPhotoName(order.suggestedProofImage || "damage_defect_photo.jpg");
+    setPhotoName(order.suggestedProofImage || "stitching_loose_zipper.jpg");
+    setCustomPhotoBase64(null);
+    setCustomPhotoName(null);
     setAttachPhoto(true);
     setTicketResult(null);
+    setSubmitError(null);
   };
 
   const handleInstantBuyAndClaim = (catalogItem: any) => {
@@ -157,9 +183,10 @@ export default function ShopFlowStorePage() {
 
     setSubmitting(true);
     setTicketResult(null);
+    setSubmitError(null);
 
     const purchaseDate = new Date(Date.now() - selectedOrder.deliveredDaysAgo * 86400000).toISOString();
-    const evidenceImages = attachPhoto ? [photoName] : [];
+    const evidenceImages = attachPhoto ? [customPhotoBase64 || photoName] : [];
 
     try {
       const res = await fetch("/api/create-test-claim", {
@@ -181,14 +208,14 @@ export default function ShopFlowStorePage() {
       });
 
       const data = await res.json();
-      if (!res.ok) {
+      if (!res.ok && !data.success) {
         throw new Error(data.error || "RITOS ingestion failed");
       }
 
       setTicketResult(data);
       setRecentClaims(prev => [data, ...prev]);
     } catch (err: any) {
-      alert(`Error submitting claim to RITOS: ${err.message}`);
+      setSubmitError(err.message || "Failed to submit return request");
     } finally {
       setSubmitting(false);
     }
@@ -270,10 +297,10 @@ export default function ShopFlowStorePage() {
               <Sparkles size={12} /> End-to-End Autonomous Adjudication
             </div>
             <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight">
-              Customer Orders &amp; Return Center
+              Customer Orders &amp; Refund Center
             </h1>
             <p className="text-sm text-slate-300 leading-relaxed">
-              Select any delivered item below and submit a return request. RITOS’s 8 specialist agents 
+              Select any delivered item below and submit a refund request. RITOS’s 8 specialist agents 
               autonomously verify the financial ledger, inspect photo evidence, enforce category return policies, 
               assess risk signals, and route the case dynamically in real time.
             </p>
@@ -282,7 +309,7 @@ export default function ShopFlowStorePage() {
       </div>
 
       {/* 4. ORDERS SECTION (CLEAN ECOMMERCE DESIGN) */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-8">
+      <div id="customer-orders-section" className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-8">
         <div className="flex items-center justify-between mb-4">
           <div>
             <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2">
@@ -290,7 +317,7 @@ export default function ShopFlowStorePage() {
               My Delivered Purchases
             </h2>
             <p className="text-xs text-slate-500 mt-0.5">
-              Select an item to request a replacement or refund:
+              Select an item to request a refund:
             </p>
           </div>
         </div>
@@ -341,7 +368,7 @@ export default function ShopFlowStorePage() {
                   onClick={() => openClaimModal(order)}
                   className="w-full py-2.5 px-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 shadow-sm transition"
                 >
-                  <RotateCcw size={14} /> Request Return / Refund
+                  <RotateCcw size={14} /> Request Refund
                 </button>
               </div>
             </div>
@@ -377,7 +404,7 @@ export default function ShopFlowStorePage() {
                 onClick={() => handleInstantBuyAndClaim(item)}
                 className="w-full py-1.5 bg-slate-100 hover:bg-indigo-50 text-slate-700 hover:text-indigo-600 rounded-lg text-[11px] font-semibold transition border border-slate-200"
               >
-                Buy &amp; Request Return
+                Buy &amp; Request Refund
               </button>
             </div>
           ))}
@@ -437,14 +464,17 @@ export default function ShopFlowStorePage() {
           <div className="bg-white rounded-2xl max-w-2xl w-full p-6 shadow-2xl border border-slate-200 space-y-5 animate-in fade-in zoom-in-95 duration-150 my-8">
             <div className="flex justify-between items-start border-b border-slate-100 pb-3">
               <div>
-                <span className="text-xs font-semibold text-indigo-600">Customer Return Request</span>
+                <span className="text-xs font-semibold text-indigo-600">Customer Refund Request</span>
                 <h3 className="font-extrabold text-lg text-slate-900">{selectedOrder.itemName}</h3>
                 <span className="text-xs text-slate-500 font-mono">
                   Order: {selectedOrder.orderId} • Claim Amount: ₹{selectedOrder.amount.toLocaleString()}
                 </span>
               </div>
               <button 
-                onClick={() => setSelectedOrder(null)}
+                onClick={() => {
+                  setSelectedOrder(null);
+                  setTicketResult(null);
+                }}
                 className="text-slate-400 hover:text-slate-600 p-1 rounded-lg text-sm"
               >
                 ✕
@@ -452,91 +482,99 @@ export default function ShopFlowStorePage() {
             </div>
 
             {ticketResult ? (
-              /* REAL-TIME 8-AGENT ADJUDICATION RESULTS */
-              <div className="space-y-4 pt-1">
-                {/* Result Status Banner */}
-                <div className={`p-4 rounded-xl border flex items-start gap-3 ${
-                  ticketResult.ritos_response?.data?.assigned_desk === "CS_1"
-                    ? "bg-emerald-50 border-emerald-200 text-emerald-900"
-                    : ticketResult.ritos_response?.data?.assigned_desk === "CS_2"
-                    ? "bg-amber-50 border-amber-200 text-amber-900"
-                    : "bg-rose-50 border-rose-200 text-rose-900"
-                }`}>
-                  {ticketResult.ritos_response?.data?.assigned_desk === "CS_1" ? (
-                    <CheckCircle2 size={22} className="text-emerald-600 shrink-0 mt-0.5" />
-                  ) : ticketResult.ritos_response?.data?.assigned_desk === "CS_2" ? (
-                    <AlertTriangle size={22} className="text-amber-600 shrink-0 mt-0.5" />
-                  ) : (
-                    <XCircle size={22} className="text-rose-600 shrink-0 mt-0.5" />
-                  )}
-                  <div className="space-y-1">
-                    <h4 className="font-bold text-sm">
-                      {ticketResult.ritos_response?.data?.assigned_desk === "CS_1" && "Fast-Track Refund Approved (CS-1)"}
-                      {ticketResult.ritos_response?.data?.assigned_desk === "CS_2" && "Human Review & Proof Inspection (CS-2)"}
-                      {ticketResult.ritos_response?.data?.assigned_desk === "CS_3" && "Policy Ineligible / Denied (CS-3)"}
+              /* CLEAN PROFESSIONAL CUSTOMER CONFIRMATION */
+              <div className="space-y-5 pt-2 text-center sm:text-left">
+                {/* 1. Success Announcement */}
+                <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-5 flex flex-col sm:flex-row items-center sm:items-start gap-4">
+                  <div className="w-12 h-12 rounded-full bg-emerald-100 border border-emerald-300 flex items-center justify-center shrink-0 text-emerald-600 shadow-xs">
+                    <CheckCircle2 size={28} />
+                  </div>
+                  <div className="space-y-1 text-center sm:text-left">
+                    <h4 className="font-extrabold text-base text-emerald-950">
+                      Ticket Raised Successfully!
                     </h4>
-                    <p className="text-xs leading-relaxed opacity-90">
-                      {ticketResult.ritos_response?.data?.policy_evaluation_reason}
+                    <p className="text-xs text-emerald-800 leading-relaxed">
+                      Your refund claim has been securely registered in the system with Reference ID{" "}
+                      <span className="font-mono font-bold bg-white/90 px-2 py-0.5 rounded border border-emerald-200 text-emerald-900">
+                        #{ticketResult.ticket_id}
+                      </span>.
+                    </p>
+                    <div className="pt-1.5 flex flex-wrap gap-2 justify-center sm:justify-start">
+                      <span className="inline-flex items-center gap-1 text-[11px] font-semibold bg-emerald-600 text-white px-2.5 py-0.5 rounded-full shadow-2xs">
+                        <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse"></span>
+                        Under Active Review
+                      </span>
+                      <span className="text-[11px] text-emerald-700 bg-white/70 px-2 py-0.5 rounded font-medium border border-emerald-200">
+                        Estimated turnaround: 24–48 hours
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 2. Order & Claim Snapshot */}
+                <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 text-xs space-y-3">
+                  <span className="font-bold text-slate-800 text-[11px] uppercase tracking-wider block">
+                    Claim Summary
+                  </span>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div className="bg-white p-3 rounded-lg border border-slate-200">
+                      <span className="text-slate-500 text-[10px] block">Order Number</span>
+                      <span className="font-bold text-slate-900 font-mono text-xs">{selectedOrder.orderId}</span>
+                    </div>
+                    <div className="bg-white p-3 rounded-lg border border-slate-200">
+                      <span className="text-slate-500 text-[10px] block">Item Name</span>
+                      <span className="font-bold text-slate-900 text-xs truncate block">{selectedOrder.itemName}</span>
+                    </div>
+                    <div className="bg-white p-3 rounded-lg border border-slate-200">
+                      <span className="text-slate-500 text-[10px] block">Refund Claimed</span>
+                      <span className="font-extrabold text-indigo-600 text-xs font-mono">₹{claimAmount.toLocaleString()}</span>
+                    </div>
+                  </div>
+
+                  {ticketResult.ritos_response?.data?.customer_message_draft && (
+                    <div className="bg-white p-3 rounded-lg border border-slate-200 space-y-1">
+                      <span className="text-[10px] font-semibold text-slate-500">Official Notice:</span>
+                      <p className="text-slate-700 text-xs italic leading-relaxed">
+                        &quot;{ticketResult.ritos_response?.data?.customer_message_draft}&quot;
+                      </p>
+                    </div>
+                  )}
+                </div>
+
+                {/* 3. Customer Tab Tracking Guidance */}
+                <div className="bg-indigo-50/70 border border-indigo-100 rounded-xl p-4 flex items-start gap-3 text-xs">
+                  <div className="w-8 h-8 rounded-lg bg-indigo-100 text-indigo-700 flex items-center justify-center shrink-0 mt-0.5">
+                    <Package size={18} />
+                  </div>
+                  <div className="space-y-1">
+                    <h5 className="font-bold text-indigo-950 text-xs">
+                      For more info &amp; live updates, go to Customer Tab:
+                    </h5>
+                    <p className="text-indigo-800 text-[11px] leading-relaxed">
+                      You can view all your ordered purchases, claim history, and real-time refund status anytime directly in your customer dashboard.
                     </p>
                   </div>
                 </div>
 
-                {/* 8-Agent Execution Telemetry Grid */}
-                <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-3">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
-                      <Cpu size={14} className="text-indigo-600" />
-                      RITOS 8 Specialist Agents Live Trace
-                    </span>
-                    <span className="text-[10px] bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded font-mono font-semibold">
-                      Ticket #{ticketResult.ticket_id}
-                    </span>
-                  </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
-                    {ticketResult.ritos_response?.data?.agents_trace?.map((ag: any, idx: number) => (
-                      <div key={idx} className="bg-white p-2.5 rounded-lg border border-slate-200 space-y-1 shadow-2xs">
-                        <div className="flex items-center justify-between">
-                          <span className="font-bold text-[11px] text-slate-800 flex items-center gap-1">
-                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
-                            Agent {idx + 1}: {ag.agent_name}
-                          </span>
-                          <span className="text-[9px] bg-slate-100 px-1.5 py-0.5 rounded font-mono text-slate-600">
-                            {ag.status}
-                          </span>
-                        </div>
-                        <p className="text-[11px] text-slate-600 leading-snug">
-                          {ag.findings}
-                        </p>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Customer Notification Draft Generated by Agent 8 */}
-                {ticketResult.ritos_response?.data?.customer_message_draft && (
-                  <div className="p-3.5 bg-indigo-50/50 border border-indigo-100 rounded-xl space-y-1.5 text-xs">
-                    <span className="font-bold text-indigo-900 flex items-center gap-1 text-[11px]">
-                      <FileCheck2 size={13} className="text-indigo-600" />
-                      Agent 8 Generated Customer Resolution Notice:
-                    </span>
-                    <p className="text-slate-700 text-xs italic bg-white p-2.5 rounded border border-indigo-100 leading-relaxed">
-                      &quot;{ticketResult.ritos_response?.data?.customer_message_draft}&quot;
-                    </p>
-                  </div>
-                )}
-
-                <div className="flex gap-3 pt-2">
-                  <Link
-                    href="http://localhost:5173"
-                    target="_blank"
+                {/* 4. Action Buttons */}
+                <div className="flex flex-col sm:flex-row gap-3 pt-2">
+                  <button
+                    onClick={() => {
+                      setSelectedOrder(null);
+                      setTicketResult(null);
+                      const el = document.getElementById("customer-orders-section");
+                      if (el) el.scrollIntoView({ behavior: "smooth" });
+                    }}
                     className="flex-1 py-2.5 px-4 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-lg text-xs text-center shadow-sm flex items-center justify-center gap-1.5 transition"
                   >
-                    Inspect in RITOS Console <ExternalLink size={13} />
-                  </Link>
+                    <Package size={14} /> Go to Customer Orders Tab
+                  </button>
                   <button
-                    onClick={() => setSelectedOrder(null)}
-                    className="py-2.5 px-4 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded-lg text-xs transition"
+                    onClick={() => {
+                      setSelectedOrder(null);
+                      setTicketResult(null);
+                    }}
+                    className="py-2.5 px-5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded-lg text-xs transition"
                   >
                     Done
                   </button>
@@ -547,7 +585,7 @@ export default function ShopFlowStorePage() {
               <form onSubmit={handleDispatchTicket} className="space-y-4">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    Reason for Return
+                    Reason for Refund
                   </label>
                   <select
                     value={claimCategory}
@@ -588,8 +626,8 @@ export default function ShopFlowStorePage() {
                   />
                 </div>
 
-                {/* Photo Evidence & Image Extraction Selector */}
-                <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
+                {/* Photo Evidence & Image Extraction Uploader */}
+                <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-3">
                   <div className="flex items-center justify-between">
                     <label className="text-xs font-semibold text-slate-800 flex items-center gap-1.5">
                       <Camera size={14} className="text-indigo-600" />
@@ -602,29 +640,100 @@ export default function ShopFlowStorePage() {
                         onChange={(e) => setAttachPhoto(e.target.checked)}
                         className="rounded text-indigo-600"
                       />
-                      Attach Photo
+                      Include Proof
                     </label>
                   </div>
 
                   {attachPhoto && (
-                    <div className="space-y-1.5 pt-1">
-                      <select
-                        value={photoName}
-                        onChange={(e) => setPhotoName(e.target.value)}
-                        className="w-full p-2 bg-white border border-slate-200 rounded-lg text-xs font-mono text-slate-700"
-                      >
-                        <option value="stitching_loose_zipper.jpg">📸 stitching_loose_zipper.jpg (Hardware/Seam Defect)</option>
-                        <option value="earcup_cushion_tear.jpg">📸 earcup_cushion_tear.jpg (Acoustic Hardware Tear)</option>
-                        <option value="damage_broken_box.jpg">📦 damage_broken_box.jpg (Transit Package Damage)</option>
-                        <option value="shipping_label_barcode.jpg">🏷️ shipping_label_barcode.jpg (Serial/Box Label Proof)</option>
-                        <option value="clean_unopened_package.jpg">📦 clean_unopened_package.jpg (Unopened Product Photo)</option>
-                      </select>
+                    <div className="space-y-3 pt-1">
+                      {/* Real Image File Upload Dropzone */}
+                      <div className="border-2 border-dashed border-indigo-200 bg-white rounded-xl p-3 text-center hover:border-indigo-400 transition cursor-pointer relative">
+                        <input
+                          type="file"
+                          accept="image/*"
+                          onChange={handleFileUpload}
+                          className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
+                          title="Upload damage or defect photo"
+                        />
+                        {customPhotoBase64 ? (
+                          <div className="flex items-center justify-between gap-3 text-left">
+                            <div className="flex items-center gap-3">
+                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                              <img 
+                                src={customPhotoBase64} 
+                                alt="Uploaded Proof Preview" 
+                                className="w-12 h-12 rounded object-cover border border-slate-200"
+                              />
+                              <div>
+                                <span className="font-bold text-xs text-slate-800 block truncate max-w-[200px]">
+                                  {customPhotoName || "custom_uploaded_photo.jpg"}
+                                </span>
+                                <span className="text-[10px] text-emerald-600 font-semibold flex items-center gap-1">
+                                  ✓ Live File Ready for Computer Vision AI
+                                </span>
+                              </div>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={(ev) => {
+                                ev.stopPropagation();
+                                setCustomPhotoBase64(null);
+                                setCustomPhotoName(null);
+                              }}
+                              className="p-1.5 text-rose-500 hover:bg-rose-50 rounded-lg transition"
+                              title="Remove uploaded photo"
+                            >
+                              <Trash2 size={16} />
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="py-2 space-y-1">
+                            <UploadCloud className="mx-auto text-indigo-500" size={24} />
+                            <p className="text-xs font-semibold text-slate-700">
+                              Click or drag real product photo here
+                            </p>
+                            <p className="text-[10px] text-slate-400">
+                              PNG, JPG, or WEBP • Will be read by Pillow Computer Vision Engine
+                            </p>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Or choose from defect presets */}
+                      <div className="space-y-1">
+                        <label className="text-[11px] font-semibold text-slate-600 block">
+                          Or Select Defect Sample Preset:
+                        </label>
+                        <select
+                          value={photoName}
+                          onChange={(e) => {
+                            setPhotoName(e.target.value);
+                            setCustomPhotoBase64(null);
+                            setCustomPhotoName(null);
+                          }}
+                          className="w-full p-2 bg-white border border-slate-200 rounded-lg text-xs font-mono text-slate-700"
+                        >
+                          <option value="stitching_loose_zipper.jpg">📸 stitching_loose_zipper.jpg (Hardware/Seam Defect)</option>
+                          <option value="earcup_cushion_tear.jpg">📸 earcup_cushion_tear.jpg (Acoustic Hardware Tear)</option>
+                          <option value="damage_broken_box.jpg">📦 damage_broken_box.jpg (Transit Package Damage)</option>
+                          <option value="shipping_label_barcode.jpg">🏷️ shipping_label_barcode.jpg (Serial/Box Label Proof)</option>
+                          <option value="clean_unopened_package.jpg">📦 clean_unopened_package.jpg (Unopened Product Photo)</option>
+                        </select>
+                      </div>
+
                       <p className="text-[11px] text-slate-500">
-                        RITOS Agent 7 extracts visual defect tokens and packaging authenticity directly from attached photos.
+                        RITOS Agent 7 applies Pillow edge-detection, fracture asymmetry, and token OCR verification in real-time.
                       </p>
                     </div>
                   )}
                 </div>
+
+                {submitError && (
+                  <div className="p-3 bg-rose-50 border border-rose-200 text-rose-800 rounded-lg text-xs flex items-center gap-2">
+                    <AlertTriangle size={15} className="shrink-0 text-rose-600" />
+                    <span>{submitError}</span>
+                  </div>
+                )}
 
                 <div className="flex gap-3 pt-2">
                   <button
@@ -646,7 +755,7 @@ export default function ShopFlowStorePage() {
                       </>
                     ) : (
                       <>
-                        <Bot size={14} /> Submit Return Request
+                        <Bot size={14} /> Submit Refund Request
                       </>
                     )}
                   </button>

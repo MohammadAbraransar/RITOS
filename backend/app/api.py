@@ -128,9 +128,18 @@ def create_ticket(payload: TicketCreate, db: Session=Depends(get_db), user: User
        claimed_amount=payload.claimed_amount,currency=payload.currency.upper(),description=payload.description,
        category=triage["category"],confidence=triage["confidence"],priority=priority,
        queue=ROUTES.get(triage["category"],"Manual Triage"),status=TicketStatus.TRIAGED.value,
+       item_name=getattr(payload, "item_name", None) or (result["transaction"].order_id if result["transaction"] else "Customer Item"),
+       item_category=getattr(payload, "item_category", None) or "GENERAL",
+       customer_name=user.full_name or "Portal Customer",
+       customer_email=user.email,
        payment_verification=result["status"],refund_status=(result["transaction"].payment_status if result["transaction"] else "UNKNOWN"),
        duplicate_of_id=duplicate.id if duplicate else None,recommended_action=triage["recommended_action"],
-       classification_evidence={"matched_terms":triage["evidence"],"classifier":"rules-v1","transaction_check":result["status"]})
+       classification_evidence={
+           "matched_terms":triage["evidence"],
+           "classifier":"rules-v1",
+           "transaction_check":result["status"],
+           "evidence_images": getattr(payload, "evidence_images", []) or []
+       })
     db.add(t); db.flush()
     record_event(db,t.id,user.id,"TICKET_CREATED",{"ticket_number":t.ticket_number})
     record_event(db,t.id,None,"TRIAGE_COMPLETED",{"category":t.category,"priority":t.priority,"queue":t.queue,"duplicate_of_id":t.duplicate_of_id})

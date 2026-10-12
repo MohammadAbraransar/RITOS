@@ -30,6 +30,7 @@ echo Starting all 3 services in dedicated terminal windows...
 echo.
 
 :: 1. RITOS Frontend (Port 5173)
+<<<<<<< HEAD
 echo [1/3] Launching RITOS Frontend (Port 5173)...
 start "1. RITOS Frontend (Port 5173)" cmd /k "cd /d ""%ROOT_DIR%frontend"" && npm run dev"
 
@@ -41,6 +42,22 @@ start "2. RITOS Backend (Port 8000)" cmd /k "cd /d ""%ROOT_DIR%backend"" && call
 echo [3/3] Launching ShopFlow Storefront (Port 3000)...
 start "3. ShopFlow Storefront (Port 3000)" cmd /k "cd /d ""%ROOT_DIR%shopflow"" && npm run dev -- -p 3000"
 
+=======
+echo [1/4] Launching RITOS Frontend (Port 5173)...
+start "1. RITOS Frontend (Port 5173)" cmd /k "cd /d "%ROOT_DIR%frontend" && npm run dev"
+
+:: 2. RITOS Backend (Port 8000)
+echo [2/4] Launching RITOS Backend (Port 8000)...
+start "2. RITOS Backend (Port 8000)" cmd /k "cd /d "%ROOT_DIR%backend" && "%ROOT_DIR%.venv\Scripts\python.exe" -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+
+:: 3. ShopFlow Frontend (Port 3000)
+echo [3/4] Launching ShopFlow Storefront (Port 3000)...
+start "3. ShopFlow Storefront (Port 3000)" cmd /k "cd /d "%ROOT_DIR%shopflow" && npm run dev -- -p 3000"
+
+:: 4. ShopFlow Backend (Port 3001)
+echo [4/4] Launching ShopFlow Backend API (Port 3001)...
+start "4. ShopFlow Backend API (Port 3001)" cmd /k "cd /d "%ROOT_DIR%shopflow" && node standalone-backend.js"
+>>>>>>> e1de4905cacc8e83ae5261d9468d857a9233cbff
 
 echo.
 echo =====================================================================

@@ -1,0 +1,17 @@
+### FINAL PRODUCTION ENGINEERING DIRECTIVE
+
+Do not optimize for the number of features, AI agents, or lines of code. Optimize for end-to-end correctness, financial integrity, evidence quality, security, explainability, and operational recoverability.
+
+Before implementing new features, inspect the existing RITOS repository and produce a dependency-aware implementation plan. Preserve working functionality and existing Git history.
+
+Implement the system as a coherent application with explicit contracts between the frontend, API, database, background workers, vision services, payment gateways, and accounting ledger.
+
+Enforce a formal refund state machine, balance reservations, concurrency-safe settlement, four-eyes approval, idempotent event processing, immutable audit history, and reconciliation of uncertain payment outcomes.
+
+Require every product-damage decision to connect the customer's stated defect to the correct purchased product and relevant visual evidence. If the system cannot reliably establish identity, defect visibility, or evidence sufficiency, escalate instead of inventing certainty.
+
+Use real integrations wherever configured. Clearly distinguish implemented integrations, sandbox integrations, unavailable integrations, and unimplemented functionality. Never simulate a production success.
+
+Work incrementally, run actual verification commands, fix regressions, and maintain a live list of completed, failed, blocked, and pending requirements. Do not declare the system complete while critical release gates remain unverified.
+
+Finish with an evidence-based release report, deployment instructions, known limitations, and a prioritized list of remaining blockers.
