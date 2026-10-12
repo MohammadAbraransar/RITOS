@@ -92,7 +92,13 @@ export const api = {
     request<any>(`/refunds/${id}/approve`, { method: 'POST', body: JSON.stringify({ reason }) }),
   rejectRefund: (id: string, reason: string) =>
     request<any>(`/refunds/${id}/reject`, { method: 'POST', body: JSON.stringify({ reason }) }),
-  executeRefund: (id: string) => request<any>(`/refunds/${id}/execute`, { method: 'POST' }),
+  executeRefund: (id: string, idempotencyKey?: string) =>
+    request<any>(`/refunds/${id}/execute`, {
+      method: 'POST',
+      headers: { 'Idempotency-Key': idempotencyKey || `exec-${id}` }
+    }),
+  reconcileRefund: (id: string) =>
+    request<any>(`/refunds/${id}/reconcile`, { method: 'POST' }),
   audit: () => request<any[]>('/admin/audit-logs'),
   users: () => request<User[]>('/admin/users'),
   automationSummary: () => request<any>('/automation/summary'),
@@ -131,5 +137,22 @@ export const api = {
   authorizePayout: (ticketId: string) =>
     request<any>(`/tickets/${ticketId}/authorize-payout`, {
       method: 'POST'
-    })
+    }),
+  ledgerAccounts: () => request<any[]>('/finance/ledger/accounts'),
+  ledgerJournals: () => request<any[]>('/finance/ledger/journals'),
+  settlements: () => request<any[]>('/finance/settlements'),
+  uploadEvidence: (ticket_id: string, file_name: string, file_type: string, base64_data: string) =>
+    request<any>('/evidence/upload', {
+      method: 'POST',
+      body: JSON.stringify({ ticket_id, file_name, file_type, base64_data })
+    }),
+  verifyEvidence: (payload: any) =>
+    request<any>('/evidence/verify', {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    }),
+  products: () => request<any[]>('/catalog/products'),
+  policies: () => request<any[]>('/policies'),
+  healthReadiness: () => request<any>('/health/readiness')
 }
+

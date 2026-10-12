@@ -218,3 +218,177 @@ class AuditLog(Base):
     entity_id: Mapped[str]=mapped_column(String(80), index=True)
     details: Mapped[dict]=mapped_column(JSON, default=dict)
     created_at: Mapped[datetime]=mapped_column(DateTime(timezone=True), default=now_utc)
+
+class AccountType(str, enum.Enum):
+    ASSET = "ASSET"
+    LIABILITY = "LIABILITY"
+    EQUITY = "EQUITY"
+    REVENUE = "REVENUE"
+    EXPENSE = "EXPENSE"
+
+class EntryType(str, enum.Enum):
+    DEBIT = "DEBIT"
+    CREDIT = "CREDIT"
+
+class JournalStatus(str, enum.Enum):
+    POSTED = "POSTED"
+    REVERSED = "REVERSED"
+
+class EvidenceLifecycle(str, enum.Enum):
+    UPLOADED = "UPLOADED"
+    VALIDATED = "VALIDATED"
+    IDENTITY_CHECKED = "IDENTITY_CHECKED"
+    DEFECT_CHECKED = "DEFECT_CHECKED"
+    ADJUDICATED = "ADJUDICATED"
+    REJECTED = "REJECTED"
+    INCONCLUSIVE = "INCONCLUSIVE"
+    AWAITING_CUSTOMER = "AWAITING_CUSTOMER"
+    AWAITING_REVIEW = "AWAITING_REVIEW"
+    PROCESSING_FAILED = "PROCESSING_FAILED"
+
+class LedgerAccount(Base):
+    __tablename__ = "ledger_accounts"
+    id: Mapped[str] = mapped_column(String(60), primary_key=True)
+    name: Mapped[str] = mapped_column(String(120))
+    account_type: Mapped[str] = mapped_column(String(20), default=AccountType.LIABILITY.value)
+    currency: Mapped[str] = mapped_column(String(3), default="INR")
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    entries: Mapped[list["LedgerEntry"]] = relationship(back_populates="account")
+
+class LedgerJournal(Base):
+    """Immutable double-entry journal entry. Debits MUST equal credits."""
+    __tablename__ = "ledger_journals"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    refund_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("refund_requests.id"), nullable=True, index=True)
+    ticket_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("tickets.id"), nullable=True, index=True)
+    transaction_id: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
+    currency: Mapped[str] = mapped_column(String(3), default="INR")
+    idempotency_key: Mapped[str] = mapped_column(String(100), unique=True, index=True)
+    posted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    posted_by_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default=JournalStatus.POSTED.value)
+    description: Mapped[str] = mapped_column(Text)
+    entries: Mapped[list["LedgerEntry"]] = relationship(back_populates="journal", cascade="all, delete-orphan")
+
+class LedgerEntry(Base):
+    """Individual debit or credit leg of a double-entry journal, stored in minor units."""
+    __tablename__ = "ledger_entries"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    journal_id: Mapped[str] = mapped_column(ForeignKey("ledger_journals.id"), index=True)
+    account_id: Mapped[str] = mapped_column(ForeignKey("ledger_accounts.id"), index=True)
+    entry_type: Mapped[str] = mapped_column(String(10)) # DEBIT or CREDIT
+    amount_minor: Mapped[int] = mapped_column(Integer) # Integer minor units (paise / cents)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    journal: Mapped["LedgerJournal"] = relationship(back_populates="entries")
+    account: Mapped["LedgerAccount"] = relationship(back_populates="entries")
+
+class GatewaySettlementAttempt(Base):
+    """Tracks gateway execution attempts, timeouts, idempotency, and reconciliation."""
+    __tablename__ = "gateway_settlement_attempts"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    refund_id: Mapped[str] = mapped_column(ForeignKey("refund_requests.id"), index=True)
+    provider: Mapped[str] = mapped_column(String(40))
+    provider_reference: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    status: Mapped[str] = mapped_column(String(40), default="INITIATED")
+    amount_minor: Mapped[int] = mapped_column(Integer)
+    currency: Mapped[str] = mapped_column(String(3), default="INR")
+    idempotency_key: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    raw_response: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, onupdate=now_utc)
+
+class IdempotencyRecord(Base):
+    """Persisted request fingerprinting and replay cache."""
+    __tablename__ = "idempotency_records"
+    id: Mapped[str] = mapped_column(String(120), primary_key=True) # idempotency key
+    fingerprint_hash: Mapped[str] = mapped_column(String(64))
+    route: Mapped[str] = mapped_column(String(120))
+    status_code: Mapped[int] = mapped_column(Integer)
+    response_payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+class Product(Base):
+    """Authoritative product catalog for model matching and evidence validation."""
+    __tablename__ = "products"
+    sku: Mapped[str] = mapped_column(String(80), primary_key=True)
+    name: Mapped[str] = mapped_column(String(150))
+    category: Mapped[str] = mapped_column(String(50), default="GENERAL")
+    brand: Mapped[str] = mapped_column(String(80), default="")
+    model: Mapped[str] = mapped_column(String(80), default="")
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    price_minor: Mapped[int] = mapped_column(Integer, default=0)
+    currency: Mapped[str] = mapped_column(String(3), default="INR")
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    variants: Mapped[list["ProductVariant"]] = relationship(back_populates="product", cascade="all, delete-orphan")
+    reference_images: Mapped[list["ProductReferenceImage"]] = relationship(back_populates="product", cascade="all, delete-orphan")
+
+class ProductVariant(Base):
+    __tablename__ = "product_variants"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    product_sku: Mapped[str] = mapped_column(ForeignKey("products.sku"), index=True)
+    sku: Mapped[str] = mapped_column(String(80), unique=True, index=True)
+    color: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    size: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    variant_name: Mapped[str] = mapped_column(String(120))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    product: Mapped["Product"] = relationship(back_populates="variants")
+
+class ProductReferenceImage(Base):
+    """Merchant catalog reference photographs for visual identity and seam verification."""
+    __tablename__ = "product_reference_images"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    product_sku: Mapped[str] = mapped_column(ForeignKey("products.sku"), index=True)
+    variant_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    image_url: Mapped[str] = mapped_column(String(255))
+    view_type: Mapped[str] = mapped_column(String(40), default="HERO") # HERO, DETAIL, LABEL, SEAM, HANDLE
+    description: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    product: Mapped["Product"] = relationship(back_populates="reference_images")
+
+class EvidenceFile(Base):
+    """Auditable evidence lifecycle tracking with cryptographic hash and verification status."""
+    __tablename__ = "evidence_files"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    ticket_id: Mapped[str] = mapped_column(ForeignKey("tickets.id"), index=True)
+    file_name: Mapped[str] = mapped_column(String(255))
+    file_type: Mapped[str] = mapped_column(String(50))
+    file_size_bytes: Mapped[int] = mapped_column(Integer, default=0)
+    sha256_hash: Mapped[str] = mapped_column(String(64), index=True)
+    storage_path: Mapped[str] = mapped_column(String(255))
+    lifecycle_status: Mapped[str] = mapped_column(String(40), default=EvidenceLifecycle.UPLOADED.value)
+    verification_result: Mapped[dict] = mapped_column(JSON, default=dict)
+    tamper_flags: Mapped[list] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+class ReturnPolicy(Base):
+    """Versioned refund policy rules for automated deterministic policy evaluation."""
+    __tablename__ = "return_policies"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    category: Mapped[str] = mapped_column(String(50), index=True)
+    policy_version: Mapped[int] = mapped_column(Integer, default=1)
+    return_window_days: Mapped[int] = mapped_column(Integer, default=14)
+    requires_serial: Mapped[bool] = mapped_column(Boolean, default=False)
+    requires_tags: Mapped[bool] = mapped_column(Boolean, default=False)
+    allow_damaged_exceptions: Mapped[bool] = mapped_column(Boolean, default=True)
+    policy_summary: Mapped[str] = mapped_column(Text)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+class CarrierShipment(Base):
+    """Carrier tracking and milestone delivery verification."""
+    __tablename__ = "carrier_shipments"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    order_id: Mapped[str] = mapped_column(String(80), index=True)
+    carrier_name: Mapped[str] = mapped_column(String(60))
+    tracking_number: Mapped[str] = mapped_column(String(100), unique=True, index=True)
+    status: Mapped[str] = mapped_column(String(40), default="IN_TRANSIT")
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    proof_of_delivery_ref: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    destination_postal_code: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    weight_grams: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    carrier_events: Mapped[list] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)

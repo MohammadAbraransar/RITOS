@@ -86,3 +86,21 @@ class EcommerceTicketIn(BaseModel):
     purchase_date: Optional[str] = None
     description: str = Field(min_length=5, max_length=5000)
 
+class EvidenceUploadIn(BaseModel):
+    ticket_id: str
+    file_name: str = Field(min_length=1, max_length=255)
+    file_type: str = Field(default="image/jpeg", max_length=50)
+    base64_data: str = Field(min_length=10)
+
+class EvidenceVerifyIn(BaseModel):
+    ticket_id: Optional[str] = None
+    claimed_defect: str = Field(min_length=3, max_length=1000)
+    product_sku: Optional[str] = None
+    product_name: Optional[str] = None
+    product_category: Optional[str] = "GENERAL"
+    evidence_items: list = Field(default_factory=list)
+
+class SettlementExecuteIn(BaseModel):
+    provider: Optional[str] = "SANDBOX"
+
+

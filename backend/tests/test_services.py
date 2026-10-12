@@ -14,11 +14,11 @@ def test_duplicate_payment_distinct_category():
 def test_refund_key_stable():
     assert refund_key("ticket-1","100.00","INR")==refund_key("ticket-1",100,"INR")
 
-def test_agent_registry_is_eight_specialists_plus_orchestrator():
+def test_agent_registry_is_nine_specialists_plus_orchestrator():
     from app.agents import AGENTS, ORCHESTRATOR
-    assert len(AGENTS) == 8
+    assert len(AGENTS) == 9
     assert ORCHESTRATOR["id"] == "central_orchestrator"
-    assert len({agent["id"] for agent in AGENTS}) == 8
+    assert len({agent["id"] for agent in AGENTS}) == 9
 
 
 def test_three_bucket_evaluation_genuine():

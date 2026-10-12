@@ -19,11 +19,11 @@ def login(email):
     return {"Authorization": f"Bearer {r.json()['access_token']}"}
 
 
-def store_context(ticket_id, *, amount_minor=149900, reason="PRODUCT_DEFECTIVE", within=True, evidence_required=False,
-                  evidence=(), days=3, conflicts=(), tickets_30d=1):
+def store_context(ticket_id, *, amount_minor=149900, reason="CHANGED_MIND", within=True, evidence_required=False,
+                  evidence=(), days=3, conflicts=(), tickets_30d=1, description="Not what I expected"):
     order_id = f"ORD-{ticket_id}"
     return {
-        "ticket": {"ticket_id": ticket_id, "reason": reason, "description": "Stopped charging after two days",
+        "ticket": {"ticket_id": ticket_id, "reason": reason, "description": description,
                    "requested_amount_minor": amount_minor},
         "customer": {"customer_id": "CUS-1", "name": "Aarav", "email": "aarav@example.com",
                      "refund_tickets_30d": tickets_30d, "account_age_days": 400},
@@ -33,7 +33,7 @@ def store_context(ticket_id, *, amount_minor=149900, reason="PRODUCT_DEFECTIVE",
         "transaction": {"transaction_id": f"TXN-{ticket_id}", "payment_status": "PAID", "payment_id": "PAY-1"},
         "refund_policy": {"return_window_days": 10, "policy_version": 2},
         "refund_ledger": {"transaction_amount_minor": amount_minor, "already_refunded_minor": 0},
-        "evidence": [{"filename": f} for f in evidence],
+        "evidence": [{"filename": f, "url": f"http://store.test/evidence/{f}"} for f in evidence],
         "derived_facts": {"within_return_window": within, "days_since_delivery": days, "evidence_required": evidence_required,
                           "evidence_count": len(evidence), "claim_data_conflicts": list(conflicts)},
     }
@@ -82,13 +82,66 @@ def test_store_claim_missing_required_evidence_waits_for_proof(store):
     assert outbox_kinds(data["ritos_ticket_id"]) == ["STATUS", "NOTIFICATION"]
     with SessionLocal() as db:
         run = db.scalar(select(WorkflowRun).where(WorkflowRun.ticket_id == data["ritos_ticket_id"]))
-        assert run.status == "WAITING_HUMAN" and len(run.steps) == 8
+        assert run.status == "WAITING_HUMAN" and len(run.steps) == 9
 
 
-def test_store_claim_with_evidence_attached_is_not_held(store):
-    store["SF-EVID"] = store_context("SF-EVID", reason="PRODUCT_DAMAGED", evidence_required=True, evidence=["damage-headphones.jpg"])
+def _png_bytes():
+    """TEST DATA: a generated textured image, never presented as customer evidence."""
+    import io, random
+    from PIL import Image
+    rnd = random.Random(3)
+    img = Image.new("RGB", (320, 320))
+    img.putdata([(rnd.randrange(256), rnd.randrange(256), rnd.randrange(256)) for _ in range(320 * 320)])
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+class _VisionDouble:
+    """Test double for the vision provider (fixed verdicts) to exercise routing."""
+    def __init__(self, identity, defect):
+        self.identity, self.defect = identity, defect
+
+    def assess(self, images, product, claimed_defect, reference_images):
+        return {"identity_status": self.identity, "defect_status": self.defect, "observed_defects": [claimed_defect],
+                "raw_scores": {"test_double": True}, "model_version": "test-double"}
+
+
+def test_store_photo_claim_verified_by_vision_is_auto_approved(store, monkeypatch):
+    monkeypatch.setattr(shopflow, "fetch_store_evidence", lambda url: _png_bytes())
+    monkeypatch.setattr("app.vision.get_vision_provider", lambda: _VisionDouble("verified", "verified"))
+    store["SF-EVID"] = store_context("SF-EVID", reason="PRODUCT_DAMAGED", evidence_required=True,
+                                     evidence=["earcup.jpg"], description="Ear cushion torn")
     data = send_event("SF-EVID")
     assert data["assigned_desk"] == "CS_1" and data["next_action"] == "AUTO_APPROVE"
+
+
+def test_store_photo_claim_without_vision_goes_to_review(store, monkeypatch):
+    monkeypatch.setattr(shopflow, "fetch_store_evidence", lambda url: _png_bytes())
+    monkeypatch.setattr("app.vision.get_vision_provider", lambda: None)
+    store["SF-NOVIS"] = store_context("SF-NOVIS", reason="PRODUCT_DAMAGED", evidence_required=True,
+                                      evidence=["earcup2.jpg"], description="Ear cushion torn")
+    data = send_event("SF-NOVIS")
+    assert data["assigned_desk"] == "CS_2" and data["next_action"] == "MANUAL_REVIEW"
+    assert data["visual_evidence"]["verification_status"] == "inconclusive"
+
+
+def test_store_photo_of_different_product_asks_for_identity_proof(store, monkeypatch):
+    monkeypatch.setattr(shopflow, "fetch_store_evidence", lambda url: _png_bytes())
+    monkeypatch.setattr("app.vision.get_vision_provider", lambda: _VisionDouble("mismatch", "verified"))
+    store["SF-MISM"] = store_context("SF-MISM", reason="PRODUCT_DAMAGED", evidence_required=True,
+                                     evidence=["other.jpg"], description="Cracked casing")
+    data = send_event("SF-MISM")
+    assert data["assigned_desk"] == "CS_2" and data["next_action"] == "AWAIT_PROOF"
+
+
+def test_store_photo_that_cannot_be_downloaded_is_not_guessed(store, monkeypatch):
+    monkeypatch.setattr(shopflow, "fetch_store_evidence", lambda url: None)
+    store["SF-NODL"] = store_context("SF-NODL", reason="PRODUCT_DAMAGED", evidence_required=True,
+                                     evidence=["damage-headphones.jpg"], description="Damaged on arrival")
+    data = send_event("SF-NODL")
+    assert data["assigned_desk"] == "CS_2"
+    assert data["visual_evidence"]["verification_status"] == "not_assessable"
 
 
 def test_store_claim_outside_window_is_auto_rejected(store):
@@ -101,7 +154,7 @@ def test_store_claim_outside_window_is_auto_rejected(store):
 def test_high_value_claim_waits_for_human_then_approval_is_sent(store):
     store["SF-BIG"] = store_context("SF-BIG", amount_minor=1899900)
     data = send_event("SF-BIG")
-    assert data["assigned_desk"] == "CS_1" and data["next_action"] == "AWAIT_APPROVAL"
+    assert data["assigned_desk"] == "CS_2" and data["next_action"] == "AWAIT_APPROVAL"
     r = client.post(f"/api/v1/tickets/{data['ritos_ticket_id']}/authorize-payout", headers=login("finance@ritos.local"))
     assert r.status_code == 200, r.text
     assert r.json()["status"] == "DECISION_QUEUED_FOR_STORE"
@@ -145,18 +198,19 @@ def test_payout_refused_outside_cs1(store):
     assert r.status_code == 409
 
 
-@pytest.mark.parametrize("order,item,cat,amount,desc,days,photos,desk", [
-    ("ORD-88201", "Executive Laptop Sleeve 15-inch", "APPAREL", 2499, "Main zipper stitching came loose on first use; packaging fully intact.", 2, [], "CS_1"),
-    ("ORD-88202", "Nimbus Wireless ANC Headphones", "ELECTRONICS", 2999, "Left ear cushion torn inside box. Serial tag intact.", 5, [], "CS_2"),
-    ("ORD-88202", "Nimbus ANC Headphones (photo)", "ELECTRONICS", 2999, "Left ear cushion torn inside box. Serial tag intact.", 5, ["earcup_cushion_tear.jpg"], "CS_1"),
-    ("ORD-88203", "Aura Mechanical RGB Gaming Keyboard", "ELECTRONICS", 3499, "Decided I do not like tactile switches. Item is unopened.", 26, [], "CS_3"),
-    ("ORD-88204", "Precision Stylus Pen Pro", "ELECTRONICS", 1499, "Stylus pressure tip erratic out of the box.", 2, [], "CS_2"),
-])
-def test_storefront_demo_claims_route_to_expected_desk(store, order, item, cat, amount, desc, days, photos, desk):
+@pytest.mark.parametrize("order,item,cat,amount,desc,days,photos,reason,desk", [
+    ("ORD-88201", "Executive Laptop Sleeve 15-inch", "APPAREL", 2499, "Main zipper stitching came loose on first use.", 2, [], "DEFECTIVE_PRODUCT", "CS_2"),
+    ("ORD-88202", "Nimbus Wireless ANC Headphones", "ELECTRONICS", 2999, "Left ear cushion torn inside box.", 5, [], "PRODUCT_DAMAGED", "CS_2"),
+    ("ORD-88202", "Nimbus ANC Headphones (photo)", "ELECTRONICS", 2999, "Left ear cushion torn inside box.", 5, ["earcup_cushion_tear.jpg"], "PRODUCT_DAMAGED", "CS_2"),
+    ("ORD-88203", "Aura Mechanical RGB Gaming Keyboard", "ELECTRONICS", 3499, "Decided I do not like tactile switches.", 26, [], "CHANGED_MIND", "CS_3"),
+    ("ORD-88204", "Precision Stylus Pen Pro", "ELECTRONICS", 1499, "Stylus pressure tip erratic out of the box.", 2, [], "DEFECTIVE_PRODUCT", "CS_2"),
+    ("ORD-88205", "Cotton Throw Blanket", "GENERAL", 1299, "Colour does not suit my room.", 3, [], "CHANGED_MIND", "CS_1"),
+], ids=["sleeve-no-photo", "headphones-no-photo", "headphones-filename-only", "keyboard-expired", "stylus-defect", "blanket-changed-mind"])
+def test_storefront_demo_claims_route_to_expected_desk(store, order, item, cat, amount, desc, days, photos, reason, desk):
     tid = f"sf_tkt_{uuid4().hex[:8]}"
     purchase = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
     data = send_event(tid, order_id=order, transaction_id=f"TXN-{order}", item_name=item, item_category=cat,
-                      claimed_amount=amount, description=desc, purchase_date=purchase, evidence_images=photos)
+                      claimed_amount=amount, description=desc, purchase_date=purchase, evidence_images=photos, category=reason)
     assert data["store_linked"] is False
     assert data["assigned_desk"] == desk, data["policy_evaluation_reason"]
     assert data["callbacks"][0]["kind"] == "NONE"

@@ -166,12 +166,80 @@ def main():
             t_1005.status = "RESOLVED"
             t_1005.refund_status = "REFUNDED"
         
+        # Seed default chart of accounts and products
+        from .finance import ensure_default_accounts, FinancialSettlementService
+        from .models import Product, ProductVariant, ProductReferenceImage, ReturnPolicy
+        ensure_default_accounts(db)
+
+        # Seed sample product catalog
+        if not db.get(Product, "BAG-LTH-01"):
+            bag = Product(
+                sku="BAG-LTH-01",
+                name="Artisan Leather Handbag",
+                category="APPAREL",
+                brand="Artisan",
+                model="Classic Satchel",
+                description="Top-grain Italian leather handbag with reinforced double-stitched shoulder handles.",
+                price_minor=349900,
+                currency="INR"
+            )
+            db.add(bag)
+            db.flush()
+            db.add(ProductVariant(
+                product_sku="BAG-LTH-01",
+                sku="BAG-LTH-01-NAVY",
+                color="Midnight Navy",
+                variant_name="Navy Blue"
+            ))
+            db.add(ProductReferenceImage(
+                product_sku="BAG-LTH-01",
+                image_url="/catalog/bag_satchel_navy.jpg",
+                view_type="SEAM",
+                description="Authoritative reference photograph of handle double-stitching construction"
+            ))
+
+        if not db.get(Product, "SONY-WH1000XM4"):
+            db.add(Product(
+                sku="SONY-WH1000XM4",
+                name="Sony Wireless Headphones",
+                category="ELECTRONICS",
+                brand="Sony",
+                model="WH-1000XM4",
+                description="Industry-leading noise cancelling over-ear headphones.",
+                price_minor=249900,
+                currency="INR"
+            ))
+
+        # Seed return policies
+        if not db.scalar(select(ReturnPolicy).where(ReturnPolicy.category == "ELECTRONICS")):
+            db.add(ReturnPolicy(category="ELECTRONICS", return_window_days=14, policy_summary="14-day warranty for verified hardware defects."))
+            db.add(ReturnPolicy(category="APPAREL", return_window_days=30, policy_summary="30-day return window for unworn items with tags."))
+            db.add(ReturnPolicy(category="GENERAL", return_window_days=14, policy_summary="Standard 14-day eCommerce satisfaction guarantee."))
+            db.add(ReturnPolicy(category="HYGIENE", return_window_days=0, policy_summary="Final sale once unsealed for health standards."))
+
+        # If t_1005 has settled refund, post balanced double-entry journal if not existing
+        from .models import LedgerJournal
+        ref_1005 = db.scalar(select(RefundRequest).where(RefundRequest.ticket_id == t_1005.id))
+        if not db.scalar(select(LedgerJournal).where(LedgerJournal.ticket_id == t_1005.id)):
+            FinancialSettlementService.post_double_entry_journal(
+                db=db,
+                refund_id=ref_1005.id if ref_1005 else None,
+                ticket_id=t_1005.id,
+                transaction_id="TXN-1005",
+                amount_minor=150000,
+                currency="INR",
+                actor_id=users["finance_approver"].id,
+                idempotency_key="seed-journal-1005",
+                description="Settled refund for RIT-CS1-GENUINE via CERTIFIED_SANDBOX"
+            )
+
         db.commit()
         print("Seed complete. Development-only accounts:")
         print("Password:", settings.seed_password)
         for email, _, role in USERS:
             print(f"  {role:20} {email}")
         print("Seeded Desks: CS-1 (Genuine), CS-2 (Exceptions), CS-3 (Ineligible/Non-refundable)")
+        print("Seeded Double-Entry Chart of Accounts and Product Catalog.")
     finally:
         db.close()
 

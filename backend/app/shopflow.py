@@ -19,6 +19,7 @@ from .config import settings
 from .models import Ticket, Transaction, TicketStatus, User, InboundEvent, Role
 from .orchestrator import run_workflow, record_human_decision, AUTO_APPROVE, AUTO_REJECT, AWAIT_PROOF
 from .outbox import enqueue
+from . import evidence_store
 from .services import record_event, audit
 
 logger = logging.getLogger("ritos.shopflow")
@@ -129,6 +130,13 @@ def _fields_from_context(ctx: Dict[str, Any]) -> Dict[str, Any]:
             "above_high_value_threshold": bool(facts.get("above_high_value_threshold")),
             "remaining_refundable_minor": ledger.get("remaining_refundable_minor"),
             "refund_tickets_30d": cust.get("refund_tickets_30d"),
+            "refund_tickets_90d": cust.get("refund_tickets_90d"),
+            "refund_tickets_lifetime": cust.get("refund_tickets_lifetime"),
+            "product_id": product.get("product_id"),
+            "sku": product.get("sku"),
+            "product_name": product.get("name"),
+            "delivery_status": order.get("delivery_status"),
+            "delivered_at": order.get("delivered_at"),
             "account_age_days": cust.get("account_age_days"),
         },
     }
@@ -154,8 +162,23 @@ def _fields_from_payload(ticket_id: str, p: Dict[str, Any]) -> Dict[str, Any]:
         "evidence_images": list(p.get("evidence_images") or []),
         "transaction": {"id": p.get("transaction_id") or f"TXN-{order_id}", "amount": None, "refunded": Decimal("0.00"),
                         "status": "SUCCESSFUL", "reference": f"SHOPFLOW-DEMO-{order_id}"},
-        "store_facts": None,
+        # Only the customer's selected reason is known for demo claims; policy and dates come from RITOS.
+        "store_facts": {"reason": p.get("category")} if p.get("category") else None,
     }
+
+
+def fetch_store_evidence(url: Optional[str]) -> Optional[bytes]:
+    """Download one evidence file from the store (authenticated). None if unavailable: the photo then stays
+    a reference and is reported not_assessable instead of being guessed."""
+    if not url:
+        return None
+    try:
+        with httpx.Client(timeout=settings.evidence_fetch_timeout_seconds) as client:
+            resp = client.get(url, headers=get_auth_headers())
+        return resp.content if resp.status_code == 200 else None
+    except httpx.HTTPError as exc:
+        logger.info("Evidence download failed for %s: %s", url, exc)
+        return None
 
 
 def _system_user_id(db: Session) -> Optional[str]:
@@ -219,6 +242,12 @@ def intake(db: Session, ext_id: str, payload: Dict[str, Any], event_id: Optional
     t.currency = "INR"
     t.classification_evidence = {**(t.classification_evidence or {}), **evidence}
     db.flush()
+
+    # Real photo bytes from the store go into private evidence storage (validated, hashed, lifecycle-tracked).
+    for ev in (ctx or {}).get("evidence", []):
+        raw = fetch_store_evidence(ev.get("url"))
+        if raw:
+            evidence_store.save_evidence(db, t, raw, ev.get("filename") or ev.get("evidence_id") or "evidence", source="STORE")
 
     system_user_id = _system_user_id(db)
     result = run_workflow(db, t, trigger=trigger, actor_id=system_user_id)

@@ -24,14 +24,15 @@ const roles = [
 ]
 
 const AGENT_CATALOG = [
-  { id: 'transaction_data_fetcher', name: 'Transaction Data Fetcher', mode: 'Deterministic SQL / Provider', purpose: 'Fetches trusted ledger records for claimed transaction ID and validates amount, currency, and customer ownership.', guardrail: 'Customer statements never establish payment proof; ledger is ground truth.' },
-  { id: 'duplicate_intelligence', name: 'Duplicate Intelligence', mode: 'Heuristic Matching', purpose: 'Detects repeated customer tickets for the same transaction ID to prevent redundant investigation efforts.', guardrail: 'Never auto-closes or auto-rejects cases; links related tickets for human verification.' },
-  { id: 'issue_classifier', name: 'Issue Classification', mode: 'NLP / Rule Extraction', purpose: 'Classifies customer complaint into standardized operational categories with confidence rating and evidence tokens.', guardrail: 'Confidence score is a triage signal, never an authorization for money movement.' },
-  { id: 'risk_assessment', name: 'Risk & Fraud Signals', mode: 'Multi-Factor Scoring', purpose: 'Evaluates transaction and claim history to flag high-severity anomalies like unauthorized payment reports.', guardrail: 'Risk indicators are review flags, not proof of fraud. Never auto-penalizes customers.' },
-  { id: 'eligibility_policy', name: 'Refund Eligibility & Policy', mode: 'Deterministic Rules', purpose: 'Evaluates eCommerce product category return windows (Electronics: 7d, Apparel: 14d, Perishable: 0d).', guardrail: 'Conservative policy: only marks eligibility for human review; cannot trigger payout.' },
-  { id: 'routing_sla', name: 'Routing & SLA Agent', mode: 'Queue Table & Priority Engine', purpose: 'Assigns tickets to CS-1 (Genuine), CS-2 (Exceptions/Proof), or CS-3 (Ineligible/Non-refundable).', guardrail: 'Security-sensitive categories (unauthorized payments) cannot be downgraded from P1.' },
-  { id: 'refund_execution', name: 'Refund Execution Adapter', mode: 'Idempotent Provider Adapter', purpose: 'Submits authorized payout requests to payment gateway using SHA-256 idempotency key protection.', guardrail: 'Strict segregation of duties: Requester ≠ Approver ≠ Executor. Prevents double-spend.' },
-  { id: 'reconciliation_communication', name: 'Reconciliation & Communication', mode: 'Event Publisher & Audit Dispatch', purpose: 'Reconciles asynchronous gateway settlement webhooks, updates ticket status, and logs immutable audit trails.', guardrail: 'Stateless replay safety; audit events are strictly append-only.' }
+  { id: 'ledger_ground_truth', name: 'Agent 1 · Ledger Ground Truth', mode: 'Deterministic SQL / Double-Entry', purpose: 'Verifies transaction existence, customer identity, currency match, and refundable balance accounting for pending reservations and duplicates.', guardrail: 'Customer statements never establish payment proof; ledger is authoritative.' },
+  { id: 'logistics_verification', name: 'Agent 5 · Carrier & Logistics', mode: 'Carrier Adapter', purpose: 'Inspects delivery milestones and proof of delivery, explicitly distinguishing carrier data from merchant order facts.', guardrail: 'Reports NOT_CONFIGURED when live carrier API is absent; never invents tracking status.' },
+  { id: 'claim_analysis', name: 'Agent 3 · Claim Intent & Contradictions', mode: 'Controlled Taxonomy Rules', purpose: 'Maps claims to controlled operational categories and detects factual contradictions (e.g., signed delivery vs claimed non-receipt).', guardrail: 'Never invents confidence scores; treats customer statements as claims, not proof.' },
+  { id: 'evidence_verification', name: 'Agent 7 · Product Identity & Defect Evidence', mode: 'Pillow / OpenCLIP Semantic', purpose: 'Validates file signatures, runs image quality gates (blur, exposure, blankness), and verifies product identity (7A) and defect (7B).', guardrail: 'Uncalibrated scores; no synthetic certainty. Absences of EXIF never treated as tampering.' },
+  { id: 'policy_enforcement', name: 'Agent 2 · Return Policy', mode: 'Versioned Policy Rules', purpose: 'Enforces category return windows, final sale rules, and merchant defect exceptions against versioned policy records.', guardrail: 'Merchant defect exceptions strictly require a verified defect.' },
+  { id: 'risk_assessment', name: 'Agent 4 · Risk & Velocity', mode: 'Historical Velocity Engine', purpose: 'Calculates 30/90/365-day claim frequency, customer account tenure, and monetary thresholds as review signals.', guardrail: 'Risk indicators are review flags, not proof of fraud. Never auto-penalizes customers.' },
+  { id: 'decision_arbiter', name: 'Agent 6 · Decision & Routing Arbiter', mode: 'Deterministic Finite State Machine', purpose: 'Authoritative routing engine that routes cases to CS-1 (Auto-Approve), CS-2 (Human Review), or CS-3 (Denial).', guardrail: 'Sole routing authority. Models never authorize refunds or execute payouts.' },
+  { id: 'review_coordination', name: 'Agent 9 · Human Review Coordinator', mode: 'Least-Loaded SLA Assignment', purpose: 'Assigns least-loaded reviewers, computes SLA deadlines, and compiles evidence checklists and permitted actions.', guardrail: 'Enforces four-eyes separation of duties and reviewer independence.' },
+  { id: 'customer_communication', name: 'Agent 8 · Customer Communication', mode: 'Stage-Aware Templates', purpose: 'Drafts clear, transparent resolution messages reflecting the exact current stage of the adjudication process.', guardrail: 'Never promises a refund or states "refunded" before financial settlement is complete.' }
 ]
 
 const navFor = (role: string) => {
@@ -106,6 +107,10 @@ function App() {
   const [automation, setAutomation] = useState<any>(null)
   const [refunds, setRefunds] = useState<any[]>([])
   const [audit, setAudit] = useState<any[]>([])
+  const [ledgerSubTab, setLedgerSubTab] = useState<'settlements' | 'journals' | 'accounts'>('settlements')
+  const [journals, setJournals] = useState<any[]>([])
+  const [accounts, setAccounts] = useState<any[]>([])
+  const [readiness, setReadiness] = useState<any>(null)
 
   const [selected, setSelected] = useState<Ticket | null>(null)
   const [search, setSearch] = useState('')
@@ -227,10 +232,13 @@ function App() {
           setAutomation(null)
         }
       }
-      if (['administrator', 'auditor', 'supervisor'].includes(user?.role || '')) {
+      if (['administrator', 'auditor', 'supervisor', 'finance_approver', 'refund_operations'].includes(user?.role || '')) {
         try {
           setAudit(await api.audit())
         } catch {}
+        api.ledgerJournals().then(setJournals).catch(() => {})
+        api.ledgerAccounts().then(setAccounts).catch(() => {})
+        api.healthReadiness().then(setReadiness).catch(() => {})
       }
       if (!isCustomer) {
         api.shopflowStatus().then(setShopflowStatus).catch(() => setShopflowStatus(null))
@@ -316,7 +324,13 @@ function App() {
     setBusy(true)
     try {
       const res = await api.cs1DirectRefund(t.id)
-      setNotice(`✅ CS-1 Direct Refund Executed! Provider Reference: ${res.provider_reference}`)
+      if (res.status === 'REFUND_PROPOSED') {
+        setNotice(`✅ CS-1 Fast-Track Approved & Proposed! Refund #${res.refund?.id?.slice(0, 8) || ''} queued for Finance dual-custody authorization.`)
+      } else if (res.status === 'DECISION_QUEUED_FOR_STORE') {
+        setNotice(`✅ Store Refund Decision Queued for Delivery!`)
+      } else {
+        setNotice(`✅ CS-1 Direct Refund Processed! Provider Reference: ${res.provider_reference || res.status}`)
+      }
       setSelected(res.ticket)
       await load()
     } catch (err) {
@@ -335,7 +349,17 @@ function App() {
     try {
       const reason = decision === 'APPROVE' ? 'CS-1 Manual Inspection Verified and Approved.' : manualCancelReason
       const res = await api.cs1ManualDecide(t.id, decision, reason)
-      setNotice(decision === 'APPROVE' ? '✅ Refund Approved & Executed by CS-1!' : '❌ Refund Cancelled/Denied by CS-1.')
+      if (decision === 'APPROVE') {
+        if (res.status === 'REFUND_PROPOSED') {
+          setNotice(`✅ CS-1 Verified & Proposed! Refund #${res.refund?.id?.slice(0, 8) || ''} queued for Finance approval.`)
+        } else if (res.status === 'DECISION_QUEUED_FOR_STORE') {
+          setNotice(`✅ Store Refund Decision Queued for Delivery!`)
+        } else {
+          setNotice(`✅ Refund Approved by CS-1!`)
+        }
+      } else {
+        setNotice('❌ Refund Cancelled/Denied by CS-1.')
+      }
       setSelected(res.ticket)
       setShowCancelPrompt(false)
       await load()
@@ -402,7 +426,13 @@ function App() {
     setBusy(true)
     try {
       const res = await api.authorizePayout(t.id)
-      setNotice(`💰 Gateway Payout Authorized & Executed! Ref: ${res.provider_reference} (${money(res.amount, t.currency)})`)
+      if (res.status === 'REFUND_PROPOSED') {
+        setNotice(`📋 Refund Proposed (#${res.refund?.id?.slice(0, 8) || ''})! Awaiting Finance Approval & Dual-Custody Execution.`)
+      } else if (res.status === 'DECISION_QUEUED_FOR_STORE') {
+        setNotice(`✅ Store Refund Decision Queued for Delivery!`)
+      } else {
+        setNotice(`💰 Payout Status: ${res.status || 'Success'}`)
+      }
       setSelected(res.ticket)
       await load()
     } catch (err) {
@@ -454,6 +484,32 @@ function App() {
       await load()
     } catch (err) {
       setNotice(`Rejection Failed: ${(err as Error).message}`)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function handleExecuteRefund(r: any) {
+    setBusy(true)
+    try {
+      const res = await api.executeRefund(r.id, `exec-${r.id}`)
+      setNotice(`✅ Payout Settled via Gateway (${res.provider || 'Gateway'})! Ref: ${res.provider_reference || 'N/A'}`)
+      await load()
+    } catch (err) {
+      setNotice(`Execution Failed: ${(err as Error).message}`)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function handleReconcileRefund(r: any) {
+    setBusy(true)
+    try {
+      const res = await api.reconcileRefund(r.id)
+      setNotice(`🔄 Gateway Reconciled: ${res.status || 'Updated'}`)
+      await load()
+    } catch (err) {
+      setNotice(`Reconciliation Failed: ${(err as Error).message}`)
     } finally {
       setBusy(false)
     }
@@ -1175,6 +1231,106 @@ function App() {
                               <span><BadgeCheck size={28} color="var(--emerald-600)" /></span>
                               <strong style={{ color: 'var(--navy-900)', marginTop: '8px' }}>Dual-Custody Queue Clear</strong>
                               <p>No refund requests currently require financial authorization. All pending disbursements have been processed.</p>
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* Stage 2: Dual-Custody Execution Queue */}
+              <div className="panel table-panel" style={{ marginBottom: '28px' }}>
+                <div className="panel-heading">
+                  <div>
+                    <h3 style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <CircleDollarSign size={18} color="var(--emerald-600)" />
+                      Approved Settlements Ready for Execution (Stage 2)
+                    </h3>
+                    <p>These refund requests have been approved by Finance and require final gateway execution by an independent executor.</p>
+                  </div>
+                  <span className="pill green" style={{ padding: '6px 12px', fontSize: '12px' }}>
+                    {refunds.filter(r => r.status === 'APPROVED' || r.status === 'RECONCILIATION_REQUIRED').length} Ready for Execution
+                  </span>
+                </div>
+
+                <div className="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>REFUND ID</th>
+                        <th>TRANSACTION &amp; TICKET</th>
+                        <th>DISBURSEMENT AMOUNT</th>
+                        <th>OPERATIONAL JUSTIFICATION</th>
+                        <th>STATUS</th>
+                        <th>APPROVED AT</th>
+                        <th>ACTIONS</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {refunds.filter(r => r.status === 'APPROVED' || r.status === 'RECONCILIATION_REQUIRED').map(r => (
+                        <tr key={r.id}>
+                          <td>
+                            <span className="mono" style={{ fontWeight: 700, color: 'var(--navy-900)' }}>
+                              {r.id.slice(0, 8).toUpperCase()}
+                            </span>
+                          </td>
+                          <td>
+                            <strong>{r.transaction_id}</strong>
+                            <small className="subline mono">Ticket #{r.ticket_id?.slice(0, 8)}</small>
+                          </td>
+                          <td>
+                            <strong className="amount" style={{ fontSize: '15px' }}>
+                              {money(r.amount, r.currency)}
+                            </strong>
+                          </td>
+                          <td>
+                            <p style={{ margin: 0, fontSize: '12px', color: 'var(--navy-700)', maxWidth: '280px', lineHeight: 1.4 }}>
+                              {r.reason}
+                            </p>
+                          </td>
+                          <td>
+                            <StatusPill value={r.status} />
+                          </td>
+                          <td>
+                            <span className="date-cell">{date(r.updated_at || r.created_at)}</span>
+                          </td>
+                          <td>
+                            <div className="row-actions">
+                              {r.status === 'APPROVED' && (
+                                <button
+                                  className="primary compact"
+                                  onClick={() => handleExecuteRefund(r)}
+                                  disabled={busy}
+                                  style={{ background: 'var(--indigo-700)', borderColor: 'var(--indigo-700)' }}
+                                  title="Execute payout with idempotency key protection"
+                                >
+                                  <Zap size={14} /> Execute Payout
+                                </button>
+                              )}
+                              {r.status === 'RECONCILIATION_REQUIRED' && (
+                                <button
+                                  className="secondary compact"
+                                  onClick={() => handleReconcileRefund(r)}
+                                  disabled={busy}
+                                  style={{ color: 'var(--amber-700)', borderColor: 'var(--amber-300)' }}
+                                  title="Reconcile uncertain gateway timeout"
+                                >
+                                  <RefreshCw size={14} /> Reconcile Gateway
+                                </button>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                      {!refunds.filter(r => r.status === 'APPROVED' || r.status === 'RECONCILIATION_REQUIRED').length && (
+                        <tr>
+                          <td colSpan={7}>
+                            <div className="empty" style={{ padding: '36px 16px' }}>
+                              <span><BadgeCheck size={28} color="var(--emerald-600)" /></span>
+                              <strong style={{ color: 'var(--navy-900)', marginTop: '8px' }}>Execution Queue Clear</strong>
+                              <p>No approved refunds are waiting for disbursement execution.</p>
                             </div>
                           </td>
                         </tr>
@@ -2428,50 +2584,178 @@ await fetch('http://YOUR_RITOS_URL/api/v1/integrations/ecommerce/ticket', {
             </>
           )}
 
-          {/* REFUND OPERATIONS REGISTER */}
+          {/* REFUND OPERATIONS REGISTER & GENERAL LEDGER */}
           {page === 'refunds' && (
             <>
               <div className="page-heading">
                 <div>
-                  <div className="eyebrow">FINANCIAL GOVERNANCE</div>
-                  <h1>{user.role === 'finance_approver' ? 'Refund Authorization Register' : 'Settlement Register'}</h1>
-                  <p>All executed and approved payment settlements across the payment gateway.</p>
+                  <div className="eyebrow">FINANCIAL GOVERNANCE &amp; GENERAL LEDGER</div>
+                  <h1>{user.role === 'finance_approver' ? 'Refund Authorization & Double-Entry Ledger' : 'Settlement Register & Ledger'}</h1>
+                  <p>Authoritative double-entry accounting journals, chart of accounts balances, and payment gateway settlements.</p>
+                </div>
+                <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                  <button
+                    className={ledgerSubTab === 'settlements' ? 'primary compact' : 'secondary compact'}
+                    onClick={() => setLedgerSubTab('settlements')}
+                    style={{ fontSize: '12px' }}
+                  >
+                    Settlements
+                  </button>
+                  <button
+                    className={ledgerSubTab === 'journals' ? 'primary compact' : 'secondary compact'}
+                    onClick={() => { setLedgerSubTab('journals'); api.ledgerJournals().then(setJournals).catch(() => {}); }}
+                    style={{ fontSize: '12px' }}
+                  >
+                    Double-Entry Journals ({journals.length})
+                  </button>
+                  <button
+                    className={ledgerSubTab === 'accounts' ? 'primary compact' : 'secondary compact'}
+                    onClick={() => { setLedgerSubTab('accounts'); api.ledgerAccounts().then(setAccounts).catch(() => {}); }}
+                    style={{ fontSize: '12px' }}
+                  >
+                    Chart of Accounts ({accounts.length})
+                  </button>
                 </div>
               </div>
 
-              <div className="panel table-panel">
-                <div className="table-wrap">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>REFUND ID</th>
-                        <th>AMOUNT</th>
-                        <th>STATUS</th>
-                        <th>PROVIDER REF.</th>
-                        <th>REASON</th>
-                        <th>DATE</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {refunds.map(r => (
-                        <tr key={r.id}>
-                          <td><span className="mono">{r.id.slice(0, 8).toUpperCase()}</span></td>
-                          <td className="amount">{money(r.amount, r.currency)}</td>
-                          <td><StatusPill value={r.status} /></td>
-                          <td><span className="mono">{r.provider_reference || '—'}</span></td>
-                          <td style={{ maxWidth: '280px', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.reason}</td>
-                          <td><span className="date-cell">{date(r.created_at)}</span></td>
-                        </tr>
-                      ))}
-                      {!refunds.length && (
+              {ledgerSubTab === 'settlements' && (
+                <div className="panel table-panel">
+                  <div className="table-wrap">
+                    <table>
+                      <thead>
                         <tr>
-                          <td colSpan={6}><Empty text="No executed refunds recorded yet." /></td>
+                          <th>REFUND ID</th>
+                          <th>AMOUNT</th>
+                          <th>STATUS</th>
+                          <th>PROVIDER REF.</th>
+                          <th>REASON</th>
+                          <th>DATE</th>
                         </tr>
-                      )}
-                    </tbody>
-                  </table>
+                      </thead>
+                      <tbody>
+                        {refunds.map(r => (
+                          <tr key={r.id}>
+                            <td><span className="mono">{r.id.slice(0, 8).toUpperCase()}</span></td>
+                            <td className="amount">{money(r.amount, r.currency)}</td>
+                            <td><StatusPill value={r.status} /></td>
+                            <td><span className="mono">{r.provider_reference || '—'}</span></td>
+                            <td style={{ maxWidth: '280px', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.reason}</td>
+                            <td><span className="date-cell">{date(r.created_at)}</span></td>
+                          </tr>
+                        ))}
+                        {!refunds.length && (
+                          <tr>
+                            <td colSpan={6}><Empty text="No executed refunds recorded yet." /></td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
-              </div>
+              )}
+
+              {ledgerSubTab === 'journals' && (
+                <div className="panel table-panel">
+                  <div className="table-wrap">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>JOURNAL ID</th>
+                          <th>TICKET / TX</th>
+                          <th>DESCRIPTION</th>
+                          <th>DEBITS</th>
+                          <th>CREDITS</th>
+                          <th>INVARIANT BALANCE</th>
+                          <th>POSTED DATE</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {journals.map(j => {
+                          const debits = (j.entries || []).filter((e: any) => e.entry_type === 'DEBIT')
+                          const credits = (j.entries || []).filter((e: any) => e.entry_type === 'CREDIT')
+                          const totalD = debits.reduce((acc: number, e: any) => acc + e.amount_minor, 0)
+                          const totalC = credits.reduce((acc: number, e: any) => acc + e.amount_minor, 0)
+                          const isBalanced = totalD === totalC && totalD > 0
+                          return (
+                            <tr key={j.id}>
+                              <td><span className="mono bold">{j.id.slice(0, 8).toUpperCase()}</span></td>
+                              <td><span className="mono">{j.ticket_id?.slice(0, 8) || j.transaction_id || '—'}</span></td>
+                              <td style={{ maxWidth: '260px' }}>{j.description}</td>
+                              <td>
+                                {debits.map((d: any) => (
+                                  <div key={d.id} className="mono" style={{ fontSize: '11px', color: 'var(--navy-900)' }}>
+                                    <strong>{d.account_id}</strong>: {money(d.amount_minor / 100, j.currency)}
+                                  </div>
+                                ))}
+                              </td>
+                              <td>
+                                {credits.map((c: any) => (
+                                  <div key={c.id} className="mono" style={{ fontSize: '11px', color: 'var(--navy-800)' }}>
+                                    <strong>{c.account_id}</strong>: {money(c.amount_minor / 100, j.currency)}
+                                  </div>
+                                ))}
+                              </td>
+                              <td>
+                                {isBalanced ? (
+                                  <span className="pill green" style={{ fontSize: '11px' }}><i />✓ Debits = Credits Balanced</span>
+                                ) : (
+                                  <span className="pill red" style={{ fontSize: '11px' }}><i />Unbalanced</span>
+                                )}
+                              </td>
+                              <td><span className="date-cell">{j.posted_at ? date(j.posted_at) : '—'}</span></td>
+                            </tr>
+                          )
+                        })}
+                        {!journals.length && (
+                          <tr>
+                            <td colSpan={7}><Empty text="No double-entry journals posted yet." /></td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {ledgerSubTab === 'accounts' && (
+                <div className="panel table-panel">
+                  <div className="table-wrap">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>ACCOUNT CODE</th>
+                          <th>ACCOUNT NAME</th>
+                          <th>TYPE</th>
+                          <th>CURRENCY</th>
+                          <th>TOTAL DEBITS</th>
+                          <th>TOTAL CREDITS</th>
+                          <th>NET BALANCE</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {accounts.map(a => (
+                          <tr key={a.id}>
+                            <td><span className="mono bold">{a.id}</span></td>
+                            <td><strong>{a.name}</strong></td>
+                            <td><span className="pill blue" style={{ fontSize: '11px' }}>{a.account_type}</span></td>
+                            <td><span className="mono">{a.currency}</span></td>
+                            <td className="amount">{money((a.total_debit_minor || 0) / 100, a.currency)}</td>
+                            <td className="amount">{money((a.total_credit_minor || 0) / 100, a.currency)}</td>
+                            <td className="amount" style={{ fontWeight: 700 }}>
+                              {money((a.net_balance_minor || 0) / 100, a.currency)}
+                            </td>
+                          </tr>
+                        ))}
+                        {!accounts.length && (
+                          <tr>
+                            <td colSpan={7}><Empty text="No ledger accounts found." /></td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
             </>
           )}
 
@@ -2878,30 +3162,91 @@ await fetch('http://YOUR_RITOS_URL/api/v1/integrations/ecommerce/ticket', {
                         <div style={{ flex: 1, fontSize: '11px', color: 'var(--navy-700)', display: 'flex', flexDirection: 'column', gap: '6px' }}>
                           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
                             <div style={{ padding: '6px 8px', background: 'var(--slate-50)', borderRadius: '4px', border: '1px solid var(--border-subtle)' }}>
-                              <span style={{ color: 'var(--text-muted)', fontSize: '10px', display: 'block' }}>Defect Detection:</span>
-                              <strong style={{ color: selected.classification_evidence?.visual_analysis?.damage_detected ? 'var(--emerald-700)' : 'var(--navy-800)' }}>
-                                {selected.classification_evidence?.visual_analysis?.damage_detected ? '✓ Defect Confirmed' : 'None Detected'}
+                              <span style={{ color: 'var(--text-muted)', fontSize: '10px', display: 'block' }}>Product Identity (7A):</span>
+                              <strong style={{ color: selected.classification_evidence?.visual_analysis?.product_identity_status === 'verified' ? 'var(--emerald-700)' : 'var(--navy-800)' }}>
+                                {selected.classification_evidence?.visual_analysis?.product_identity_status || 'not_assessable'}
                               </strong>
                             </div>
                             <div style={{ padding: '6px 8px', background: 'var(--slate-50)', borderRadius: '4px', border: '1px solid var(--border-subtle)' }}>
-                              <span style={{ color: 'var(--text-muted)', fontSize: '10px', display: 'block' }}>Tamper / EXIF Check:</span>
-                              <strong style={{ color: selected.classification_evidence?.visual_analysis?.tamper_detected ? 'var(--rose-700)' : 'var(--emerald-700)' }}>
-                                {selected.classification_evidence?.visual_analysis?.tamper_detected ? '⚠️ Suspicious' : '✓ Authentic Exif'}
+                              <span style={{ color: 'var(--text-muted)', fontSize: '10px', display: 'block' }}>Defect Verification (7B):</span>
+                              <strong style={{ color: selected.classification_evidence?.visual_analysis?.defect_status === 'verified' ? 'var(--emerald-700)' : (selected.classification_evidence?.visual_analysis?.defect_status === 'mismatch' ? 'var(--rose-700)' : 'var(--navy-800)') }}>
+                                {selected.classification_evidence?.visual_analysis?.defect_status || 'not_assessable'}
                               </strong>
                             </div>
                           </div>
 
-                          <div style={{ fontSize: '11px', color: 'var(--navy-800)' }}>
-                            <strong>Features:</strong> {selected.classification_evidence?.visual_analysis?.detected_features?.join(', ') || 'Damage/fracture tokens identified'}
+                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
+                            <div style={{ padding: '6px 8px', background: 'var(--slate-50)', borderRadius: '4px', border: '1px solid var(--border-subtle)' }}>
+                              <span style={{ color: 'var(--text-muted)', fontSize: '10px', display: 'block' }}>Verification Status:</span>
+                              <strong>{selected.classification_evidence?.visual_analysis?.verification_status || 'inconclusive'}</strong>
+                            </div>
+                            <div style={{ padding: '6px 8px', background: 'var(--slate-50)', borderRadius: '4px', border: '1px solid var(--border-subtle)' }}>
+                              <span style={{ color: 'var(--text-muted)', fontSize: '10px', display: 'block' }}>Visual Confidence:</span>
+                              <span style={{ color: 'var(--text-muted)', fontStyle: 'italic' }}>
+                                {selected.classification_evidence?.visual_analysis?.visual_confidence ?? 'Not calibrated (honest)'}
+                              </span>
+                            </div>
                           </div>
 
-                          {selected.classification_evidence?.visual_analysis?.findings && (
-                            <div style={{ padding: '6px 8px', background: 'var(--slate-50)', borderRadius: '4px', border: '1px solid var(--border-subtle)', fontFamily: 'monospace', fontSize: '10px', lineHeight: '1.4' }}>
-                              {selected.classification_evidence?.visual_analysis?.findings}
+                          {selected.classification_evidence?.visual_analysis?.model_version && (
+                            <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+                              <strong>Vision Engine:</strong> {selected.classification_evidence.visual_analysis.model_version}
+                            </div>
+                          )}
+
+                          {selected.classification_evidence?.visual_analysis?.quality_issues?.length > 0 && (
+                            <div style={{ fontSize: '10px', color: 'var(--amber-800)' }}>
+                              <strong>Quality Issues:</strong> {selected.classification_evidence.visual_analysis.quality_issues.join(', ')}
+                            </div>
+                          )}
+
+                          {selected.classification_evidence?.visual_analysis?.recommended_next_step && (
+                            <div style={{ padding: '6px 8px', background: '#eff6ff', borderRadius: '4px', border: '1px solid #bfdbfe', fontSize: '10px', color: '#1e40af' }}>
+                              <strong>Next Step:</strong> {selected.classification_evidence.visual_analysis.recommended_next_step}
                             </div>
                           )}
                         </div>
                       </div>
+                    </div>
+                  )}
+
+                  {/* Decision Arbiter: Reason Codes & Reviewer Checklist */}
+                  {((selected.classification_evidence?.decision?.reason_codes && selected.classification_evidence.decision.reason_codes.length > 0) ||
+                    (selected.classification_evidence?.decision?.reviewer_checklist && selected.classification_evidence.decision.reviewer_checklist.length > 0)) && (
+                    <div style={{ marginTop: '14px', padding: '14px', background: '#ffffff', borderRadius: 'var(--radius-md)', border: '1px solid var(--indigo-200)', boxShadow: '0 2px 4px rgba(0,0,0,0.03)' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                        <span style={{ fontSize: '12px', fontWeight: 800, color: 'var(--navy-900)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          <Shield size={14} color="var(--indigo-600)" />
+                          Decision Arbiter Trace (Rule Version: {selected.classification_evidence?.decision?.rule_version || 'routing-rules-1.0'})
+                        </span>
+                        <span className="pill blue" style={{ fontSize: '10px' }}>
+                          {selected.classification_evidence?.decision?.next_action || selected.status}
+                        </span>
+                      </div>
+
+                      {selected.classification_evidence?.decision?.reason_codes?.length > 0 && (
+                        <div style={{ marginBottom: '8px' }}>
+                          <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase' }}>Reason Codes:</span>
+                          <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginTop: '4px' }}>
+                            {selected.classification_evidence.decision.reason_codes.map((code: string, idx: number) => (
+                              <span key={idx} className="pill blue" style={{ fontSize: '10px', fontFamily: 'monospace' }}>
+                                {code}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {selected.classification_evidence?.decision?.reviewer_checklist?.length > 0 && (
+                        <div>
+                          <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase' }}>Reviewer Checklist:</span>
+                          <ul style={{ margin: '4px 0 0 16px', padding: 0, fontSize: '11px', color: 'var(--navy-800)', lineHeight: '1.5' }}>
+                            {selected.classification_evidence.decision.reviewer_checklist.map((item: string, idx: number) => (
+                              <li key={idx}>{item}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
                     </div>
                   )}
 

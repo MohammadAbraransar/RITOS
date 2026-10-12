@@ -4,14 +4,20 @@ from decimal import Decimal
 from uuid import uuid4
 from typing import Optional
 from pydantic import BaseModel
-from fastapi import APIRouter, Depends, HTTPException, Query, Header
+from fastapi import APIRouter, Depends, HTTPException, Query, Header, Request
 from sqlalchemy.orm import Session
 from sqlalchemy import select, func, desc
 from .database import get_db
-from .models import User, Ticket, TicketComment, TicketEvent, Transaction, RefundRequest, RefundStatus, TicketStatus, AuditLog, Role, DecisionBucket, AssignedDesk
+from .models import (
+    User, Ticket, TicketComment, TicketEvent, Transaction, RefundRequest, RefundStatus, TicketStatus,
+    AuditLog, Role, DecisionBucket, AssignedDesk, LedgerAccount, LedgerJournal, LedgerEntry,
+    GatewaySettlementAttempt, Product, ProductVariant, ProductReferenceImage, EvidenceFile, ReturnPolicy,
+    WorkflowRun, OutboxMessage
+)
 from .schemas import (
     LoginIn, TicketCreate, CommentCreate, TicketUpdate, RefundCreate, RefundDecision,
-    CS1DecisionIn, ProofRequestIn, RejectionNoticeIn, EcommerceTicketIn
+    CS1DecisionIn, ProofRequestIn, RejectionNoticeIn, EcommerceTicketIn,
+    EvidenceUploadIn, EvidenceVerifyIn, SettlementExecuteIn
 )
 from .security import verify_password, create_access_token, get_current_user, require_roles
 from .services import (
@@ -20,10 +26,14 @@ from .services import (
 )
 from .agents import AGENTS, ORCHESTRATOR, run_ticket_pipeline
 from .config import settings
-from .models import WorkflowRun, OutboxMessage
 from .orchestrator import run_workflow, record_human_decision, workflow_view
 from .outbox import deliver_due, retry as retry_outbox, outbox_view, enqueue
 from .shopflow import is_store_linked, finalize_human_decision, apply_next_action
+from .finance import FinancialSettlementService, ensure_default_accounts, gateway_status
+import base64
+from . import evidence_store
+from .vision import vision_status
+from .proof_reader import verify_product_identity_and_defect, decode_image_data
 
 router = APIRouter(prefix="/api/v1")
 
@@ -282,27 +292,41 @@ def refunds(db:Session=Depends(get_db),user:User=Depends(get_current_user)):
     return [{"id":r.id,"ticket_id":r.ticket_id,"transaction_id":r.transaction_id,"amount":float(r.amount),"currency":r.currency,
       "status":r.status,"reason":r.reason,"provider_reference":r.provider_reference,"created_at":r.created_at.isoformat()} for r in rows]
 
+def propose_refund(db: Session, t: Ticket, user: User, amount: Decimal, reason: str) -> dict:
+    """Create (or return) the refund proposal for a ticket. Money moves only after an independent approval
+    and a separate execution (finance.py), never from this call."""
+    tx = db.get(Transaction, t.transaction_id)
+    if not tx or t.payment_verification != "VERIFIED":
+        raise HTTPException(409, "Refund cannot be proposed until transaction ownership, amount and payment are verified")
+    amount = Decimal(str(amount)).quantize(Decimal("0.01"))
+    key = refund_key(t.id, amount, t.currency)
+    existing = db.scalar(select(RefundRequest).where(RefundRequest.idempotency_key == key))
+    if existing:
+        return {"id": existing.id, "status": existing.status, "idempotent_replay": True}
+    remaining = Decimal(str(tx.amount)) - Decimal(str(tx.refunded_amount))
+    pending = db.scalars(select(RefundRequest).where(RefundRequest.transaction_id == tx.id, RefundRequest.status.in_([
+        RefundStatus.PENDING_APPROVAL.value, RefundStatus.APPROVED.value, RefundStatus.PROCESSING.value,
+        RefundStatus.RECONCILIATION_REQUIRED.value]))).all()
+    remaining -= sum((Decimal(str(r.amount)) for r in pending), Decimal("0"))
+    if amount <= 0 or amount > remaining:
+        raise HTTPException(409, "Requested amount exceeds remaining refundable balance")
+    r = RefundRequest(ticket_id=t.id, transaction_id=tx.id, requested_by_id=user.id, amount=amount, currency=t.currency,
+                      status=RefundStatus.PENDING_APPROVAL.value, reason=reason, idempotency_key=key)
+    db.add(r); db.flush()
+    t.refund_status = RefundStatus.PENDING_APPROVAL.value
+    t.status = TicketStatus.IN_REVIEW.value
+    record_event(db, t.id, user.id, "REFUND_PROPOSED", {"refund_id": r.id, "amount": str(amount)})
+    audit(db, user.id, "REFUND_PROPOSED", "refund", r.id, {"amount": str(amount), "currency": t.currency, "reason": reason})
+    db.commit(); db.refresh(r)
+    return {"id": r.id, "status": r.status, "amount": float(r.amount), "currency": r.currency,
+            "next_step": "Awaiting approval by a different finance approver, then execution by a third person."}
+
+
 @router.post("/refunds")
 def create_refund(payload:RefundCreate,db:Session=Depends(get_db),user:User=Depends(require_roles(Role.REFUNDS.value,Role.FINANCE.value,Role.ADMIN.value))):
     t=db.get(Ticket,payload.ticket_id)
     if not t: raise HTTPException(404,"Ticket not found")
-    tx=db.get(Transaction,t.transaction_id)
-    if not tx or t.payment_verification!="VERIFIED": raise HTTPException(409,"Refund cannot be requested until transaction ownership, amount and payment are verified")
-    amount=Decimal(str(payload.amount)).quantize(Decimal("0.01"))
-    remaining=Decimal(str(tx.amount))-Decimal(str(tx.refunded_amount))
-    pending=db.scalars(select(RefundRequest).where(RefundRequest.transaction_id==tx.id,RefundRequest.status.in_([RefundStatus.PENDING_APPROVAL.value,RefundStatus.APPROVED.value,RefundStatus.PROCESSING.value,RefundStatus.RECONCILIATION_REQUIRED.value]))).all()
-    remaining-=sum((Decimal(str(r.amount)) for r in pending),Decimal("0"))
-    if amount<=0 or amount>remaining: raise HTTPException(409,"Requested amount exceeds remaining refundable balance")
-    key=refund_key(t.id,amount,t.currency)
-    existing=db.scalar(select(RefundRequest).where(RefundRequest.idempotency_key==key))
-    if existing: return {"id":existing.id,"status":existing.status,"idempotent_replay":True}
-    r=RefundRequest(ticket_id=t.id,transaction_id=tx.id,requested_by_id=user.id,amount=amount,currency=t.currency,
-      status=RefundStatus.PENDING_APPROVAL.value,reason=payload.reason,idempotency_key=key)
-    db.add(r); db.flush()
-    record_event(db,t.id,user.id,"REFUND_REQUESTED",{"refund_id":r.id,"amount":str(amount)})
-    audit(db,user.id,"REFUND_REQUESTED","refund",r.id,{"amount":str(amount),"currency":t.currency})
-    db.commit(); db.refresh(r)
-    return {"id":r.id,"status":r.status,"amount":float(r.amount),"currency":r.currency}
+    return propose_refund(db, t, user, payload.amount, payload.reason)
 
 @router.post("/refunds/{refund_id}/approve")
 def approve_refund(refund_id:str,payload:RefundDecision,db:Session=Depends(get_db),user:User=Depends(require_roles(Role.FINANCE.value,Role.ADMIN.value))):
@@ -327,32 +351,209 @@ def reject_refund(refund_id:str,payload:RefundDecision,db:Session=Depends(get_db
     db.commit(); return {"id":r.id,"status":r.status}
 
 @router.post("/refunds/{refund_id}/execute")
-def execute_refund(refund_id:str,db:Session=Depends(get_db),user:User=Depends(require_roles(Role.REFUNDS.value,Role.ADMIN.value))):
-    # Lock the refund row to serialize repeated clicks/worker retries on PostgreSQL.
-    r=db.scalar(select(RefundRequest).where(RefundRequest.id==refund_id).with_for_update())
-    if not r: raise HTTPException(404,"Refund request not found")
-    if r.status==RefundStatus.REFUNDED.value: return {"id":r.id,"status":r.status,"idempotent_replay":True}
-    if r.status!=RefundStatus.APPROVED.value: raise HTTPException(409,"Only an approved refund can be executed")
-    if r.approved_by_id == user.id:
-        raise HTTPException(409,"Separation of duties: the approver cannot execute the same refund")
-    # Lock the source transaction and re-check the balance immediately before execution.
-    tx=db.scalar(select(Transaction).where(Transaction.id==r.transaction_id).with_for_update())
-    if not tx: raise HTTPException(409,"Source transaction is no longer available")
-    amount=Decimal(str(r.amount)).quantize(Decimal("0.01"))
-    available=(Decimal(str(tx.amount))-Decimal(str(tx.refunded_amount))).quantize(Decimal("0.01"))
-    if amount <= 0 or amount > available:
-        raise HTTPException(409,"Refund exceeds the remaining refundable balance")
-    # This adapter is intentionally MOCK ONLY. It must never be represented as a real gateway call.
-    r.status=RefundStatus.PROCESSING.value
-    db.flush()
-    tx.refunded_amount=(Decimal(str(tx.refunded_amount))+amount).quantize(Decimal("0.01"))
-    r.provider_reference=f"MOCK-{uuid4().hex[:12].upper()}"
-    r.status=RefundStatus.REFUNDED.value
-    ticket=db.get(Ticket,r.ticket_id); ticket.refund_status=RefundStatus.REFUNDED.value
-    record_event(db,ticket.id,user.id,"MOCK_REFUND_CONFIRMED",{"refund_id":r.id,"provider_reference":r.provider_reference,"mock_provider":True})
-    audit(db,user.id,"MOCK_REFUND_EXECUTED","refund",r.id,{"provider_reference":r.provider_reference,"idempotency_key":r.idempotency_key})
+def execute_refund(
+    refund_id: str,
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles(Role.FINANCE.value, Role.REFUNDS.value, Role.ADMIN.value))
+):
+    if not idempotency_key:
+        raise HTTPException(400, "Idempotency-Key header is required for settlement execution")
+    key = idempotency_key
+    return FinancialSettlementService.execute_settlement(
+        db=db,
+        refund_id=refund_id,
+        executor=user,
+        idempotency_key=key,
+        provider="SANDBOX"
+    )
+
+@router.get("/finance/ledger/accounts")
+def list_ledger_accounts(
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles(Role.FINANCE.value, Role.ADMIN.value, Role.AUDITOR.value))
+):
+    ensure_default_accounts(db)
+    accounts = db.scalars(select(LedgerAccount).order_by(LedgerAccount.id)).all()
+    out = []
+    for acc in accounts:
+        debit_sum = db.scalar(select(func.sum(LedgerEntry.amount_minor)).where(LedgerEntry.account_id == acc.id, LedgerEntry.entry_type == "DEBIT")) or 0
+        credit_sum = db.scalar(select(func.sum(LedgerEntry.amount_minor)).where(LedgerEntry.account_id == acc.id, LedgerEntry.entry_type == "CREDIT")) or 0
+        out.append({
+            "id": acc.id,
+            "name": acc.name,
+            "account_type": acc.account_type,
+            "currency": acc.currency,
+            "active": acc.active,
+            "total_debit_minor": debit_sum,
+            "total_credit_minor": credit_sum,
+            "net_balance_minor": debit_sum - credit_sum
+        })
+    return out
+
+@router.get("/finance/ledger/journals")
+def list_ledger_journals(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=100),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles(Role.FINANCE.value, Role.ADMIN.value, Role.AUDITOR.value))
+):
+    journals = db.scalars(
+        select(LedgerJournal)
+        .order_by(desc(LedgerJournal.posted_at))
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    ).all()
+    out = []
+    for j in journals:
+        entries = [{"id": e.id, "account_id": e.account_id, "entry_type": e.entry_type, "amount_minor": e.amount_minor} for e in j.entries]
+        out.append({
+            "id": j.id,
+            "refund_id": j.refund_id,
+            "ticket_id": j.ticket_id,
+            "transaction_id": j.transaction_id,
+            "currency": j.currency,
+            "idempotency_key": j.idempotency_key,
+            "posted_at": j.posted_at.isoformat() if j.posted_at else None,
+            "posted_by_id": j.posted_by_id,
+            "status": j.status,
+            "description": j.description,
+            "entries": entries,
+            "balanced": sum(e["amount_minor"] for e in entries if e["entry_type"] == "DEBIT") == sum(e["amount_minor"] for e in entries if e["entry_type"] == "CREDIT")
+        })
+    return out
+
+@router.get("/finance/settlements")
+def list_settlements(
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles(Role.FINANCE.value, Role.ADMIN.value, Role.AUDITOR.value))
+):
+    attempts = db.scalars(select(GatewaySettlementAttempt).order_by(desc(GatewaySettlementAttempt.created_at)).limit(100)).all()
+    return [{
+        "id": a.id,
+        "refund_id": a.refund_id,
+        "provider": a.provider,
+        "provider_reference": a.provider_reference,
+        "status": a.status,
+        "amount_minor": a.amount_minor,
+        "currency": a.currency,
+        "error_message": a.error_message,
+        "created_at": a.created_at.isoformat() if a.created_at else None
+    } for a in attempts]
+
+@router.post("/evidence/upload")
+def upload_evidence(
+    payload: EvidenceUploadIn,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
+    t = db.get(Ticket, payload.ticket_id)
+    if not t:
+        raise HTTPException(404, "Ticket not found")
+    if user.role == Role.CUSTOMER.value and t.customer_id != user.id:
+        raise HTTPException(404, "Ticket not found")
+
+    raw_bytes = b""
+    try:
+        text = str(payload.base64_data).strip()
+        if text.startswith("data:") and ";base64," in text:
+            b64_part = text.split(";base64,", 1)[1]
+        else:
+            b64_part = text
+        raw_bytes = base64.b64decode(b64_part, validate=False)
+    except Exception:
+        raw_bytes = b""
+
+    evidence_file = evidence_store.save_evidence(db, t, raw_bytes, payload.file_name, source="upload")
     db.commit()
-    return {"id":r.id,"status":r.status,"provider_reference":r.provider_reference,"provider":"MOCK"}
+    db.refresh(evidence_file)
+
+    return {
+        "id": evidence_file.id,
+        "sha256": evidence_file.sha256_hash,
+        "lifecycle_status": evidence_file.lifecycle_status,
+        "file_name": evidence_file.file_name,
+        "tamper_flags": evidence_file.tamper_flags or []
+    }
+
+@router.post("/evidence/verify")
+def verify_evidence(
+    payload: EvidenceVerifyIn,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user)
+):
+    res = verify_product_identity_and_defect(
+        evidence_items=payload.evidence_items,
+        claimed_defect=payload.claimed_defect,
+        purchased_product={
+            "sku": payload.product_sku or "PROD-GEN",
+            "name": payload.product_name or "Claimed Item",
+            "category": payload.product_category or "GENERAL"
+        }
+    )
+    return res
+
+@router.get("/catalog/products")
+def list_products(db: Session = Depends(get_db)):
+    prods = db.scalars(select(Product).where(Product.active == True)).all()
+    return [{
+        "sku": p.sku,
+        "name": p.name,
+        "category": p.category,
+        "brand": p.brand,
+        "model": p.model,
+        "price_minor": p.price_minor,
+        "currency": p.currency,
+        "variants": [{"id": v.id, "sku": v.sku, "color": v.color, "size": v.size, "name": v.variant_name} for v in p.variants],
+        "reference_images": [{"id": r.id, "url": r.image_url, "view_type": r.view_type} for r in p.reference_images]
+    } for p in prods]
+
+@router.get("/policies")
+def list_policies(db: Session = Depends(get_db)):
+    policies = db.scalars(select(ReturnPolicy).where(ReturnPolicy.active == True)).all()
+    return [{
+        "id": pol.id,
+        "category": pol.category,
+        "policy_version": pol.policy_version,
+        "return_window_days": pol.return_window_days,
+        "policy_summary": pol.policy_summary,
+        "requires_serial": pol.requires_serial,
+        "requires_tags": pol.requires_tags,
+        "allow_damaged_exceptions": pol.allow_damaged_exceptions
+    } for pol in policies]
+
+@router.get("/health/readiness")
+def health_readiness(db: Session = Depends(get_db)):
+    """Comprehensive readiness probe checking database connectivity and ledger balance invariants."""
+    # 1. Check DB connectivity
+    db.execute(select(1)).scalar()
+
+    # 2. Check Double-Entry Invariants
+    total_debits = db.scalar(select(func.sum(LedgerEntry.amount_minor)).where(LedgerEntry.entry_type == "DEBIT")) or 0
+    total_credits = db.scalar(select(func.sum(LedgerEntry.amount_minor)).where(LedgerEntry.entry_type == "CREDIT")) or 0
+    ledger_balanced = (total_debits == total_credits)
+
+    # 3. Check Pending Outbox Queue
+    pending_outbox = db.scalar(select(func.count(OutboxMessage.id)).where(OutboxMessage.status == "PENDING")) or 0
+
+    return {
+        "status": "ready" if ledger_balanced else "degraded",
+        "database": "connected",
+        "ledger_invariants": {
+            "total_debits_minor": total_debits,
+            "total_credits_minor": total_credits,
+            "balanced": ledger_balanced
+        },
+        "outbox_pending_count": pending_outbox,
+        "outbox_failed_count": db.scalar(select(func.count(OutboxMessage.id)).where(OutboxMessage.status == "FAILED")) or 0,
+        "integrations": {
+            "payment_gateway": gateway_status(),
+            "vision": vision_status(),
+            "carrier": {"status": "NOT_CONFIGURED", "detail": "No carrier API configured; delivery facts come from the store order record."},
+            "legal_rules": {"status": "NOT_CONFIGURED", "detail": "No maintained jurisdiction ruleset; only merchant policy is applied."},
+        },
+        "timestamp": datetime.now(timezone.utc).isoformat()
+    }
 
 @router.get("/analytics/overview")
 def analytics(db:Session=Depends(get_db),user:User=Depends(require_roles(
@@ -472,16 +673,18 @@ def get_refund(refund_id:str,db:Session=Depends(get_db),user:User=Depends(get_cu
             "provider_reference":r.provider_reference,"created_at":r.created_at.isoformat(),"updated_at":r.updated_at.isoformat()}
 
 @router.post("/refunds/{refund_id}/reconcile")
-def reconcile_mock_refund(refund_id:str,db:Session=Depends(get_db),
-                          user:User=Depends(require_roles(Role.REFUNDS.value,Role.FINANCE.value,Role.ADMIN.value,Role.AUDITOR.value))):
-    r=db.get(RefundRequest,refund_id)
-    if not r: raise HTTPException(404,"Refund request not found")
-    result={"refund_id":r.id,"status":r.status,"provider_reference":r.provider_reference,"provider":"MOCK",
-            "reconciled_at":datetime.now(timezone.utc).isoformat()}
-    audit(db,user.id,"MOCK_REFUND_RECONCILED","refund",r.id,result)
-    db.commit()
-    return result
+def reconcile_refund(refund_id: str, db: Session = Depends(get_db),
+                     user: User = Depends(require_roles(Role.FINANCE.value, Role.ADMIN.value, Role.AUDITOR.value))):
+    """Ask the payment provider what actually happened to an uncertain settlement and apply it exactly once."""
+    return FinancialSettlementService.reconcile_settlement(db, refund_id, user)
 
+
+@router.post("/finance/webhooks/{provider}")
+async def gateway_webhook(provider: str, request: Request, db: Session = Depends(get_db),
+                          signature: Optional[str] = Header(None, alias="X-Gateway-Signature")):
+    """Provider callbacks: HMAC-verified, de-duplicated by event id, applied through reconciliation."""
+    raw = await request.body()
+    return FinancialSettlementService.handle_gateway_webhook(db, provider, raw, signature or "")
 
 @router.get("/automation/agents")
 def automation_agents(user:User=Depends(require_roles(Role.SUPPORT.value,Role.SUPERVISOR.value,Role.ADMIN.value,Role.REFUNDS.value,Role.RISK.value,Role.FINANCE.value,Role.AUDITOR.value,Role.CS_1.value,Role.CS_2.value,Role.CS_3.value))):
@@ -553,6 +756,8 @@ def desks_summary(db:Session=Depends(get_db),user:User=Depends(get_current_user)
 @router.post("/cs1/tickets/{ticket_id}/direct-refund")
 def cs1_direct_refund(ticket_id:str, db:Session=Depends(get_db),
                       user:User=Depends(require_roles(Role.CS_1.value, Role.SUPPORT.value, Role.REFUNDS.value, Role.ADMIN.value, Role.SUPERVISOR.value))):
+    """CS-1 fast track: approve the claim. Store orders are refunded by the store; RITOS-ledger orders get a
+    refund proposal that a different finance approver must approve and a third person must execute."""
     ticket = db.get(Ticket, ticket_id)
     if not ticket: raise HTTPException(404, "Ticket not found")
     require_cs1_bucket(ticket)
@@ -561,98 +766,38 @@ def cs1_direct_refund(ticket_id:str, db:Session=Depends(get_db),
     sent = store_decision(db, ticket, user, "APPROVED", "CS-1 fast-track approval")
     if sent: return sent
     record_human_decision(db, ticket, "APPROVED", user.id, "CS-1 fast-track approval")
-
-    tx = db.get(Transaction, ticket.transaction_id)
-    if not tx: raise HTTPException(404, "Transaction record not found in ledger")
-    
-    amount = Decimal(str(ticket.claimed_amount)).quantize(Decimal("0.01"))
-    available = Decimal(str(tx.amount)) - Decimal(str(tx.refunded_amount))
-    if amount <= 0 or amount > available:
-        raise HTTPException(409, "Requested refund exceeds available transaction balance")
-
-    key = refund_key(ticket.id, amount, ticket.currency)
-    ref = f"MOCK-CS1-{uuid4().hex[:10].upper()}"
-    
-    refund_req = RefundRequest(
-        ticket_id=ticket.id,
-        transaction_id=tx.id,
-        requested_by_id=user.id,
-        amount=amount,
-        currency=ticket.currency,
-        status=RefundStatus.REFUNDED.value,
-        reason="CS-1 Fast-Track: Automated 1-Click execution on verified genuine ticket",
-        approved_by_id=user.id,
-        provider_reference=ref,
-        idempotency_key=key
-    )
-    db.add(refund_req)
-    
-    # Update ledger balance & ticket status
-    tx.refunded_amount = (Decimal(str(tx.refunded_amount)) + amount).quantize(Decimal("0.01"))
-    ticket.status = TicketStatus.RESOLVED.value
-    ticket.refund_status = RefundStatus.REFUNDED.value
-    ticket.refund_decided_at = datetime.now(timezone.utc)
-    ticket.refund_decided_by_id = user.id
-    
-    comment_body = f"✅ CS-1 Fast-Track: 1-Click refund of {ticket.currency} {amount:,.2f} executed successfully. Provider Reference: {ref}."
-    db.add(TicketComment(ticket_id=ticket.id, author_id=user.id, body=comment_body, internal=False))
-    
-    record_event(db, ticket.id, user.id, "CS1_DIRECT_REFUND_EXECUTED", {"amount": str(amount), "ref": ref, "provider": "MOCK"})
-    audit(db, user.id, "CS1_DIRECT_REFUND_EXECUTED", "ticket", ticket.id, {"amount": str(amount), "ref": ref})
-    db.commit()
+    proposal = propose_refund(db, ticket, user, Decimal(str(ticket.claimed_amount)), "CS-1 fast-track approval")
     db.refresh(ticket)
-    return {"status": "REFUNDED", "provider_reference": ref, "ticket": ticket_view(ticket)}
+    return {"status": "REFUND_PROPOSED", "refund": proposal, "ticket": ticket_view(ticket)}
 
 @router.post("/cs1/tickets/{ticket_id}/manual-decide")
 def cs1_manual_decide(ticket_id:str, payload:CS1DecisionIn, db:Session=Depends(get_db),
                       user:User=Depends(require_roles(Role.CS_1.value, Role.SUPPORT.value, Role.REFUNDS.value, Role.ADMIN.value, Role.SUPERVISOR.value))):
     ticket = db.get(Ticket, ticket_id)
     if not ticket: raise HTTPException(404, "Ticket not found")
-    
     decision = payload.decision.upper().strip()
-    if decision in {"APPROVE", "CANCEL"}:
-        if decision == "APPROVE": require_cs1_bucket(ticket)
-        sent = store_decision(db, ticket, user, "APPROVED" if decision == "APPROVE" else "REJECTED", f"CS-1 manual review: {payload.reason}")
-        if sent: return sent
-        record_human_decision(db, ticket, "APPROVED" if decision == "APPROVE" else "REJECTED", user.id, payload.reason)
+    if decision not in {"APPROVE", "CANCEL"}:
+        raise HTTPException(400, "Decision must be 'APPROVE' or 'CANCEL'")
     if decision == "APPROVE":
+        require_cs1_bucket(ticket)
         if ticket.payment_verification != "VERIFIED":
             raise HTTPException(409, f"Cannot approve refund: Ledger status is {ticket.payment_verification}")
-        tx = db.get(Transaction, ticket.transaction_id)
-        if not tx: raise HTTPException(404, "Transaction record not found in ledger")
-        amount = Decimal(str(ticket.claimed_amount)).quantize(Decimal("0.01"))
-        ref = f"MOCK-CS1-MANUAL-{uuid4().hex[:10].upper()}"
-        key = refund_key(ticket.id, amount, ticket.currency)
-        
-        refund_req = RefundRequest(
-            ticket_id=ticket.id, transaction_id=tx.id, requested_by_id=user.id,
-            amount=amount, currency=ticket.currency, status=RefundStatus.REFUNDED.value,
-            reason=f"CS-1 Manual Review Approved: {payload.reason}", approved_by_id=user.id,
-            provider_reference=ref, idempotency_key=key
-        )
-        db.add(refund_req)
-        tx.refunded_amount = (Decimal(str(tx.refunded_amount)) + amount).quantize(Decimal("0.01"))
-        ticket.status = TicketStatus.RESOLVED.value
-        ticket.refund_status = RefundStatus.REFUNDED.value
-        ticket.refund_decided_at = datetime.now(timezone.utc)
-        ticket.refund_decided_by_id = user.id
-        db.add(TicketComment(ticket_id=ticket.id, author_id=user.id, body=f"✅ CS-1 Verified & Approved Refund: {payload.reason} (Ref: {ref})", internal=False))
-        record_event(db, ticket.id, user.id, "CS1_MANUAL_REFUND_APPROVED", {"reason": payload.reason, "ref": ref})
-        audit(db, user.id, "CS1_MANUAL_REFUND_APPROVED", "ticket", ticket.id, {"reason": payload.reason, "ref": ref})
-    elif decision == "CANCEL":
-        ticket.status = TicketStatus.REJECTED.value
-        ticket.refund_status = "CANCELLED"
-        ticket.policy_evaluation_reason = f"CS-1 Manual Review Cancelled: {payload.reason}"
-        ticket.refund_decided_at = datetime.now(timezone.utc)
-        ticket.refund_decided_by_id = user.id
-        db.add(TicketComment(ticket_id=ticket.id, author_id=user.id, body=f"❌ CS-1 Cancelled Refund: {payload.reason}", internal=False))
-        record_event(db, ticket.id, user.id, "CS1_REFUND_CANCELLED", {"reason": payload.reason})
-        audit(db, user.id, "CS1_REFUND_CANCELLED", "ticket", ticket.id, {"reason": payload.reason})
-    else:
-        raise HTTPException(400, "Decision must be 'APPROVE' or 'CANCEL'")
-
-    db.commit()
-    db.refresh(ticket)
+    sent = store_decision(db, ticket, user, "APPROVED" if decision == "APPROVE" else "REJECTED", f"CS-1 manual review: {payload.reason}")
+    if sent: return sent
+    record_human_decision(db, ticket, "APPROVED" if decision == "APPROVE" else "REJECTED", user.id, payload.reason)
+    if decision == "APPROVE":
+        proposal = propose_refund(db, ticket, user, Decimal(str(ticket.claimed_amount)), f"CS-1 manual review: {payload.reason}")
+        db.refresh(ticket)
+        return {"status": "REFUND_PROPOSED", "refund": proposal, "ticket": ticket_view(ticket)}
+    ticket.status = TicketStatus.REJECTED.value
+    ticket.refund_status = "CANCELLED"
+    ticket.policy_evaluation_reason = f"CS-1 manual review cancelled: {payload.reason}"
+    ticket.refund_decided_at = datetime.now(timezone.utc)
+    ticket.refund_decided_by_id = user.id
+    db.add(TicketComment(ticket_id=ticket.id, author_id=user.id, body=f"CS-1 cancelled the refund: {payload.reason}", internal=False))
+    record_event(db, ticket.id, user.id, "CS1_REFUND_CANCELLED", {"reason": payload.reason})
+    audit(db, user.id, "CS1_REFUND_CANCELLED", "ticket", ticket.id, {"reason": payload.reason})
+    db.commit(); db.refresh(ticket)
     return {"status": ticket.status, "ticket": ticket_view(ticket)}
 
 @router.post("/cs2/tickets/{ticket_id}/send-proof-request")
@@ -870,36 +1015,12 @@ def authorize_payout(ticket_id: str, db: Session = Depends(get_db), user: User =
     if t.refund_status == "REFUNDED":
         return {"status": "ALREADY_REFUNDED", "ticket": ticket_view(t)}
     require_cs1_bucket(t)
-    sent = store_decision(db, t, user, "APPROVED", "Finance authorized payout")
-    if sent: return sent
-    record_human_decision(db, t, "APPROVED", user.id, "Finance authorized payout")
-
-    tx = db.get(Transaction, t.transaction_id)
-    if not tx: raise HTTPException(404, "Transaction ledger entry not found")
-    
-    amount = Decimal(str(t.claimed_amount)).quantize(Decimal("0.01"))
-    tx.refunded_amount = (Decimal(str(tx.refunded_amount)) + amount).quantize(Decimal("0.01"))
-    provider_ref = f"MOCK-PAYOUT-{uuid4().hex[:10].upper()}"
-    
-    t.refund_status = "REFUNDED"
-    t.status = TicketStatus.RESOLVED.value
-    t.refund_decided_at = datetime.now(timezone.utc)
-    t.refund_decided_by_id = user.id
-    
-    record_event(db, t.id, user.id, "FINANCE_PAYOUT_EXECUTED", {
-        "amount": str(amount), "currency": t.currency, "provider_reference": provider_ref
-    })
-    audit(db, user.id, "FINANCE_PAYOUT_EXECUTED", "ticket", t.id, {
-        "amount": str(amount), "provider_reference": provider_ref, "approver": user.email
-    })
-    db.commit()
+    sent = store_decision(db, t, user, "APPROVED", "Refund approved by finance")
+    if sent: return sent  # the store owns its payments and executes the refund
+    record_human_decision(db, t, "APPROVED", user.id, "Refund proposed by finance")
+    proposal = propose_refund(db, t, user, Decimal(str(t.claimed_amount)), "Finance proposed payout for an eligible CS-1 claim")
     db.refresh(t)
-    return {
-        "status": "REFUNDED",
-        "provider_reference": provider_ref,
-        "amount": float(amount),
-        "ticket": ticket_view(t)
-    }
+    return {"status": "REFUND_PROPOSED", "refund": proposal, "ticket": ticket_view(t)}
 
 # ==========================================
 # SHOPFLOW INTEGRATION ENDPOINTS

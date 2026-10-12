@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from sqlalchemy import select
 from sqlalchemy.orm import Session
-from .agents import AGENTS, ORCHESTRATOR, STEP_FUNCTIONS, PipelineState, is_eligible, build_routing_steps
+from .agents import AGENTS, ORCHESTRATOR, STEP_FUNCTIONS, PipelineState, build_routing_steps
 from .config import settings
 from .models import Ticket, TicketEvent, AuditLog, TicketStatus, WorkflowRun, WorkflowStep
 
@@ -33,18 +33,10 @@ def _now():
 
 
 def decision_gate(s: PipelineState) -> tuple[str, str]:
-    """Pick the next action from the agents' findings. Money only moves on AUTO_APPROVE."""
-    t = s.ticket
-    if t.decision_bucket == "NON_REFUNDABLE":
-        return AUTO_REJECT, t.policy_evaluation_reason or "Hard policy disqualifier."
-    if t.decision_bucket == "EXCEPTIONAL_PROOF_NEEDED":
-        return AWAIT_PROOF, t.policy_evaluation_reason or "Proof or verification required."
-    if not is_eligible(s):
-        return AWAIT_APPROVAL, "Policy-compliant claim with risk or ledger signals; human approval required."
-    limit = Decimal(str(settings.auto_approve_max_inr))
-    if Decimal(str(t.claimed_amount)) > limit or s.store_facts.get("above_high_value_threshold"):
-        return AWAIT_APPROVAL, f"Amount above the {t.currency} {limit:,.2f} auto-approval limit; human approval required."
-    return AUTO_APPROVE, "Verified, policy-compliant, low-risk claim within the auto-approval limit."
+    """The arbiter (Agent 6) is the only router; the orchestrator just applies its outcome."""
+    if not s.decision:
+        return MANUAL_REVIEW, "No routing decision was produced; manual review required."
+    return s.decision["next_action"], s.decision["reason"]
 
 
 def _close_waiting_runs(db: Session, ticket_id: str, new_status: str):
@@ -94,14 +86,7 @@ def run_workflow(db: Session, ticket: Ticket, trigger: str = "MANUAL", actor_id:
     else:
         next_action, gate_reason = decision_gate(state)
 
-    if next_action == AUTO_APPROVE:
-        decision = "ELIGIBLE_FOR_AUTHORIZED_REFUND_REVIEW"
-    elif state.verification.get("status") == "ALREADY_REFUNDED":
-        decision = "NO_DUPLICATE_REFUND"
-    elif next_action == AUTO_REJECT:
-        decision = "REJECTED_BY_POLICY"
-    else:
-        decision = "HUMAN_REVIEW_REQUIRED"
+    decision = state.decision.get("decision") if (state.decision and not failed_step) else "HUMAN_REVIEW_REQUIRED"
 
     if ticket.status in {TicketStatus.NEW.value, TicketStatus.TRIAGED.value, TicketStatus.REOPENED.value}:
         ticket.status = TicketStatus.AWAITING_INFORMATION.value if next_action == AWAIT_PROOF else TicketStatus.TRIAGED.value
@@ -114,8 +99,24 @@ def run_workflow(db: Session, ticket: Ticket, trigger: str = "MANUAL", actor_id:
 
     evidence = dict(state.evidence)
     evidence["agents"] = trace
-    evidence["visual_analysis"] = state.vision
+    structured = state.vision.get("structured") or {}
+    vision_summary = {
+        "images_count": state.vision.get("images_count", 0),
+        "has_visual_proof": (structured.get("evidence_quality") or {}).get("assessable_count", 0) > 0,
+        "images_analyzed": [str(r)[:16] for r in structured.get("defect_evidence_refs", []) if r],
+        "verification_status": structured.get("verification_status"),
+        "product_identity_status": structured.get("product_identity_status"),
+        "defect_status": structured.get("defect_status"),
+        "detected_features": structured.get("observed_defects", []),
+        "quality_issues": (structured.get("evidence_quality") or {}).get("issues", []),
+        "raw_scores": structured.get("raw_scores", {}),
+        "visual_confidence": None,  # uncalibrated: no probability is claimed
+        "model_version": structured.get("model_version"),
+        "recommended_next_step": structured.get("recommended_next_step"),
+    }
+    evidence["visual_analysis"] = vision_summary
     evidence["idempotency_key"] = state.idempotency_key
+    evidence["decision"] = state.decision or {}
     routing_steps = build_routing_steps(state)
     evidence["routing_steps"] = routing_steps
     evidence["workflow"] = {"run_id": run.id, "trigger": trigger, "status": run.status,
@@ -146,7 +147,7 @@ def run_workflow(db: Session, ticket: Ticket, trigger: str = "MANUAL", actor_id:
         "customer_message_draft": ticket.customer_message_draft,
         "proof_required": ticket.proof_required,
         "proof_status": ticket.proof_status,
-        "visual_evidence": state.vision,
+        "visual_evidence": vision_summary,
         "risk_level": risk["tier"],
         "risk_score": risk["score"],
         "risk_signals": risk["signals"],
@@ -158,6 +159,20 @@ def run_workflow(db: Session, ticket: Ticket, trigger: str = "MANUAL", actor_id:
         "queue": ticket.queue,
         "idempotency_key": state.idempotency_key,
         "routing_steps": routing_steps,
+        "reason_codes": state.decision.get("reason_codes", []) if not failed_step else ["AUTOMATION_STEP_FAILED"],
+        "decision_trace": {
+            "transaction_facts": {"status": state.verification.get("status"), "transaction_id": ticket.transaction_id},
+            "policy": {k: state.policy.get(k) for k in ("eligible", "reason_code", "rule_version", "days_elapsed")}
+                      | {"policy_id": (state.policy.get("policy") or {}).get("policy_id"),
+                         "policy_version": (state.policy.get("policy") or {}).get("policy_version"),
+                         "source": (state.policy.get("policy") or {}).get("source")},
+            "product_identity": state.identity.get("identity_status"),
+            "defect_evidence": state.defect.get("defect_status"),
+            "vision_model": (state.vision.get("structured") or {}).get("model_version"),
+            "risk": {"tier": risk.get("tier"), "score": risk.get("score")},
+            "routing_rule_version": state.decision.get("rule_version"),
+            "outcome": {"desk": ticket.assigned_desk, "next_action": next_action},
+        },
         "evaluated_at": _now().isoformat(),
     }
 

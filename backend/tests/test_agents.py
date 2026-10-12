@@ -26,7 +26,9 @@ def test_pipeline_verifies_transaction_and_does_not_execute_refund():
     db.commit()
     assert result['transaction_verification'] == 'VERIFIED'
     assert result['executed_refund'] is False
-    assert result['decision'] == 'ELIGIBLE_FOR_AUTHORIZED_REFUND_REVIEW'
+    # a refund-not-received dispute is reconciled with the provider, never paid out a second time automatically
+    assert result['decision'] == 'HUMAN_REVIEW_REQUIRED'
+    assert 'PAYMENT_ISSUE_RECONCILIATION' in result['reason_codes']
     assert ticket.duplicate_of_id is None
     db.close()
 
@@ -48,8 +50,8 @@ def test_pipeline_flags_unauthorized_payment_for_human_review():
     db.close()
 
 
-def test_registry_has_eight_specialists_plus_orchestrator():
-    assert len(AGENTS) == 8
+def test_registry_has_nine_specialists_plus_orchestrator():
+    assert len(AGENTS) == 9
     assert ORCHESTRATOR['id'] == 'central_orchestrator'
 
 
