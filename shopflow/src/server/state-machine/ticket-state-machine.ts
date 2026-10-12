@@ -69,3 +69,18 @@ export async function transitionTicket(
 
   return updated;
 }
+
+/** Settle a refunded ticket along the allowed path: REFUND_INITIATED -> REFUND_PROCESSING -> REFUNDED. */
+export async function settleTicketRefund(
+  tx: any,
+  ticketId: string,
+  actor: string,
+  payload: Record<string, any> = {}
+) {
+  const ticket = await tx.refundTicket.findUnique({ where: { id: ticketId } });
+  if (!ticket || ticket.status === "REFUNDED") return ticket;
+  if (ticket.status === "REFUND_INITIATED") {
+    await transitionTicket(tx, ticketId, "REFUND_PROCESSING" as TicketStatus, actor, "REFUND_PROCESSING", payload);
+  }
+  return transitionTicket(tx, ticketId, "REFUNDED" as TicketStatus, actor, "REFUND_COMPLETED", payload);
+}

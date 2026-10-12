@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/server/db";
 import { requireRitosAuth, errorResponse } from "@/server/auth/ritos-guard";
-import { transitionTicket } from "@/server/state-machine/ticket-state-machine";
-import { TicketStatus, RefundTxStatus } from "@prisma/client";
+import { settleTicketRefund } from "@/server/state-machine/ticket-state-machine";
+import { RefundTxStatus } from "@prisma/client";
 
 export const dynamic = "force-dynamic";
 
@@ -35,16 +35,10 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
 
         // Advance ticket state to REFUNDED
         if (refund.ticket && refund.ticket.status !== "REFUNDED") {
-          try {
-            await transitionTicket(
-              tx,
-              refund.ticketId,
-              TicketStatus.REFUNDED,
-              "SETTLEMENT_POLLER",
-              "REFUND_COMPLETED",
-              { refund_id: refund.id, amount_minor: refund.amountMinor }
-            );
-          } catch {}
+          await settleTicketRefund(tx, refund.ticketId, "SETTLEMENT_POLLER", {
+            refund_id: refund.id,
+            amount_minor: refund.amountMinor,
+          });
         }
       });
 

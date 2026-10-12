@@ -2529,8 +2529,18 @@ await fetch('http://YOUR_RITOS_URL/api/v1/integrations/ecommerce/ticket', {
                     <strong style={{ fontSize: '13px', display: 'flex', alignItems: 'center', gap: '6px', color: 'var(--navy-900)' }}>
                       <Cpu size={16} color="var(--indigo-600)" /> RITOS 8 Specialist Agents Autonomous Execution Trace
                     </strong>
-                    <span className="pill green"><i />8/8 COMPLETED</span>
+                    <span className={`pill ${selected.classification_evidence?.workflow?.status === 'WAITING_HUMAN' ? 'amber' : 'green'}`}>
+                      <i />
+                      {selected.classification_evidence.agents.filter((ag: any) => ag.status === 'COMPLETED').length}/{selected.classification_evidence.agents.length} COMPLETED
+                      {selected.classification_evidence?.workflow?.status ? ` · ${selected.classification_evidence.workflow.status.replace('_', ' ')}` : ''}
+                    </span>
                   </div>
+                  {selected.classification_evidence?.workflow?.next_action && (
+                    <div style={{ fontSize: '12px', marginBottom: '10px', color: 'var(--navy-700)' }}>
+                      <strong>Orchestrator next action:</strong> {selected.classification_evidence.workflow.next_action.replace(/_/g, ' ')}
+                      {selected.classification_evidence.workflow.gate_reason ? ` — ${selected.classification_evidence.workflow.gate_reason}` : ''}
+                    </div>
+                  )}
 
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '8px' }}>
                     {selected.classification_evidence.agents.map((ag: any, idx: number) => (

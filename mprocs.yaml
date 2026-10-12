@@ -1,0 +1,28 @@
+# `pnpm dev` terminal UI: services on the left, the selected service's logs on the right.
+# Keys: ↑/↓ select · Ctrl+A focus logs/list · r restart · x stop · s start · Ctrl+C or q quit (stops all)
+# Services are hard-killed on quit; scripts/dev/start.mjs then sweeps the ports so no child process survives.
+# Commands use `cmd:` arrays with node directly: mprocs' `shell:` form does not start processes on some Windows setups.
+proc_list_width: 22
+hide_keymap_window: true
+# Ctrl+C stops every service and exits, wherever focus is.
+keymap_procs:
+  <C-c>: { c: quit }
+keymap_term:
+  <C-c>: { c: quit }
+keymap_copy:
+  <C-c>: { c: quit }
+procs:
+  links:
+    cmd: ["node", "scripts/dev/ready.mjs", "--watch"]
+    stop: hard-kill
+  api:
+    cmd: ["node", "scripts/dev/run-api.mjs"]
+    stop: hard-kill
+  desk:
+    cwd: <CONFIG_DIR>/frontend
+    cmd: ["node", "node_modules/vite/bin/vite.js", "--host", "0.0.0.0"]
+    stop: hard-kill
+  shop:
+    cwd: <CONFIG_DIR>/shopflow
+    cmd: ["node", "node_modules/next/dist/bin/next", "dev", "-p", "3000"]
+    stop: hard-kill

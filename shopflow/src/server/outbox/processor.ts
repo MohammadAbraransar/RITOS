@@ -13,7 +13,7 @@ export async function processOutboxBatch(limit = 10) {
 
   for (const event of pendingEvents) {
     try {
-      if (process.env.MOCK_RITOS !== "false") {
+      if (process.env.MOCK_RITOS === "true") {
         // Direct mock dispatch
         if (event.eventType === "refund.ticket.created") {
           const context = await buildRefundContext(event.ticketId);
@@ -21,7 +21,7 @@ export async function processOutboxBatch(limit = 10) {
             const decision = mockDecide(context);
 
             const baseUrl = process.env.SHOPFLOW_BASE_URL || "http://localhost:3000";
-            const apiKey = process.env.RITOS_API_KEY || "test-ritos-api-key";
+            const apiKey = process.env.RITOS_API_KEY || "ritos_dev_key_secret_2026";
 
             const res = await fetch(`${baseUrl}/api/ritos/refund-decision`, {
               method: "POST",
@@ -48,7 +48,7 @@ export async function processOutboxBatch(limit = 10) {
         results.push({ id: event.id, status: "SENT" });
       } else {
         // Real RITOS Webhook posting
-        const baseUrl = process.env.RITOS_BASE_URL || "http://localhost:8000";
+        const baseUrl = process.env.RITOS_BASE_URL || "http://127.0.0.1:8000";
         const webhookUrl = `${baseUrl}/webhook/refund-tickets`;
         const apiKey = process.env.RITOS_API_KEY || "ritos_dev_key_secret_2026";
 

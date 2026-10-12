@@ -4,47 +4,88 @@ Welcome! This guide is written step-by-step for any developer, fresher, or team 
 
 ---
 
-## ⚡ One-Click Batch Files (Recommended)
+## ⚡ One Terminal: `pnpm dev` (Recommended)
+
+After `setup.bat` has been run once, start everything from the repository root:
+
+```powershell
+pnpm install   # first time only (installs the launcher)
+pnpm dev       # opens the split view below
+```
+
+```
+ links               │  RITOS + ShopFlow  3/3 running
+ api                 │  ● RITOS Desk Portal     http://localhost:5173
+ desk                │  ● RITOS API (Swagger)   http://localhost:8000/docs
+ shop                │  ● ShopFlow Store        http://localhost:3000
+```
+
+The left list holds the services and the right pane shows the selected one's live logs. `links` is a live status page with every URL and the demo logins.
+
+| Key | Action |
+| :--- | :--- |
+| `↑` / `↓` | Pick a service |
+| `Ctrl+A` | Switch focus between the list and the log (scroll with the mouse) |
+| `r` / `x` / `s` | Restart / stop / start the selected service |
+| `Ctrl+C` (or `q`) | Stop every service and exit, wherever the focus is |
+
+| Command | What it runs |
+| :--- | :--- |
+| `pnpm dev` | Split view with all three services |
+| `pnpm dev:plain` | All services in one combined, prefixed log stream (no split view) |
+| `pnpm dev:api` / `pnpm dev:desk` / `pnpm dev:shop` | One service only |
+| `pnpm stop` | Frees ports 5173, 8000, 3000, 3001 if anything was left behind |
+
+---
+
+## ⚡ One-Click Batch Files (separate windows)
 
 Everything has been configured with Windows batch files in the repository root for zero confusion:
 
 | Batch File | What it does | When to run |
 | :--- | :--- | :--- |
 | **`setup.bat`** | Automatically installs Python packages, sets up `.venv`, initializes SQLite DB, and runs `npm install` for both frontends. | Run **once** when you first clone the project on a new machine. |
-| **`start_all.bat`** | Launches all 4 services in labeled terminal windows and automatically opens the browser tabs. | Run every time you want to start development or test locally. |
+| **`start_all.bat`** | Launches all 3 services in labeled terminal windows and automatically opens the browser tabs. | Run every time you want to start development or test locally. |
 | **`stop_all.bat`** | Kills all background processes on ports `5173`, `8000`, `3000`, and `3001` cleanly. | Run whenever you want to shut down or reload all services. |
 
 ---
 
 ## 🏗️ Architecture & Port Map
 
-When running, the system operates across **4 services**:
+When running, the system operates across **3 services** sharing one Supabase Postgres database (`shopflow` and `ritos` schemas):
 
 | Terminal | Service | Technology | Working Directory | Local URL |
 | :--- | :--- | :--- | :--- | :--- |
 | **Terminal 1** | **RITOS Frontend** (Desk Portal) | React + Vite + TypeScript | `frontend/` | [http://localhost:5173](http://localhost:5173) |
 | **Terminal 2** | **RITOS Backend** (Multi-Agent Engine) | Python FastAPI + SQLite | `backend/` | [http://localhost:8000](http://localhost:8000) |
 | **Terminal 3** | **ShopFlow Frontend** (eCommerce Store) | Next.js 14 + TailwindCSS | `shopflow/` | [http://localhost:3000](http://localhost:3000) |
-| **Terminal 4** | **ShopFlow Backend** (Dedicated API) | Node.js Standalone Microservice | `shopflow/` | [http://localhost:3001](http://localhost:3001) |
 
 ```
-  [ShopFlow Storefront]          [ShopFlow Backend API]
-     (Port 3000)                    (Port 3001)
-          │                              │
-          │ (POST /api/create-test-claim)│ (Context & Callbacks)
-          ▼                              ▼
-  ═══════════════════════════════════════════════════════
-                 [RITOS FastAPI Backend]
-                       (Port 8000)
-                 8-Specialist Agent Pipeline
-                 Deterministic 3-Desk Triage
-  ═══════════════════════════════════════════════════════
-                         ▲
-                         │ (REST API & WebSockets)
-                         │
-                 [RITOS Desk Portal UI]
-                       (Port 5173)
+ ShopFlow store (:3000)  ── outbox event: refund.ticket.created ──►  RITOS API (:8000)
+   customers, orders,     ◄── GET /api/ritos/refund-tickets/{id}/context ──   orchestrator
+   payments, policies         (store is the source of truth)                  8 agents -> decision gate
+                          ◄── outbox: STATUS / NOTIFICATION / DECISION ──     AUTO_APPROVE | AUTO_REJECT
+   executes the refund    ── outbox: refund.execution.completed ──►           AWAIT_PROOF | AWAIT_APPROVAL
+                                                                               (human resumes in desk portal)
+                                         RITOS Desk Portal (:5173)
 ```
+
+---
+
+## 🗄️ Database: Supabase (one project, two schemas)
+
+1. Create a free project at supabase.com and note the database password.
+2. Open **Connect** in the Supabase dashboard and copy the **Transaction pooler** (port 6543) and **Session pooler** (port 5432) connection strings.
+3. `shopflow/.env` (copied from `shopflow/.env.example`):
+   - `DATABASE_URL` = transaction pooler string + `?pgbouncer=true&schema=shopflow`
+   - `DIRECT_URL` = session pooler string + `?schema=shopflow`
+4. `backend/.env`:
+   - `DATABASE_URL` = session pooler string (no query string)
+   - `DB_SCHEMA=ritos`
+5. `RITOS_API_KEY` must be identical in `backend/.env` and `shopflow/.env`.
+6. Run `setup.bat` again: it creates the ShopFlow tables and seed data. RITOS creates its own tables on first start.
+
+Adding real customer data later: insert customers, products/policies and orders into the `shopflow` schema (Prisma seed script or Supabase table editor). RITOS reads every claim's facts from the store, so no RITOS change is needed.
 
 ---
 
@@ -69,10 +110,13 @@ npm install
 cd ..
 ```
 
-### 3. Install ShopFlow Dependencies
+### 3. Install ShopFlow Dependencies and Database
 ```powershell
 cd shopflow
 npm install
+copy .env.example .env   # then paste your Supabase URLs
+npx prisma db push
+npm run db:seed
 cd ..
 ```
 
@@ -105,14 +149,6 @@ npm run dev -- -p 3000
 ```
 - **Local URL:** [http://localhost:3000](http://localhost:3000)
 
-### 💻 Terminal 4: ShopFlow Backend (API & Context Adapter)
-```powershell
-cd shopflow
-node standalone-backend.js
-```
-- **Local URL:** [http://localhost:3001](http://localhost:3001)
-- **Health Check:** [http://localhost:3001/api/health](http://localhost:3001/api/health)
-
 ---
 
 ## 🧪 End-to-End Testing & Verification
@@ -140,6 +176,15 @@ node standalone-backend.js
 | `ORD-88203` | RGB Gaming Keyboard | **CS-3 (Rejected)** | Window expired (26 days elapsed, 14-day policy max). |
 
 ---
+
+### Step 2b: Full Store Flow (real database, recommended)
+1. Log in to ShopFlow as a seeded customer, e.g. `ananya@example.com` / `Demo@1234` (store admin: `admin@shopflow.test` / `Demo@1234`).
+2. Raise a refund from **My Orders** on a delivered order.
+3. Within ~5 seconds the store outbox sends the event to RITOS, which:
+   - **Auto-approves** (CS-1, verified, low risk, ≤ `AUTO_APPROVE_MAX_INR`): the store executes the mock refund and the ticket reaches `REFUNDED`.
+   - **Auto-rejects** (CS-3, e.g. outside the return window): the store ticket becomes `REJECTED`.
+   - **Waits for a human** (CS-2 proof needed, or high value): the store shows `PROCESSING` and the shopper gets a notification. In the RITOS portal, CS-2 accepts the proof (moves to CS-1), then CS-1 or Finance approves, and the decision is sent to the store.
+4. Inspect any ticket's runs, per-agent steps and outbound calls at `GET /api/v1/tickets/{id}/workflow` (Swagger: http://localhost:8000/docs).
 
 ### Step 3: Strict 3-Point Duplicate Verification
 RITOS strictly requires that **all three criteria** match simultaneously before marking a ticket as a duplicate:
@@ -173,7 +218,7 @@ All 8 agents' telemetry traces can be inspected directly in the RITOS UI under t
 ---
 
 ## 🛑 Clean Shutdown
-To stop all 4 services at once, double-click **`stop_all.bat`** or run:
+To stop all services at once, double-click **`stop_all.bat`** or run:
 ```powershell
 .\stop_all.bat
 ```

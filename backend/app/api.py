@@ -20,8 +20,15 @@ from .services import (
 )
 from .agents import AGENTS, ORCHESTRATOR, run_ticket_pipeline
 from .config import settings
+from .models import WorkflowRun, OutboxMessage
+from .orchestrator import run_workflow, record_human_decision, workflow_view
+from .outbox import deliver_due, retry as retry_outbox, outbox_view, enqueue
+from .shopflow import is_store_linked, finalize_human_decision, apply_next_action
 
 router = APIRouter(prefix="/api/v1")
+
+STAFF_ROLES = (Role.SUPPORT.value, Role.SUPERVISOR.value, Role.ADMIN.value, Role.REFUNDS.value, Role.RISK.value,
+               Role.FINANCE.value, Role.CS_1.value, Role.CS_2.value, Role.CS_3.value)
 
 def user_view(u: User):
     return {"id":u.id,"email":u.email,"full_name":u.full_name,"role":u.role}
@@ -52,6 +59,33 @@ def ticket_view(t: Ticket, include_private=False):
       "rejection_notice_sent_at":t.rejection_notice_sent_at.isoformat() if getattr(t,"rejection_notice_sent_at",None) else None,
       "refund_decided_at":t.refund_decided_at.isoformat() if getattr(t,"refund_decided_at",None) else None,
       "created_at":t.created_at.isoformat(),"updated_at":t.updated_at.isoformat(),"comments":comments}
+
+def store_decision(db: Session, ticket: Ticket, user: User, decision: str, reason: str) -> dict | None:
+    """Human approve/reject on a store-linked ticket: the store executes the refund, RITOS records the decision."""
+    if not is_store_linked(ticket):
+        return None
+    if ticket.refund_status in {"APPROVED", "REJECTED", "REFUNDED"}:
+        raise HTTPException(409, f"Decision already sent to the store ({ticket.refund_status})")
+    result = finalize_human_decision(db, ticket, decision, user, reason)
+    if decision == "APPROVED":
+        ticket.status = TicketStatus.IN_REVIEW.value
+        ticket.refund_decided_by_id = user.id
+    event = "STORE_REFUND_APPROVED_BY_AGENT" if decision == "APPROVED" else "STORE_REFUND_REJECTED_BY_AGENT"
+    record_event(db, ticket.id, user.id, event, {"reason": reason})
+    audit(db, user.id, event, "ticket", ticket.id, {"reason": reason})
+    db.commit()
+    db.refresh(ticket)
+    return {"status": "DECISION_QUEUED_FOR_STORE", "decision": decision, **result, "ticket": ticket_view(ticket)}
+
+def rerun_workflow(db: Session, ticket: Ticket, user: User) -> dict:
+    result = run_workflow(db, ticket, trigger="MANUAL_RERUN", actor_id=user.id)
+    if is_store_linked(ticket) and ticket.refund_status not in {"APPROVED", "REJECTED", "REFUNDED"}:
+        result["callbacks"] = apply_next_action(db, ticket, result)
+    return result
+
+def require_cs1_bucket(ticket: Ticket):
+    if ticket.decision_bucket != "GENUINE_REFUNDABLE":
+        raise HTTPException(409, f"Only CS-1 (GENUINE_REFUNDABLE) tickets can be refunded; this ticket is {ticket.decision_bucket}")
 
 def visible_ticket_query(db, user):
     q = select(Ticket)
@@ -450,7 +484,7 @@ def run_ticket_automation(ticket_id:str,db:Session=Depends(get_db),
                           user:User=Depends(require_roles(Role.SUPPORT.value,Role.SUPERVISOR.value,Role.ADMIN.value,Role.REFUNDS.value,Role.RISK.value,Role.FINANCE.value,Role.CS_1.value,Role.CS_2.value,Role.CS_3.value))):
     ticket=db.get(Ticket,ticket_id)
     if not ticket: raise HTTPException(404,"Ticket not found")
-    result=run_ticket_pipeline(db,ticket,user.id)
+    result=rerun_workflow(db,ticket,user)
     db.commit(); db.refresh(ticket)
     return result
 
@@ -460,7 +494,7 @@ def run_all_automation(db:Session=Depends(get_db),
     tickets = db.scalars(select(Ticket).where(Ticket.status.notin_([TicketStatus.RESOLVED.value, TicketStatus.REJECTED.value]))).all()
     results = []
     for t in tickets:
-        run_ticket_pipeline(db, t, user.id)
+        rerun_workflow(db, t, user)
         results.append({"ticket_id": t.id, "ticket_number": t.ticket_number, "bucket": t.decision_bucket, "desk": t.assigned_desk})
     db.commit()
     return {"status": "ORCHESTRATOR_EXECUTED", "processed_count": len(results), "agents_count": len(AGENTS), "results": results}
@@ -512,9 +546,13 @@ def cs1_direct_refund(ticket_id:str, db:Session=Depends(get_db),
                       user:User=Depends(require_roles(Role.CS_1.value, Role.SUPPORT.value, Role.REFUNDS.value, Role.ADMIN.value, Role.SUPERVISOR.value))):
     ticket = db.get(Ticket, ticket_id)
     if not ticket: raise HTTPException(404, "Ticket not found")
+    require_cs1_bucket(ticket)
     if ticket.payment_verification != "VERIFIED":
         raise HTTPException(409, f"Cannot issue refund: Ledger status is {ticket.payment_verification}")
-    
+    sent = store_decision(db, ticket, user, "APPROVED", "CS-1 fast-track approval")
+    if sent: return sent
+    record_human_decision(db, ticket, "APPROVED", user.id, "CS-1 fast-track approval")
+
     tx = db.get(Transaction, ticket.transaction_id)
     if not tx: raise HTTPException(404, "Transaction record not found in ledger")
     
@@ -563,6 +601,11 @@ def cs1_manual_decide(ticket_id:str, payload:CS1DecisionIn, db:Session=Depends(g
     if not ticket: raise HTTPException(404, "Ticket not found")
     
     decision = payload.decision.upper().strip()
+    if decision in {"APPROVE", "CANCEL"}:
+        if decision == "APPROVE": require_cs1_bucket(ticket)
+        sent = store_decision(db, ticket, user, "APPROVED" if decision == "APPROVE" else "REJECTED", f"CS-1 manual review: {payload.reason}")
+        if sent: return sent
+        record_human_decision(db, ticket, "APPROVED" if decision == "APPROVE" else "REJECTED", user.id, payload.reason)
     if decision == "APPROVE":
         if ticket.payment_verification != "VERIFIED":
             raise HTTPException(409, f"Cannot approve refund: Ledger status is {ticket.payment_verification}")
@@ -612,7 +655,12 @@ def cs2_send_proof_request(ticket_id:str, payload:ProofRequestIn, db:Session=Dep
     ticket.proof_status = "REQUESTED"
     ticket.proof_request_sent_at = datetime.now(timezone.utc)
     ticket.status = TicketStatus.AWAITING_INFORMATION.value
-    
+    record_human_decision(db, ticket, "PROOF_REQUESTED", user.id, payload.message)
+    if is_store_linked(ticket):
+        enqueue(db, ticket.id, "NOTIFICATION", "/api/ritos/notifications",
+                {"ticket_id": ticket.ticket_number, "title": "Proof requested", "body": payload.message[:1000], "channel": "IN_APP"},
+                f"ritos-proof-request-{ticket.id}-{uuid4().hex[:8]}")
+
     dest = ticket.customer_phone or ticket.customer_email or "Customer Mobile"
     db.add(TicketComment(
         ticket_id=ticket.id,
@@ -631,7 +679,11 @@ def cs3_send_rejection_notice(ticket_id:str, payload:RejectionNoticeIn, db:Sessi
                              user:User=Depends(require_roles(Role.CS_3.value, Role.SUPPORT.value, Role.REFUNDS.value, Role.ADMIN.value, Role.SUPERVISOR.value))):
     ticket = db.get(Ticket, ticket_id)
     if not ticket: raise HTTPException(404, "Ticket not found")
-    
+    if is_store_linked(ticket) and ticket.refund_status != "REJECTED":
+        store_decision(db, ticket, user, "REJECTED", payload.reason or ticket.policy_evaluation_reason or "Rejected under store policy")
+    elif not is_store_linked(ticket):
+        record_human_decision(db, ticket, "REJECTED", user.id, payload.reason or "CS-3 rejection notice")
+
     ticket.status = TicketStatus.REJECTED.value
     ticket.rejection_notice_sent_at = datetime.now(timezone.utc)
     if payload.reason:
@@ -739,10 +791,21 @@ class ProofActionPayload(BaseModel):
     note: Optional[str] = "Human review decision recorded."
 
 @router.post("/tickets/{ticket_id}/proof-action")
-def handle_proof_action(ticket_id: str, payload: ProofActionPayload, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+def handle_proof_action(ticket_id: str, payload: ProofActionPayload, db: Session = Depends(get_db),
+                        user: User = Depends(require_roles(Role.CS_2.value, Role.SUPPORT.value, Role.REFUNDS.value, Role.ADMIN.value, Role.SUPERVISOR.value))):
     t = db.get(Ticket, ticket_id)
     if not t: raise HTTPException(404, "Ticket not found")
-    
+    if payload.action not in {"APPROVE_PROOF", "REQUEST_PROOF", "DENY"}:
+        raise HTTPException(400, "action must be APPROVE_PROOF, REQUEST_PROOF or DENY")
+
+    if payload.action == "DENY" and is_store_linked(t):
+        store_decision(db, t, user, "REJECTED", f"Exception denied after proof review: {payload.note}")
+    elif payload.action == "DENY":
+        record_human_decision(db, t, "REJECTED", user.id, payload.note or "Exception denied")
+    else:
+        # Accepting proof moves the claim to CS-1, where a human authorizes the refund itself.
+        record_human_decision(db, t, "PROOF_ACCEPTED" if payload.action == "APPROVE_PROOF" else "PROOF_REQUESTED", user.id, payload.note or "")
+
     if payload.action == "APPROVE_PROOF":
         t.proof_status = "PROOF_VERIFIED"
         t.decision_bucket = "GENUINE_REFUNDABLE"
@@ -785,7 +848,11 @@ def authorize_payout(ticket_id: str, db: Session = Depends(get_db), user: User =
     if not t: raise HTTPException(404, "Ticket not found")
     if t.refund_status == "REFUNDED":
         return {"status": "ALREADY_REFUNDED", "ticket": ticket_view(t)}
-    
+    require_cs1_bucket(t)
+    sent = store_decision(db, t, user, "APPROVED", "Finance authorized payout")
+    if sent: return sent
+    record_human_decision(db, t, "APPROVED", user.id, "Finance authorized payout")
+
     tx = db.get(Transaction, t.transaction_id)
     if not tx: raise HTTPException(404, "Transaction ledger entry not found")
     
@@ -816,9 +883,7 @@ def authorize_payout(ticket_id: str, db: Session = Depends(get_db), user: User =
 # ==========================================
 # SHOPFLOW INTEGRATION ENDPOINTS
 # ==========================================
-from pydantic import BaseModel
-from typing import Optional
-from .shopflow import process_shopflow_event, check_shopflow_health
+from .shopflow import process_shopflow_event, check_shopflow_health, handle_event
 
 class ShopflowWebhookPayload(BaseModel):
     model_config = {"extra": "allow"}
@@ -827,32 +892,39 @@ class ShopflowWebhookPayload(BaseModel):
     ticket_id: str
     status: Optional[str] = "PENDING_RITOS"
 
+def integration_caller(authorization: Optional[str], db: Session) -> str:
+    """Store servers authenticate with the shared RITOS API key; staff may also call it from the desk portal."""
+    token = authorization[7:].strip() if authorization and authorization.lower().startswith("bearer ") else ""
+    if token and settings.ritos_api_key and hmac.compare_digest(token, settings.ritos_api_key):
+        return "store"
+    if token:
+        try:
+            user = get_current_user(token, db)
+            if user.role in STAFF_ROLES:
+                return f"staff:{user.email}"
+        except HTTPException:
+            pass
+    raise HTTPException(401, "A valid RITOS API key is required (Authorization: Bearer <RITOS_API_KEY>)")
+
 @router.post("/webhook/refund-tickets")
 @router.post("/webhooks/shopflow")
 def shopflow_webhook(payload: ShopflowWebhookPayload,
                      authorization: Optional[str] = Header(None),
                      db: Session = Depends(get_db)):
     """
-    Webhook receiver for ShopFlow refund events.
-    Fetches claim context from ShopFlow, executes the 8-specialist agent orchestrator,
-    and returns the adjudication decision callback.
+    Webhook receiver for ShopFlow refund events (idempotent per event_id).
+    refund.ticket.created runs the orchestrator; execution and human-decision events update the ticket.
+    Store callbacks are queued in the outbox and delivered in the background.
     """
-    # Verify Bearer token if provided
-    if authorization and authorization.startswith("Bearer "):
-        token = authorization.split(" ")[1].strip()
-        if settings.ritos_api_key and token != settings.ritos_api_key:
-            raise HTTPException(401, "Invalid RITOS API key")
-
+    integration_caller(authorization, db)
     try:
-        raw_dict = payload.model_dump()
-        result = process_shopflow_event(db, payload.ticket_id, payload.event_id, fallback_payload=raw_dict)
-        return {
-            "status": "SUCCESS",
-            "message": "ShopFlow ticket adjudicated and decision submitted",
-            "data": result
-        }
+        result = handle_event(db, payload.model_dump())
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(500, f"ShopFlow processing error: {str(e)}")
+        db.rollback()
+        raise HTTPException(500, f"ShopFlow processing error: {e}")
+    return {"status": "SUCCESS", "message": "Event processed by RITOS orchestrator", "data": result}
 
 @router.get("/integrations/shopflow/status")
 def shopflow_status():
@@ -907,3 +979,45 @@ def shopflow_sync(db: Session = Depends(get_db),
     }
 
 
+
+# ==========================================
+# ORCHESTRATION VISIBILITY & OUTBOX OPERATIONS
+# ==========================================
+@router.get("/tickets/{ticket_id}/workflow")
+def ticket_workflow(ticket_id: str, db: Session = Depends(get_db), user: User = Depends(require_roles(*STAFF_ROLES, Role.AUDITOR.value))):
+    t = db.get(Ticket, ticket_id)
+    if not t: raise HTTPException(404, "Ticket not found")
+    runs = db.scalars(select(WorkflowRun).where(WorkflowRun.ticket_id == t.id).order_by(WorkflowRun.started_at.desc())).all()
+    messages = db.scalars(select(OutboxMessage).where(OutboxMessage.ticket_id == t.id).order_by(OutboxMessage.created_at)).all()
+    return {"ticket_id": t.id, "ticket_number": t.ticket_number, "store_linked": is_store_linked(t),
+            "current": (t.classification_evidence or {}).get("workflow"),
+            "runs": [workflow_view(r) for r in runs], "outbox": [outbox_view(m) for m in messages]}
+
+@router.get("/workflow/runs")
+def workflow_runs(status: str | None = None, limit: int = Query(50, ge=1, le=200), db: Session = Depends(get_db),
+                  user: User = Depends(require_roles(*STAFF_ROLES, Role.AUDITOR.value))):
+    q = select(WorkflowRun).order_by(WorkflowRun.started_at.desc()).limit(limit)
+    if status: q = q.where(WorkflowRun.status == status)
+    runs = db.scalars(q).all()
+    waiting = db.scalar(select(func.count(WorkflowRun.id)).where(WorkflowRun.status == "WAITING_HUMAN")) or 0
+    return {"waiting_human": waiting, "items": [workflow_view(r) for r in runs]}
+
+@router.get("/integrations/outbox")
+def list_outbox(status: str | None = None, db: Session = Depends(get_db),
+                user: User = Depends(require_roles(Role.ADMIN.value, Role.SUPERVISOR.value, Role.AUDITOR.value))):
+    q = select(OutboxMessage).order_by(OutboxMessage.created_at.desc()).limit(200)
+    if status: q = q.where(OutboxMessage.status == status)
+    return [outbox_view(m) for m in db.scalars(q).all()]
+
+@router.post("/integrations/outbox/{message_id}/retry")
+def retry_outbox_message(message_id: str, db: Session = Depends(get_db),
+                         user: User = Depends(require_roles(Role.ADMIN.value, Role.SUPERVISOR.value))):
+    m = db.get(OutboxMessage, message_id)
+    if not m: raise HTTPException(404, "Outbox message not found")
+    retry_outbox(db, m)
+    audit(db, user.id, "OUTBOX_RETRY_REQUESTED", "outbox_message", m.id, {"kind": m.kind}); db.commit()
+    return outbox_view(m)
+
+@router.post("/integrations/outbox/deliver")
+def deliver_outbox_now(db: Session = Depends(get_db), user: User = Depends(require_roles(Role.ADMIN.value, Role.SUPERVISOR.value))):
+    return {"attempted": deliver_due(db)}

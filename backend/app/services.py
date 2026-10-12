@@ -55,10 +55,12 @@ def verify_transaction(db: Session, transaction_id: str, customer_id: str, amoun
     if not tx: return {"status":"TRANSACTION_NOT_FOUND","transaction":None}
     if tx.customer_id != customer_id: return {"status":"CUSTOMER_MISMATCH","transaction":None}
     if tx.currency != currency.upper(): return {"status":"AMOUNT_MISMATCH","transaction":None}
-    if Decimal(str(tx.amount)) != Decimal(str(amount)): return {"status":"AMOUNT_MISMATCH","transaction":tx}
     if tx.payment_status == "PENDING": return {"status":"PAYMENT_PENDING","transaction":tx}
     if tx.payment_status != "SUCCESSFUL": return {"status":"MANUAL_VERIFICATION_REQUIRED","transaction":tx}
-    if Decimal(str(tx.refunded_amount)) >= Decimal(str(tx.amount)): return {"status":"ALREADY_REFUNDED","transaction":tx}
+    remaining = Decimal(str(tx.amount)) - Decimal(str(tx.refunded_amount))
+    if remaining <= 0: return {"status":"ALREADY_REFUNDED","transaction":tx}
+    # Item-level claims on multi-item orders are normal; only claims above the refundable balance mismatch.
+    if Decimal(str(amount)) <= 0 or Decimal(str(amount)) > remaining: return {"status":"AMOUNT_MISMATCH","transaction":tx}
     return {"status":"VERIFIED","transaction":tx}
 
 def calculate_priority(category: str, description: str, created_at=None):
@@ -133,6 +135,22 @@ PRODUCT_POLICIES = {
     }
 }
 
+DAMAGE_TERMS = ["damaged", "broken", "cracked", "defective", "not working", "wrong product", "wrong item", "torn", "faulty", "stopped working"]
+# Electronics claims need a photo/serial check for any functional defect, not only physical damage.
+ELECTRONICS_DEFECT_TERMS = DAMAGE_TERMS + ["defect", "erratic", "overheat", "dead pixel", "no sound", "won't charge", "not charging"]
+
+def policy_for(item_category: str | None, store_facts: dict | None = None) -> dict:
+    """Effective policy: the store's own policy snapshot wins over RITOS's built-in category table."""
+    item_cat = (item_category or "GENERAL").upper()
+    policy = dict(PRODUCT_POLICIES.get(item_cat, PRODUCT_POLICIES["GENERAL"]))
+    if store_facts and store_facts.get("return_window_days") is not None:
+        policy["return_window_days"] = int(store_facts["return_window_days"])
+        policy["policy_summary"] = f"Store policy v{store_facts.get('policy_version', 1)}: {policy['return_window_days']}-day return window."
+        policy["source"] = "STORE"
+    else:
+        policy["source"] = "RITOS_DEFAULT"
+    return policy
+
 def evaluate_three_buckets(
     verification_status: str,
     category: str,
@@ -141,12 +159,15 @@ def evaluate_three_buckets(
     purchase_date=None,
     duplicate_ticket_id: str | None = None,
     claimed_amount: float = 0.0,
-    tx_amount: float = 0.0
+    tx_amount: float = 0.0,
+    store_facts: dict | None = None,
+    proof_verified: bool = False
 ) -> dict:
     item_cat = (item_category or "GENERAL").upper()
-    policy = PRODUCT_POLICIES.get(item_cat, PRODUCT_POLICIES["GENERAL"])
+    policy = policy_for(item_cat, store_facts)
     window_days = policy["return_window_days"]
     desc_lower = description.lower()
+    facts = store_facts or {}
 
     # 1. Check for Hard Non-Refundable Disqualifiers (Bucket 3: CS-3)
     if duplicate_ticket_id:
@@ -176,8 +197,17 @@ def evaluate_three_buckets(
             "eligible": False
         }
 
-    # Policy window check
-    if purchase_date and window_days > 0:
+    # Policy window check: the store computes it from the delivery date when it can.
+    if facts.get("within_return_window") is False:
+        elapsed = facts.get("days_since_delivery")
+        return {
+            "decision_bucket": "NON_REFUNDABLE",
+            "assigned_desk": "CS_3",
+            "policy_reason": f"Claim filed past the {window_days}-day return policy window ({elapsed} days since delivery).",
+            "proof_required": None,
+            "eligible": False
+        }
+    if "within_return_window" not in facts and purchase_date and window_days > 0:
         from datetime import datetime, timezone
         now = datetime.now(timezone.utc)
         p_date = purchase_date if purchase_date.tzinfo else purchase_date.replace(tzinfo=timezone.utc)
@@ -212,12 +242,25 @@ def evaluate_three_buckets(
         exception_reasons.append(f"Ledger check exception: {verification_status.replace('_', ' ')}")
         proof_items.append("BANK_STATEMENT_PROOF")
 
-    if any(w in desc_lower for w in ["damaged", "broken", "cracked", "defective", "not working", "wrong product", "wrong item"]):
+    for conflict in facts.get("claim_data_conflicts") or []:
         needs_proof = True
-        exception_reasons.append("Item reported damaged, defective or mismatched")
+        exception_reasons.append(f"Store data conflict: {conflict}")
+    if facts.get("requested_exceeds_remaining"):
+        needs_proof = True
+        exception_reasons.append("Requested amount exceeds the remaining refundable balance")
+
+    # Photo/serial proof: the store's evidence rules decide when present, otherwise the claim text does.
+    if "evidence_required" in facts:
+        proof_needed = bool(facts["evidence_required"]) and int(facts.get("evidence_count") or 0) == 0
+    else:
+        terms = ELECTRONICS_DEFECT_TERMS if policy.get("requires_serial") else DAMAGE_TERMS
+        proof_needed = any(w in desc_lower for w in terms) and not proof_verified
+    if proof_needed:
+        needs_proof = True
+        exception_reasons.append("Item reported damaged, defective or mismatched; photo proof required")
         proof_items.extend(["PHOTO_OF_ITEM", "SHIPPING_LABEL_PHOTO"])
 
-    if category in {"MISSING_DOCUMENTATION", "INCORRECT_REFUND_AMOUNT", "RETURN_ELIGIBILITY"}:
+    if category in {"MISSING_DOCUMENTATION", "INCORRECT_REFUND_AMOUNT"}:
         needs_proof = True
         exception_reasons.append(f"Issue category '{category}' requires case verification")
         proof_items.append("RECEIPT_OR_INVOICE")

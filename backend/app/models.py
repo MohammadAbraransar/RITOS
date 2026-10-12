@@ -153,6 +153,62 @@ class RefundRequest(Base):
     created_at: Mapped[datetime]=mapped_column(DateTime(timezone=True), default=now_utc)
     updated_at: Mapped[datetime]=mapped_column(DateTime(timezone=True), default=now_utc, onupdate=now_utc)
 
+class WorkflowRun(Base):
+    """One execution of the orchestrator for a ticket (intake, re-run, or a human decision resuming it)."""
+    __tablename__="workflow_runs"
+    id: Mapped[str]=mapped_column(String(36), primary_key=True, default=lambda:str(uuid.uuid4()))
+    ticket_id: Mapped[str]=mapped_column(ForeignKey("tickets.id"), index=True)
+    trigger: Mapped[str]=mapped_column(String(40))
+    status: Mapped[str]=mapped_column(String(30), default="RUNNING", index=True)
+    next_action: Mapped[str|None]=mapped_column(String(40), nullable=True)
+    decision: Mapped[str|None]=mapped_column(String(60), nullable=True)
+    actor_id: Mapped[str|None]=mapped_column(String(36), nullable=True)
+    error: Mapped[str|None]=mapped_column(Text, nullable=True)
+    started_at: Mapped[datetime]=mapped_column(DateTime(timezone=True), default=now_utc)
+    finished_at: Mapped[datetime|None]=mapped_column(DateTime(timezone=True), nullable=True)
+    steps: Mapped[list["WorkflowStep"]]=relationship(back_populates="run", cascade="all, delete-orphan", order_by="WorkflowStep.seq")
+
+class WorkflowStep(Base):
+    __tablename__="workflow_steps"
+    id: Mapped[str]=mapped_column(String(36), primary_key=True, default=lambda:str(uuid.uuid4()))
+    run_id: Mapped[str]=mapped_column(ForeignKey("workflow_runs.id"), index=True)
+    seq: Mapped[int]=mapped_column(Integer)
+    step_id: Mapped[str]=mapped_column(String(60))
+    name: Mapped[str]=mapped_column(String(120))
+    status: Mapped[str]=mapped_column(String(20))
+    output: Mapped[dict]=mapped_column(JSON, default=dict)
+    error: Mapped[str|None]=mapped_column(Text, nullable=True)
+    started_at: Mapped[datetime]=mapped_column(DateTime(timezone=True), default=now_utc)
+    duration_ms: Mapped[int]=mapped_column(Integer, default=0)
+    run: Mapped["WorkflowRun"]=relationship(back_populates="steps")
+
+class OutboxMessage(Base):
+    """Durable outbound call to the store (status, decision, notification), delivered in order with retries."""
+    __tablename__="outbox_messages"
+    id: Mapped[str]=mapped_column(String(36), primary_key=True, default=lambda:str(uuid.uuid4()))
+    ticket_id: Mapped[str|None]=mapped_column(String(36), index=True, nullable=True)
+    kind: Mapped[str]=mapped_column(String(40))
+    path: Mapped[str]=mapped_column(String(255))
+    payload: Mapped[dict]=mapped_column(JSON, default=dict)
+    idempotency_key: Mapped[str]=mapped_column(String(120), unique=True)
+    status: Mapped[str]=mapped_column(String(20), default="PENDING", index=True)
+    attempts: Mapped[int]=mapped_column(Integer, default=0)
+    next_attempt_at: Mapped[datetime]=mapped_column(DateTime(timezone=True), default=now_utc)
+    last_error: Mapped[str|None]=mapped_column(Text, nullable=True)
+    response: Mapped[dict|None]=mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime]=mapped_column(DateTime(timezone=True), default=now_utc)
+    sent_at: Mapped[datetime|None]=mapped_column(DateTime(timezone=True), nullable=True)
+
+class InboundEvent(Base):
+    """Webhook events already processed, so store retries never run the workflow twice."""
+    __tablename__="inbound_events"
+    id: Mapped[str]=mapped_column(String(120), primary_key=True)
+    source: Mapped[str]=mapped_column(String(40))
+    event_type: Mapped[str]=mapped_column(String(80))
+    external_ticket_id: Mapped[str|None]=mapped_column(String(80), index=True, nullable=True)
+    result: Mapped[dict]=mapped_column(JSON, default=dict)
+    received_at: Mapped[datetime]=mapped_column(DateTime(timezone=True), default=now_utc)
+
 class AuditLog(Base):
     __tablename__="audit_logs"
     id: Mapped[str]=mapped_column(String(36), primary_key=True, default=lambda:str(uuid.uuid4()))

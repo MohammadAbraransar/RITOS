@@ -40,12 +40,12 @@ where node >nul 2>&1
 if %errorlevel% neq 0 (
     color 0C
     echo [ERROR] Node.js is not installed or not in PATH!
-    echo Please install Node.js (LTS version) from nodejs.org.
+    echo Please install Node.js LTS from nodejs.org.
     pause
     exit /b 1
 )
 node --version
-npm --version
+call npm --version
 
 :: 3. Python Virtual Environment Setup
 echo.
@@ -68,7 +68,7 @@ echo.
 echo [4/6] Installing backend Python packages and setting up database...
 call .venv\Scripts\activate.bat
 python -m pip install --upgrade pip --quiet
-pip install -r backend\requirements.txt
+python -m pip install -r backend\requirements.txt
 if %errorlevel% neq 0 (
     color 0C
     echo [ERROR] Failed to install backend dependencies!
@@ -76,10 +76,13 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 
+if not exist "%ROOT_DIR%backend\.env" copy "%ROOT_DIR%backend\.env.example" "%ROOT_DIR%backend\.env" >nul
+if not exist "%ROOT_DIR%frontend\.env" copy "%ROOT_DIR%frontend\.env.example" "%ROOT_DIR%frontend\.env" >nul
+
 echo Initializing database schema and seed data...
 cd /d "%ROOT_DIR%backend"
-python migrate_db.py
 python -m app.seed
+python migrate_db.py
 cd /d "%ROOT_DIR%"
 
 :: 5. Install RITOS Frontend Packages
@@ -106,6 +109,20 @@ if %errorlevel% neq 0 (
     pause
     exit /b 1
 )
+if not exist "%ROOT_DIR%shopflow\.env" copy "%ROOT_DIR%shopflow\.env.example" "%ROOT_DIR%shopflow\.env" >nul
+
+:: ShopFlow store database: Supabase or any Postgres configured in shopflow\.env
+findstr /C:"<project-ref>" "%ROOT_DIR%shopflow\.env" >nul
+if %errorlevel% equ 0 (
+    echo.
+    echo [ACTION NEEDED] shopflow\.env still has placeholder database URLs.
+    echo Paste your Supabase connection strings into shopflow\.env, then run setup.bat again.
+) else (
+    echo Creating ShopFlow tables and seed data in Postgres...
+    call npx prisma db push --skip-generate
+    call npx prisma generate
+    call npm run db:seed
+)
 cd /d "%ROOT_DIR%"
 
 echo.
@@ -116,6 +133,6 @@ echo.
 echo All backend packages, database tables, and frontend modules are ready!
 echo.
 echo NEXT STEP:
-echo   Double-click "start_all.bat" to launch all 4 services with 1 click.
+echo   Double-click "start_all.bat" to launch all 3 services with 1 click.
 echo.
 pause

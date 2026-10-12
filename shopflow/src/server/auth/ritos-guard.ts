@@ -16,7 +16,7 @@ export function errorResponse(code: string, message: string, status: number = 40
 
 export async function authenticateRitosOrSession(req: Request, allowedRoles: string[] = ["ADMIN", "SUPPORT_ANALYST"]) {
   const authHeader = req.headers.get("authorization") || "";
-  const ritosKey = process.env.RITOS_API_KEY || "test-ritos-api-key";
+  const ritosKey = process.env.RITOS_API_KEY || "ritos_dev_key_secret_2026";
 
   if (authHeader.startsWith("Bearer ")) {
     const token = authHeader.substring(7).trim();
@@ -48,7 +48,7 @@ export async function authenticateRitosOrSession(req: Request, allowedRoles: str
 
 export function requireRitosAuth(req: Request) {
   const authHeader = req.headers.get("authorization") || "";
-  const ritosKey = process.env.RITOS_API_KEY || "test-ritos-api-key";
+  const ritosKey = process.env.RITOS_API_KEY || "ritos_dev_key_secret_2026";
 
   if (!authHeader.startsWith("Bearer ")) {
     return { error: errorResponse("UNAUTHORIZED", "Missing Bearer token", 401) };

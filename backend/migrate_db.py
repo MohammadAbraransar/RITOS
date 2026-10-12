@@ -7,6 +7,12 @@ if not os.path.exists(db_path):
 
 con = sqlite3.connect(db_path)
 cur = con.cursor()
+cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='tickets'")
+if not cur.fetchone():
+    print("Table 'tickets' does not exist yet; skipping migration as schema will be initialized by seeder.")
+    con.close()
+    exit(0)
+
 existing = [r[1] for r in cur.execute("PRAGMA table_info(tickets)").fetchall()]
 
 cols = [

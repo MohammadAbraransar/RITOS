@@ -42,7 +42,7 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
         (rt) => rt.status === "PENDING" && rt.settleAt && rt.settleAt.getTime() <= Date.now()
       );
       if (pendingTx) {
-        const { transitionTicket } = await import("@/server/state-machine/ticket-state-machine");
+        const { settleTicketRefund } = await import("@/server/state-machine/ticket-state-machine");
         const { RefundTxStatus, TicketStatus } = await import("@prisma/client");
         try {
           await prisma.$transaction(async (tx) => {
@@ -50,17 +50,15 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
               where: { id: pendingTx.id },
               data: { status: RefundTxStatus.SUCCESS },
             });
-            await transitionTicket(
-              tx,
-              ticket.id,
-              TicketStatus.REFUNDED,
-              "SETTLEMENT_POLLER",
-              "REFUND_COMPLETED",
-              { refund_id: pendingTx.id, amount_minor: pendingTx.amountMinor }
-            );
+            await settleTicketRefund(tx, ticket.id, "SETTLEMENT_POLLER", {
+              refund_id: pendingTx.id,
+              amount_minor: pendingTx.amountMinor,
+            });
           });
           ticket.status = TicketStatus.REFUNDED;
-        } catch {}
+        } catch (err: any) {
+          console.error(`[Settlement] ticket ${ticket.id} could not be settled: ${err?.message || err}`);
+        }
       }
     }
 

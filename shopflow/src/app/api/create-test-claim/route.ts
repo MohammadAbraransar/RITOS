@@ -35,7 +35,7 @@ export async function POST(req: Request) {
 
     const ritosUrl = process.env.RITOS_BASE_URL 
       ? `${process.env.RITOS_BASE_URL}/webhook/refund-tickets` 
-      : "http://localhost:8000/webhook/refund-tickets";
+      : "http://127.0.0.1:8000/webhook/refund-tickets";
     const apiKey = process.env.RITOS_API_KEY || "ritos_dev_key_secret_2026";
 
     const res = await fetch(ritosUrl, {

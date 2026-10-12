@@ -1,6 +1,6 @@
 from datetime import datetime, timezone, timedelta
 from sqlalchemy import select
-from .database import Base, engine, SessionLocal
+from .database import SessionLocal, init_db
 from .models import User, Transaction, Ticket
 from .security import hash_password
 from .config import settings
@@ -21,7 +21,7 @@ USERS = [
 ]
 
 def main():
-    Base.metadata.create_all(bind=engine)
+    init_db()
     db = SessionLocal()
     try:
         users = {}

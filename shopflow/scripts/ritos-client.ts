@@ -6,7 +6,7 @@
 const ticketId = process.argv[2] || "RIT-2026-000100";
 const shouldDecide = process.argv.includes("--decide");
 const baseUrl = process.env.SHOPFLOW_BASE_URL || "http://localhost:3000";
-const apiKey = process.env.RITOS_API_KEY || "test-ritos-api-key";
+const apiKey = process.env.RITOS_API_KEY || "ritos_dev_key_secret_2026";
 
 async function run() {
   console.log(`\n=== Fetching RITOS context for ${ticketId} ===`);
