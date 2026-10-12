@@ -202,21 +202,24 @@ def process_shopflow_event(db: Session, ticket_id: str, event_id: Optional[str] 
 
     # 2. Find or create Ticket in RITOS database
     t = db.scalar(select(Ticket).where(Ticket.ticket_number == ticket_id))
-    if not t:
-        p_date = None
-        if order_info.get("ordered_at"):
-            try:
-                p_date = datetime.fromisoformat(order_info["ordered_at"].replace("Z", "+00:00"))
-            except Exception:
-                p_date = datetime.now(timezone.utc)
+    p_date = None
+    date_str = fb.get("purchase_date") or order_info.get("ordered_at")
+    if date_str:
+        try:
+            p_date = datetime.fromisoformat(str(date_str).replace("Z", "+00:00"))
+        except Exception:
+            p_date = datetime.now(timezone.utc)
 
+    item_cat = str(fb.get("item_category") or product_info.get("category") or "GENERAL").upper()
+
+    if not t:
         t = Ticket(
             ticket_number=ticket_id,
             customer_id=cust_id,
             transaction_id=tx.id,
             order_id=order_info.get("order_id"),
             item_name=product_info.get("name") or "ShopFlow Product",
-            item_category=str(product_info.get("category") or "GENERAL").upper(),
+            item_category=item_cat,
             claimed_amount=amount_inr,
             currency="INR",
             customer_name=customer_info.get("name"),
@@ -234,6 +237,19 @@ def process_shopflow_event(db: Session, ticket_id: str, event_id: Optional[str] 
             }
         )
         db.add(t)
+        db.flush()
+    else:
+        # Update with newest details if provided
+        ev = dict(t.classification_evidence or {})
+        if fb.get("evidence_images"):
+            ev["evidence_images"] = fb.get("evidence_images")
+        t.classification_evidence = ev
+        if p_date:
+            t.purchase_date = p_date
+        if fb.get("item_category"):
+            t.item_category = item_cat
+        if fb.get("description"):
+            t.description = fb.get("description")
         db.flush()
 
     # 3. Execute 8-Specialist Agent Pipeline
@@ -335,7 +351,9 @@ def process_shopflow_event(db: Session, ticket_id: str, event_id: Optional[str] 
         "policy_evaluation_reason": t.policy_evaluation_reason,
         "customer_message_draft": t.customer_message_draft,
         "proof_status": t.proof_status,
+        "routing_steps": (t.classification_evidence or {}).get("routing_steps") or pipeline_res.get("routing_steps"),
         "agents_trace": pipeline_res.get("agents_trace", []),
-        "visual_evidence": pipeline_res.get("visual_evidence", {}),
+        "visual_evidence": (t.classification_evidence or {}).get("visual_analysis") or pipeline_res.get("visual_evidence", {}),
+        "classification_evidence": t.classification_evidence,
         "shopflow_response": shopflow_cb_res
     }

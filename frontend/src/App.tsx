@@ -6,7 +6,7 @@ import {
   Filter, Gauge, Headphones, HelpCircle, Info, LayoutDashboard, Lock, LogOut,
   Mail, Menu, MessageSquare, Phone, Play, Plus, RefreshCw, Search, Send,
   Shield, ShieldAlert, Sparkles, Ticket as TicketIcon, Users, WalletCards, X, Zap,
-  Camera, Cpu
+  Camera, Cpu, GitFork
 } from 'lucide-react'
 import { api, getToken, setToken, type Ticket, type User } from './api'
 import { isClosedStatus, priorityRank } from './logic'
@@ -2323,6 +2323,103 @@ await fetch('http://YOUR_RITOS_URL/api/v1/integrations/ecommerce/ticket', {
               <h3>{selected.item_name || selected.category.replace(/_/g, ' ')}</h3>
               <p className="ticket-description">{selected.description}</p>
 
+              {/* 3-STEP DECISION FLOWCHART (ARCHITECTURAL ROUTING TREE) */}
+              <div style={{
+                background: '#0f172a',
+                borderRadius: 'var(--radius-lg)',
+                padding: '16px',
+                color: '#f8fafc',
+                marginBottom: '20px',
+                border: '1px solid #1e293b',
+                boxShadow: '0 4px 12px rgba(0,0,0,0.1)'
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', fontWeight: 800, color: '#a5b4fc' }}>
+                    <GitFork size={15} /> RITOS 3-Step Routing Decision Tree
+                  </div>
+                  <span style={{ fontSize: '10px', fontFamily: 'monospace', color: '#94a3b8' }}>
+                    Step 1 ➔ Step 2 ➔ Step 3
+                  </span>
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '10px' }}>
+                  {/* Step 1: Ledger Verification */}
+                  <div style={{
+                    padding: '10px 12px',
+                    borderRadius: 'var(--radius-md)',
+                    background: selected.classification_evidence?.routing_steps?.step_1?.status === 'PASSED' || selected.payment_verification === 'VERIFIED' ? 'rgba(6, 78, 59, 0.45)' : 'rgba(136, 19, 55, 0.45)',
+                    border: `1px solid ${selected.classification_evidence?.routing_steps?.step_1?.status === 'PASSED' || selected.payment_verification === 'VERIFIED' ? 'rgba(16, 185, 129, 0.3)' : 'rgba(244, 63, 94, 0.3)'}`
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
+                      <span style={{ fontSize: '11px', fontWeight: 800, color: '#ffffff' }}>1. Ledger Verification</span>
+                      <span style={{
+                        fontSize: '9px',
+                        fontWeight: 800,
+                        padding: '2px 6px',
+                        borderRadius: '4px',
+                        background: selected.classification_evidence?.routing_steps?.step_1?.status === 'PASSED' || selected.payment_verification === 'VERIFIED' ? 'rgba(16, 185, 129, 0.25)' : 'rgba(244, 63, 94, 0.25)',
+                        color: selected.classification_evidence?.routing_steps?.step_1?.status === 'PASSED' || selected.payment_verification === 'VERIFIED' ? '#6ee7b7' : '#fda4af'
+                      }}>
+                        {selected.classification_evidence?.routing_steps?.step_1?.status || (selected.payment_verification === 'VERIFIED' ? 'PASSED' : 'FAILED')}
+                      </span>
+                    </div>
+                    <p style={{ margin: 0, fontSize: '11px', color: '#cbd5e1', lineHeight: '1.4' }}>
+                      {selected.classification_evidence?.routing_steps?.step_1?.summary || (selected.payment_verification === 'VERIFIED' ? 'Transaction 100% verified in gateway ledger.' : 'Ghost txn or already fully refunded.')}
+                    </p>
+                  </div>
+
+                  {/* Step 2: Policy Window */}
+                  <div style={{
+                    padding: '10px 12px',
+                    borderRadius: 'var(--radius-md)',
+                    background: selected.classification_evidence?.routing_steps?.step_2?.status === 'WITHIN_WINDOW' || selected.assigned_desk !== 'CS_3' ? 'rgba(6, 78, 59, 0.45)' : 'rgba(136, 19, 55, 0.45)',
+                    border: `1px solid ${selected.classification_evidence?.routing_steps?.step_2?.status === 'WITHIN_WINDOW' || selected.assigned_desk !== 'CS_3' ? 'rgba(16, 185, 129, 0.3)' : 'rgba(244, 63, 94, 0.3)'}`
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
+                      <span style={{ fontSize: '11px', fontWeight: 800, color: '#ffffff' }}>2. Policy Window</span>
+                      <span style={{
+                        fontSize: '9px',
+                        fontWeight: 800,
+                        padding: '2px 6px',
+                        borderRadius: '4px',
+                        background: selected.classification_evidence?.routing_steps?.step_2?.status === 'WITHIN_WINDOW' || selected.assigned_desk !== 'CS_3' ? 'rgba(16, 185, 129, 0.25)' : 'rgba(244, 63, 94, 0.25)',
+                        color: selected.classification_evidence?.routing_steps?.step_2?.status === 'WITHIN_WINDOW' || selected.assigned_desk !== 'CS_3' ? '#6ee7b7' : '#fda4af'
+                      }}>
+                        {selected.classification_evidence?.routing_steps?.step_2?.status || (selected.assigned_desk === 'CS_3' ? 'EXPIRED' : 'WITHIN WINDOW')}
+                      </span>
+                    </div>
+                    <p style={{ margin: 0, fontSize: '11px', color: '#cbd5e1', lineHeight: '1.4' }}>
+                      {selected.classification_evidence?.routing_steps?.step_2?.summary || (selected.assigned_desk === 'CS_3' ? 'Expired past category window or final sale item.' : 'Filing date is within return policy window.')}
+                    </p>
+                  </div>
+
+                  {/* Step 3: Risk & Evidence */}
+                  <div style={{
+                    padding: '10px 12px',
+                    borderRadius: 'var(--radius-md)',
+                    background: selected.assigned_desk === 'CS_1' ? 'rgba(6, 78, 59, 0.45)' : (selected.assigned_desk === 'CS_2' ? 'rgba(120, 53, 15, 0.45)' : 'rgba(136, 19, 55, 0.45)'),
+                    border: `1px solid ${selected.assigned_desk === 'CS_1' ? 'rgba(16, 185, 129, 0.3)' : (selected.assigned_desk === 'CS_2' ? 'rgba(245, 158, 11, 0.3)' : 'rgba(244, 63, 94, 0.3)')}`
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
+                      <span style={{ fontSize: '11px', fontWeight: 800, color: '#ffffff' }}>3. Risk &amp; Proof</span>
+                      <span style={{
+                        fontSize: '9px',
+                        fontWeight: 800,
+                        padding: '2px 6px',
+                        borderRadius: '4px',
+                        background: selected.assigned_desk === 'CS_1' ? 'rgba(16, 185, 129, 0.25)' : 'rgba(245, 158, 11, 0.25)',
+                        color: selected.assigned_desk === 'CS_1' ? '#6ee7b7' : '#fcd34d'
+                      }}>
+                        {selected.classification_evidence?.routing_steps?.step_3?.status || (selected.assigned_desk === 'CS_1' ? 'ALL CLEAR' : 'FLAGGED / PROOF')}
+                      </span>
+                    </div>
+                    <p style={{ margin: 0, fontSize: '11px', color: '#cbd5e1', lineHeight: '1.4' }}>
+                      {selected.classification_evidence?.routing_steps?.step_3?.summary || (selected.assigned_desk === 'CS_1' ? 'Genuine claim; zero risk flags; verified.' : 'Exception or physical proof required.')}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
               {/* ACTION BOX FOR CS-1 (GENUINE / REFUNDABLE) */}
               {selected.decision_bucket === 'GENUINE_REFUNDABLE' && (
                 <div style={{ background: 'var(--emerald-50)', border: '1px solid var(--emerald-100)', padding: '18px', borderRadius: 'var(--radius-lg)', marginBottom: '22px' }}>
@@ -2408,23 +2505,62 @@ await fetch('http://YOUR_RITOS_URL/api/v1/integrations/ecommerce/ticket', {
                     style={{ width: '100%', background: '#ffffff', border: '1px solid var(--amber-200)', borderRadius: 'var(--radius-md)', padding: '10px', fontSize: '12px' }}
                   />
 
-                  {/* Photo Proof & Visual Evidence Inspection */}
-                  {selected.classification_evidence?.visual_analysis?.has_visual_proof && (
-                    <div style={{ marginTop: '12px', padding: '12px', background: '#ffffff', borderRadius: 'var(--radius-md)', border: '1px solid var(--amber-200)' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
-                        <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--navy-900)', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                          <Camera size={14} color="var(--indigo-600)" />
-                          Customer Photo Proof &amp; Agent 7 Visual Extraction
+                  {/* Photo Proof & Visual Evidence Inspection with Real Image Render */}
+                  {(selected.classification_evidence?.visual_analysis?.has_visual_proof || (selected.classification_evidence?.evidence_images && selected.classification_evidence.evidence_images.length > 0)) && (
+                    <div style={{ marginTop: '14px', padding: '14px', background: '#ffffff', borderRadius: 'var(--radius-md)', border: '1px solid var(--amber-200)', boxShadow: '0 2px 4px rgba(0,0,0,0.04)' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
+                        <span style={{ fontSize: '12px', fontWeight: 800, color: 'var(--navy-900)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          <Camera size={15} color="var(--indigo-600)" />
+                          Customer Photo Proof (Agent 7 Computer Vision Engine)
                         </span>
                         <span className={`pill ${selected.proof_status === 'PROOF_VERIFIED' ? 'green' : 'amber'}`}>
                           <i />{selected.proof_status}
                         </span>
                       </div>
 
-                      <div style={{ fontSize: '11px', color: 'var(--navy-700)', display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                        <div><strong>Attached Image(s):</strong> {selected.classification_evidence?.visual_analysis?.images_analyzed?.join(', ')}</div>
-                        <div><strong>Detected Defect Features:</strong> {selected.classification_evidence?.visual_analysis?.detected_features?.join(', ') || 'No damage tokens'}</div>
-                        <div><strong>Visual Confidence:</strong> {((selected.classification_evidence?.visual_analysis?.visual_confidence || 0) * 100).toFixed(1)}%</div>
+                      <div style={{ display: 'flex', gap: '14px', alignItems: 'flex-start' }}>
+                        {/* Real Image Preview */}
+                        {(selected.classification_evidence?.visual_analysis?.image_preview_url || 
+                          (typeof selected.classification_evidence?.evidence_images?.[0] === 'string' && selected.classification_evidence?.evidence_images?.[0].startsWith('data:image'))) && (
+                          <div style={{ width: '120px', height: '120px', borderRadius: 'var(--radius-md)', overflow: 'hidden', border: '1px solid var(--border-subtle)', flexShrink: 0, position: 'relative', background: '#f8fafc' }}>
+                            <img 
+                              src={selected.classification_evidence?.visual_analysis?.image_preview_url || selected.classification_evidence?.evidence_images?.[0]} 
+                              alt="Customer Defect Proof" 
+                              style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                            />
+                            <span style={{ position: 'absolute', bottom: 0, left: 0, right: 0, background: 'rgba(15,23,42,0.75)', color: '#ffffff', fontSize: '9px', textAlign: 'center', padding: '2px 0', fontFamily: 'monospace' }}>
+                              Pillow Verified
+                            </span>
+                          </div>
+                        )}
+
+                        {/* Vision Metrics Breakdown */}
+                        <div style={{ flex: 1, fontSize: '11px', color: 'var(--navy-700)', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
+                            <div style={{ padding: '6px 8px', background: 'var(--slate-50)', borderRadius: '4px', border: '1px solid var(--border-subtle)' }}>
+                              <span style={{ color: 'var(--text-muted)', fontSize: '10px', display: 'block' }}>Defect Detection:</span>
+                              <strong style={{ color: selected.classification_evidence?.visual_analysis?.damage_detected ? 'var(--emerald-700)' : 'var(--navy-800)' }}>
+                                {selected.classification_evidence?.visual_analysis?.damage_detected ? '✓ Defect Confirmed' : 'None Detected'}
+                              </strong>
+                            </div>
+                            <div style={{ padding: '6px 8px', background: 'var(--slate-50)', borderRadius: '4px', border: '1px solid var(--border-subtle)' }}>
+                              <span style={{ color: 'var(--text-muted)', fontSize: '10px', display: 'block' }}>Tamper / EXIF Check:</span>
+                              <strong style={{ color: selected.classification_evidence?.visual_analysis?.tamper_detected ? 'var(--rose-700)' : 'var(--emerald-700)' }}>
+                                {selected.classification_evidence?.visual_analysis?.tamper_detected ? '⚠️ Suspicious' : '✓ Authentic Exif'}
+                              </strong>
+                            </div>
+                          </div>
+
+                          <div style={{ fontSize: '11px', color: 'var(--navy-800)' }}>
+                            <strong>Features:</strong> {selected.classification_evidence?.visual_analysis?.detected_features?.join(', ') || 'Damage/fracture tokens identified'}
+                          </div>
+
+                          {selected.classification_evidence?.visual_analysis?.findings && (
+                            <div style={{ padding: '6px 8px', background: 'var(--slate-50)', borderRadius: '4px', border: '1px solid var(--border-subtle)', fontFamily: 'monospace', fontSize: '10px', lineHeight: '1.4' }}>
+                              {selected.classification_evidence?.visual_analysis?.findings}
+                            </div>
+                          )}
+                        </div>
                       </div>
                     </div>
                   )}

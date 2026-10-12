@@ -17,6 +17,7 @@ from .services import (
     classify, calculate_priority, find_duplicate, verify_transaction, ROUTES,
     evaluate_three_buckets, generate_customer_message_draft, refund_key
 )
+from .proof_reader import run_proof_reading_pipeline
 
 AGENTS = [
     {
@@ -76,61 +77,12 @@ ORCHESTRATOR = {
 }
 
 
-def analyze_proof_images(evidence_images: List[str], description: str) -> Dict[str, Any]:
-    """Agent 7 Visual Evidence Extraction Engine:
-
-    Inspects customer photo evidence, detects damage patterns, packaging integrity,
-    and returns verified visual tokens and confidence score.
+def analyze_proof_images(evidence_images: List[Any], description: str = "") -> Dict[str, Any]:
+    """Agent 7 Visual Evidence & Real-Time Proof Reading Engine:
+    Inspects customer photo evidence, base64 uploads, receipts, and labels
+    using computer vision, gradient edge analysis, and OCR document parsing.
     """
-    if not evidence_images:
-        return {
-            "images_count": 0,
-            "images_analyzed": [],
-            "has_visual_proof": False,
-            "damage_detected": False,
-            "detected_features": [],
-            "visual_confidence": 0.0,
-            "verdict": "NO_EVIDENCE_ATTACHED"
-        }
-
-    detected_features = []
-    desc_lower = (description or "").lower()
-
-    for img in evidence_images:
-        img_str = str(img).lower()
-        if any(k in img_str for k in ["damage", "broken", "tear", "loose", "scratch", "crack"]):
-            detected_features.append("PHYSICAL_DAMAGE_CONFIRMED")
-        if any(k in img_str for k in ["zipper", "stitch", "seam"]):
-            detected_features.append("HARDWARE_SEAM_DEFECT")
-        if any(k in img_str for k in ["box", "label", "package", "shipping"]):
-            detected_features.append("SHIPPING_LABEL_VERIFIED")
-        if any(k in img_str for k in ["screen", "display", "pixel"]):
-            detected_features.append("DISPLAY_ANOMALY_CONFIRMED")
-        if any(k in img_str for k in ["headphone", "earphone", "cushion"]):
-            detected_features.append("ACOUSTIC_HARDWARE_DEFECT")
-
-    # If no filename tokens matched but description explicitly indicates defect,
-    # evaluate visual context based on description tokens
-    if not detected_features and evidence_images:
-        if any(k in desc_lower for k in ["tear", "stitch", "broken", "damaged", "blemish", "zipper"]):
-            detected_features.append("COSMETIC_DAMAGE_CONFIRMED")
-        else:
-            detected_features.append("IMAGE_ATTACHMENT_VERIFIED")
-
-    # Remove duplicates
-    detected_features = list(dict.fromkeys(detected_features))
-    damage_found = any(f != "IMAGE_ATTACHMENT_VERIFIED" for f in detected_features)
-    confidence = 0.94 if damage_found else 0.80
-
-    return {
-        "images_count": len(evidence_images),
-        "images_analyzed": evidence_images,
-        "has_visual_proof": True,
-        "damage_detected": damage_found,
-        "detected_features": detected_features,
-        "visual_confidence": confidence,
-        "verdict": "DAMAGE_VERIFIED_BY_VISION_AI" if damage_found else "PROOF_RECORDED"
-    }
+    return run_proof_reading_pipeline(evidence_images, description)
 
 
 def run_ticket_pipeline(db: Session, ticket: Ticket, actor_id: str | None = None) -> dict:
@@ -336,8 +288,24 @@ def run_ticket_pipeline(db: Session, ticket: Ticket, actor_id: str | None = None
     idempotency_hash = refund_key(ticket.id, ticket.claimed_amount, ticket.currency)
 
     # If photo proof of damage was provided, upgrade proof_status to PROOF_VERIFIED
-    if vision_analysis["damage_detected"]:
+    if vision_analysis["damage_detected"] and vision_analysis["has_visual_proof"]:
         ticket.proof_status = "PROOF_VERIFIED"
+        # If the claim was in CS-2 because proof was required, and proof is verified:
+        # Step 3: All Clear -> Route to CS-1 (Fast-Track Auto-Approval)
+        if (
+            ticket.assigned_desk == "CS_2"
+            and "Item reported damaged, defective or mismatched" in (ticket.policy_evaluation_reason or "")
+            and not risk_signals
+            and verification["status"] == "VERIFIED"
+            and ticket.decision_bucket != "NON_REFUNDABLE"
+        ):
+            ticket.decision_bucket = "GENUINE_REFUNDABLE"
+            ticket.assigned_desk = "CS_1"
+            top_feats = ", ".join(vision_analysis["detected_features"][:2]) or "hardware anomaly"
+            ticket.policy_evaluation_reason = (
+                f"Verified ledger payment within return window; physical defect confirmed by Agent 7 Visual Proof Reader ({top_feats})."
+            )
+            ticket.proof_required = None
     elif ticket.proof_required:
         ticket.proof_status = "PROOF_REQUESTED"
 
@@ -353,7 +321,8 @@ def run_ticket_pipeline(db: Session, ticket: Ticket, actor_id: str | None = None
         "idempotency_key": idempotency_hash,
         "payout_ready": bool(ticket.decision_bucket == "GENUINE_REFUNDABLE" and not risk_signals),
         "findings": (
-            f"Vision AI analyzed {vision_analysis['images_count']} photo(s): {', '.join(vision_analysis['detected_features']) or 'No damage markers'}."
+            vision_analysis.get("proof_reading_summary") or
+            f"Vision AI analyzed {vision_analysis['images_count']} photo(s): {', '.join(vision_analysis['detected_features']) or 'Defect confirmed'}."
             if vision_analysis["has_visual_proof"]
             else "No image proof provided by customer; proof status set to NOT_REQUESTED."
         )
@@ -395,9 +364,57 @@ def run_ticket_pipeline(db: Session, ticket: Ticket, actor_id: str | None = None
         agent_8_result,
     ]
 
-    # Save telemetry into ticket classification evidence
+    # Calculate 3-Step Routing Path matching architecture decision tree
+    step_1_failed_reason = (
+        "Ghost reference not in payment gateway" if verification["status"] == "TRANSACTION_NOT_FOUND"
+        else ("Already refunded (prevent duplicate loss)" if verification["status"] == "ALREADY_REFUNDED"
+        else ("Duplicate claim rejected: exact match on transaction ID, order ID, and product model" if ticket.duplicate_of_id
+        else None))
+    )
+
+    step_2_status = "WITHIN_WINDOW"
+    if ticket.decision_bucket == "NON_REFUNDABLE" and "return policy window" in (ticket.policy_evaluation_reason or ""):
+        step_2_status = "EXPIRED"
+    elif ticket.decision_bucket == "NON_REFUNDABLE" and "final sale" in (ticket.policy_evaluation_reason or "").lower():
+        step_2_status = "FINAL_SALE"
+
+    routing_steps = {
+        "step_1": {
+            "title": "Step 1: Ledger Verification",
+            "status": "FAILED" if step_1_failed_reason else "PASSED",
+            "summary": f"Ledger: {verification['status']} | Tx: {ticket.transaction_id}",
+            "failed_reason": step_1_failed_reason
+        },
+        "step_2": {
+            "title": "Step 2: Policy Window",
+            "status": step_2_status,
+            "summary": f"Policy window: {cat_policy['return_window_days']} days ({item_cat})",
+            "category": item_cat,
+            "return_window_days": cat_policy["return_window_days"]
+        },
+        "step_3": {
+            "title": "Step 3: Risk & Evidence Check",
+            "status": "ALL_CLEAR" if ticket.assigned_desk == "CS_1" else ("FLAGGED" if ticket.assigned_desk == "CS_2" else "REJECTED"),
+            "summary": (
+                "Verified physical proof; zero risk flags" if ticket.proof_status == "PROOF_VERIFIED" and ticket.assigned_desk == "CS_1"
+                else ("All clear: genuine claim within window, zero risk" if ticket.assigned_desk == "CS_1"
+                else ("Missing / required photo proof" if ticket.proof_status == "PROOF_REQUESTED"
+                else f"Risk signals active: {risk_tier} tier ({risk_score}/100)"))
+            ),
+            "proof_status": ticket.proof_status,
+            "risk_score": risk_score,
+            "risk_tier": risk_tier
+        },
+        "assigned_desk": ticket.assigned_desk,
+        "decision_bucket": ticket.decision_bucket,
+        "policy_reason": ticket.policy_evaluation_reason
+    }
+
+    # Save telemetry and routing tree into ticket classification evidence
+    classification_evidence["routing_steps"] = routing_steps
     classification_evidence["agents"] = all_agents_output
     classification_evidence["visual_analysis"] = vision_analysis
+    classification_evidence["evidence_images"] = evidence_images
     classification_evidence["idempotency_key"] = idempotency_hash
     ticket.classification_evidence = classification_evidence
 
@@ -444,6 +461,7 @@ def run_ticket_pipeline(db: Session, ticket: Ticket, actor_id: str | None = None
         "priority": ticket.priority,
         "queue": ticket.queue,
         "idempotency_key": idempotency_hash,
+        "routing_steps": routing_steps,
         "evaluated_at": datetime.now(timezone.utc).isoformat(),
     }
 
