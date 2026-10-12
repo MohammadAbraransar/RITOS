@@ -43,8 +43,6 @@ def fetch_shopflow_context(ticket_id: str) -> Optional[Dict[str, Any]]:
         logger.warning("Failed to reach ShopFlow at %s: %s", url, e)
         return None
 
-<<<<<<< HEAD
-=======
 def post_shopflow_decision(ticket_id: str, decision_payload: Dict[str, Any]) -> Dict[str, Any]:
     """Submit AI adjudication decision callback to ShopFlow."""
     url = f"{settings.shopflow_base_url}/api/ritos/refund-decision"
@@ -76,7 +74,6 @@ def post_shopflow_notification(ticket_id: str, title: str, body: str) -> bool:
     except Exception as e:
         logger.warning(f"Could not dispatch notification to ShopFlow: {e}")
         return False
->>>>>>> e1de4905cacc8e83ae5261d9468d857a9233cbff
 
 def check_shopflow_health() -> Dict[str, Any]:
     url = f"{settings.shopflow_base_url}/api/health"
@@ -213,7 +210,6 @@ def intake(db: Session, ext_id: str, payload: Dict[str, Any], event_id: Optional
         tx.amount = Decimal(str(tx.amount)) + f["claimed_amount"]
     db.flush()
 
-<<<<<<< HEAD
     t = db.scalar(select(Ticket).where(Ticket.ticket_number == ext_id))
     trigger = "STORE_RESEND" if t else "INTAKE"
     evidence = {
@@ -233,59 +229,6 @@ def intake(db: Session, ext_id: str, payload: Dict[str, Any], event_id: Optional
     t.currency = "INR"
     t.classification_evidence = {**(t.classification_evidence or {}), **evidence}
     db.flush()
-=======
-    # 2. Find or create Ticket in RITOS database
-    t = db.scalar(select(Ticket).where(Ticket.ticket_number == ticket_id))
-    p_date = None
-    date_str = fb.get("purchase_date") or order_info.get("ordered_at")
-    if date_str:
-        try:
-            p_date = datetime.fromisoformat(str(date_str).replace("Z", "+00:00"))
-        except Exception:
-            p_date = datetime.now(timezone.utc)
-
-    item_cat = str(fb.get("item_category") or product_info.get("category") or "GENERAL").upper()
-
-    if not t:
-        t = Ticket(
-            ticket_number=ticket_id,
-            customer_id=cust_id,
-            transaction_id=tx.id,
-            order_id=order_info.get("order_id"),
-            item_name=product_info.get("name") or "ShopFlow Product",
-            item_category=item_cat,
-            claimed_amount=amount_inr,
-            currency="INR",
-            customer_name=customer_info.get("name"),
-            customer_email=customer_info.get("email"),
-            customer_phone=customer_info.get("phone"),
-            purchase_date=p_date,
-            description=ticket_info.get("description") or f"ShopFlow return request for {order_info.get('order_id')}",
-            classification_evidence={
-                "source": "SHOPFLOW",
-                "shopflow_ticket_id": ticket_id,
-                "event_id": event_id,
-                "evidence_count": len(evidence_list),
-                "evidence_images": fb.get("evidence_images") or [],
-                "derived_facts": derived_facts
-            }
-        )
-        db.add(t)
-        db.flush()
-    else:
-        # Update with newest details if provided
-        ev = dict(t.classification_evidence or {})
-        if fb.get("evidence_images"):
-            ev["evidence_images"] = fb.get("evidence_images")
-        t.classification_evidence = ev
-        if p_date:
-            t.purchase_date = p_date
-        if fb.get("item_category"):
-            t.item_category = item_cat
-        if fb.get("description"):
-            t.description = fb.get("description")
-        db.flush()
->>>>>>> e1de4905cacc8e83ae5261d9468d857a9233cbff
 
     system_user_id = _system_user_id(db)
     result = run_workflow(db, t, trigger=trigger, actor_id=system_user_id)
@@ -453,38 +396,9 @@ def handle_event(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
     return result
 
 
-<<<<<<< HEAD
 # Backwards-compatible name used by the sync endpoint.
 def process_shopflow_event(db: Session, ticket_id: str, event_id: Optional[str] = None,
                            fallback_payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     payload = {**(fallback_payload or {}), "ticket_id": ticket_id, "event_id": event_id,
                "event_type": (fallback_payload or {}).get("event_type") or "refund.ticket.created"}
     return handle_event(db, payload)
-=======
-    # 7. Audit & commit
-    audit(db, system_user_id, "SHOPFLOW_TICKET_PROCESSED", "ticket", t.id, {
-        "shopflow_ticket_id": ticket_id,
-        "decision": decision,
-        "assigned_desk": t.assigned_desk,
-        "decision_bucket": t.decision_bucket
-    })
-    db.commit()
-    db.refresh(t)
-
-    return {
-        "ticket_id": ticket_id,
-        "ritos_ticket_number": t.ticket_number,
-        "assigned_desk": t.assigned_desk,
-        "decision_bucket": t.decision_bucket,
-        "decision": decision,
-        "refund_amount_minor": refund_amt,
-        "policy_evaluation_reason": t.policy_evaluation_reason,
-        "customer_message_draft": t.customer_message_draft,
-        "proof_status": t.proof_status,
-        "routing_steps": (t.classification_evidence or {}).get("routing_steps") or pipeline_res.get("routing_steps"),
-        "agents_trace": pipeline_res.get("agents_trace", []),
-        "visual_evidence": (t.classification_evidence or {}).get("visual_analysis") or pipeline_res.get("visual_evidence", {}),
-        "classification_evidence": t.classification_evidence,
-        "shopflow_response": shopflow_cb_res
-    }
->>>>>>> e1de4905cacc8e83ae5261d9468d857a9233cbff

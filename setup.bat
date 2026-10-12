@@ -66,16 +66,10 @@ if not exist ".venv\Scripts\python.exe" (
 :: 4. Install Backend Dependencies & Migrate Database
 echo.
 echo [4/6] Installing backend Python packages and setting up database...
-<<<<<<< HEAD
-call .venv\Scripts\activate.bat
-python -m pip install --upgrade pip --quiet
-python -m pip install -r backend\requirements.txt
-=======
 set VENV_PYTHON="%ROOT_DIR%.venv\Scripts\python.exe"
 if exist "%ROOT_DIR%.venv\Scripts\activate.bat" call "%ROOT_DIR%.venv\Scripts\activate.bat"
 %VENV_PYTHON% -m pip install --upgrade pip --quiet
 %VENV_PYTHON% -m pip install -r "%ROOT_DIR%backend\requirements.txt"
->>>>>>> e1de4905cacc8e83ae5261d9468d857a9233cbff
 if %errorlevel% neq 0 (
     color 0C
     echo [ERROR] Failed to install backend dependencies!
@@ -88,13 +82,8 @@ if not exist "%ROOT_DIR%frontend\.env" copy "%ROOT_DIR%frontend\.env.example" "%
 
 echo Initializing database schema and seed data...
 cd /d "%ROOT_DIR%backend"
-<<<<<<< HEAD
-python -m app.seed
-python migrate_db.py
-=======
 %VENV_PYTHON% migrate_db.py
 %VENV_PYTHON% -m app.seed
->>>>>>> e1de4905cacc8e83ae5261d9468d857a9233cbff
 cd /d "%ROOT_DIR%"
 
 :: 5. Install RITOS Frontend Packages
