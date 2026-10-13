@@ -14,6 +14,7 @@ class TicketCreate(BaseModel):
     item_name: Optional[str] = None
     item_category: Optional[str] = None
     evidence_images: Optional[list] = None
+    purchase_date: Optional[str] = None
 
 class CommentCreate(BaseModel):
     body: str = Field(min_length=1, max_length=5000)

@@ -204,12 +204,20 @@ function App() {
     return tickets
   }, [tickets, user?.role, cs1Tickets, cs2Tickets, cs3Tickets])
 
-  async function load() {
+  // full=false refreshes only the ticket list (used when filters or the page change)
+  async function load(full = true) {
     try {
       const params = new URLSearchParams()
       if (search) params.set('q', search)
       if (statusFilter) params.set('status', statusFilter)
       if (priorityFilter) params.set('priority', priorityFilter)
+
+      if (!full && tickets.length > 0) {
+        const t = await api.tickets(params.toString() ? '?' + params.toString() : '')
+        setTickets(t.items)
+        setApiStatus('connected')
+        return
+      }
 
       const [t, m, r, d, txs] = await Promise.all([
         api.tickets(params.toString() ? '?' + params.toString() : ''),
@@ -269,9 +277,15 @@ function App() {
 
   useEffect(() => {
     if (user) {
-      load()
+      load(true)
     }
-  }, [user, page, search, statusFilter, priorityFilter])
+  }, [user])
+
+  useEffect(() => {
+    if (user) {
+      load(false)
+    }
+  }, [page, search, statusFilter, priorityFilter])
 
   async function login(e: FormEvent) {
     e.preventDefault()
@@ -448,8 +462,7 @@ function App() {
     try {
       const payload = {
         ...simEcom,
-        claimed_amount: Number(simEcom.claimed_amount),
-        purchase_date: new Date().toISOString()
+        claimed_amount: Number(simEcom.claimed_amount)
       }
       const res = await api.ecommerceTicketIntake(payload)
       setEcomSimResult(res)

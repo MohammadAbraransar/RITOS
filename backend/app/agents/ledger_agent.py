@@ -56,6 +56,18 @@ def verify_ledger_ground_truth(
             "findings": "Transaction payment is still pending capture at the gateway."
         }
 
+    tx_total = Decimal(str(tx.amount))
+    tx_refunded = Decimal(str(tx.refunded_amount))
+    remaining = (tx_total - tx_refunded).quantize(Decimal("0.01"))
+
+    if tx.payment_status == "REFUNDED" or remaining <= Decimal("0"):
+        return {
+            "status": "ALREADY_REFUNDED",
+            "transaction": tx,
+            "available_balance": 0.0,
+            "findings": f"Transaction #{tx.id} has already been fully refunded ({tx.currency} {tx_refunded:.2f})."
+        }
+
     if tx.payment_status != "SUCCESSFUL":
         return {
             "status": "MANUAL_VERIFICATION_REQUIRED",
@@ -63,10 +75,6 @@ def verify_ledger_ground_truth(
             "available_balance": 0.0,
             "findings": f"Transaction payment status is '{tx.payment_status}'; requires manual verification."
         }
-
-    tx_total = Decimal(str(tx.amount))
-    tx_refunded = Decimal(str(tx.refunded_amount))
-    remaining = (tx_total - tx_refunded).quantize(Decimal("0.01"))
 
     # Also check pending reservations
     pending_refs = db.scalars(
@@ -81,14 +89,6 @@ def verify_ledger_ground_truth(
     ).all()
     pending_sum = sum((Decimal(str(r.amount)) for r in pending_refs), Decimal("0"))
     available = (remaining - pending_sum).quantize(Decimal("0.01"))
-
-    if remaining <= Decimal("0"):
-        return {
-            "status": "ALREADY_REFUNDED",
-            "transaction": tx,
-            "available_balance": 0.0,
-            "findings": f"Transaction #{tx.id} has already been fully refunded ({tx.currency} {tx_refunded:.2f})."
-        }
 
     claim_dec = Decimal(str(claimed_amount)).quantize(Decimal("0.01"))
     if claim_dec <= Decimal("0") or claim_dec > remaining:

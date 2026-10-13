@@ -1,6 +1,6 @@
 """Central workflow orchestrator.
 
-    intake ──► 8 specialist agents (each persisted as a WorkflowStep) ──► decision gate
+    intake ──► 9 specialist agents (each persisted as a WorkflowStep) ──► decision gate
                                                                          │
         AUTO_APPROVE ◄── CS-1, verified, no risk signals, under limit ───┤
         AWAIT_APPROVAL ◄── CS-1 but above limit / risk signals ──────────┤  run status WAITING_HUMAN
@@ -46,7 +46,7 @@ def _close_waiting_runs(db: Session, ticket_id: str, new_status: str):
 
 
 def run_workflow(db: Session, ticket: Ticket, trigger: str = "MANUAL", actor_id: str | None = None) -> dict:
-    """Run all 8 agents on a persisted ticket, persist each step, and apply the decision gate."""
+    """Run all 9 agents on a persisted ticket, persist each step, and apply the decision gate."""
     _close_waiting_runs(db, ticket.id, "SUPERSEDED")
     run = WorkflowRun(ticket_id=ticket.id, trigger=trigger, status="RUNNING", actor_id=actor_id)
     db.add(run)
@@ -173,7 +173,7 @@ def run_workflow(db: Session, ticket: Ticket, trigger: str = "MANUAL", actor_id:
             "routing_rule_version": state.decision.get("rule_version"),
             "outcome": {"desk": ticket.assigned_desk, "next_action": next_action},
         },
-        "evaluated_at": _now().isoformat(),
+        "evaluated_at": state.evaluated_at.isoformat(),
     }
 
     db.add(TicketEvent(ticket_id=ticket.id, actor_id=actor_id, event_type="AUTOMATION_PIPELINE_COMPLETED", details=result))

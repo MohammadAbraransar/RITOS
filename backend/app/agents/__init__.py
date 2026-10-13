@@ -17,6 +17,7 @@ assessments. Same persisted inputs + rule versions => same routing.
 """
 from __future__ import annotations
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Callable, Dict, List
@@ -94,6 +95,8 @@ class PipelineState:
     review: Dict[str, Any] = field(default_factory=dict)
     evidence_rows: List[Any] = field(default_factory=list)
     idempotency_key: str = ""
+    # One clock reading per run: every date rule in the run is evaluated against it, and it is recorded.
+    evaluated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
     @property
     def store_facts(self) -> Dict[str, Any]:
@@ -256,8 +259,11 @@ def policy_enforcement(s: PipelineState) -> dict:
     t = s.ticket
     policy = get_effective_policy(s.db, t.item_category, s.store_facts)
     verified = s.identity.get("identity_status") == "verified" and s.defect.get("defect_status") == "verified"
+    # Intake sets purchase_date only from trusted sources (ledger capture or store order); never a customer's input.
+    anchor_source = s.evidence.get("purchase_date_source") or ("TICKET_RECORD" if t.purchase_date else None)
     s.policy = evaluate_policy_eligibility(policy, t.purchase_date, s.store_facts, defect_verified=verified,
-                                           defect_claimed=s.claim.get("controlled_reason") in EVIDENCE_REASONS)
+                                           defect_claimed=s.claim.get("controlled_reason") in EVIDENCE_REASONS,
+                                           as_of=s.evaluated_at)
     return {
         "eligible": s.policy["eligible"],
         "reason_code": s.policy["reason_code"],
@@ -266,6 +272,9 @@ def policy_enforcement(s: PipelineState) -> dict:
         "policy_version": policy["policy_version"],
         "return_window_days": policy["return_window_days"],
         "days_elapsed": s.policy["days_elapsed"],
+        "anchor_date": t.purchase_date.isoformat() if t.purchase_date else None,
+        "anchor_source": anchor_source,
+        "evaluated_at": s.evaluated_at.isoformat(),
         "exception_applied": s.policy["exception_applied"],
         "rule_version": s.policy["rule_version"],
         "findings": s.policy["reason"],
@@ -277,11 +286,12 @@ def policy_enforcement(s: PipelineState) -> dict:
 # ---------------------------------------------------------------------------
 def risk_assessment(s: PipelineState) -> dict:
     t = s.ticket
-    r = evaluate_customer_risk(s.db, t.customer_id, t.id, t.claimed_amount, t.category, s.store_facts or None)
+    r = evaluate_customer_risk(s.db, t.customer_id, t.id, t.claimed_amount, t.category, s.store_facts or None,
+                               as_of=s.evaluated_at)
     s.risk = {"score": r["risk_score"], "tier": r["risk_tier"], "signals": r["risk_signals"],
               "requires_supervisory_review": r["requires_supervisory_review"]}
     return {k: r[k] for k in ("risk_score", "risk_tier", "risk_signals", "claims_30d", "claims_90d", "claims_365d",
-                              "is_high_value", "requires_supervisory_review", "rule_version", "findings")}
+                              "is_high_value", "requires_supervisory_review", "rule_version", "thresholds", "findings")}
 
 
 # ---------------------------------------------------------------------------

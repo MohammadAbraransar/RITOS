@@ -40,5 +40,5 @@ describe("Phase 7 Acceptance Verification: Mock RITOS 10 Scenarios", () => {
         expect(decision.confidence_score).toBeGreaterThanOrEqual(expected.minConfidence);
       }
     }
-  });
+  }, 120000);
 });

@@ -14,7 +14,14 @@ elif database_url.startswith("postgresql://"):
 is_sqlite = database_url.startswith("sqlite")
 # prepare_threshold=None keeps psycopg compatible with PgBouncer/Supavisor transaction pooling.
 connect_args = {"check_same_thread": False} if is_sqlite else {"prepare_threshold": None}
-engine = create_engine(database_url, connect_args=connect_args, pool_pre_ping=True)
+# Pool sizing applies to PostgreSQL's QueuePool only; SQLite pools (e.g. in-memory) reject these arguments.
+pool_args = {} if is_sqlite else {
+    "pool_size": settings.db_pool_size,
+    "max_overflow": settings.db_max_overflow,
+    "pool_timeout": settings.db_pool_timeout_seconds,
+    "pool_recycle": settings.db_pool_recycle_seconds,
+}
+engine = create_engine(database_url, connect_args=connect_args, pool_pre_ping=settings.db_pool_pre_ping, **pool_args)
 
 db_schema = "" if is_sqlite else settings.db_schema.strip()
 if db_schema:
