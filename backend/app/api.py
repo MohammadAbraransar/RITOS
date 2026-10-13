@@ -5,7 +5,7 @@ from uuid import uuid4
 from typing import Optional
 from pydantic import BaseModel
 from fastapi import APIRouter, Depends, HTTPException, Query, Header, Request
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 from sqlalchemy import select, func, desc
 from .database import get_db
 from .models import (
@@ -21,7 +21,7 @@ from .schemas import (
 )
 from .security import verify_password, create_access_token, get_current_user, require_roles
 from .services import (
-    classify, verify_transaction, calculate_priority, find_duplicate,
+    classify, calculate_priority, find_duplicate,
     record_event, audit, refund_key, ROUTES, generate_customer_message_draft
 )
 from .agents import AGENTS, ORCHESTRATOR, run_ticket_pipeline
@@ -128,31 +128,36 @@ def logout(user: User=Depends(get_current_user)):
 
 @router.post("/tickets")
 def create_ticket(payload: TicketCreate, db: Session=Depends(get_db), user: User=Depends(require_roles(Role.CUSTOMER.value))):
-    if payload.currency.upper() not in {"INR","USD","EUR","GBP"}: raise HTTPException(422,"Unsupported currency")
-    result=verify_transaction(db,payload.transaction_id,user.id,payload.claimed_amount,payload.currency.upper())
+    if payload.currency.upper() not in settings.currencies: raise HTTPException(422,"Unsupported currency")
+    # Ledger, ownership and duplicate checks are Agent 1's job; intake only reads the customer's own transaction.
+    tx=db.get(Transaction,payload.transaction_id)
+    own_tx=tx if tx and tx.customer_id==user.id else None
     triage=classify(payload.description)
     priority=calculate_priority(triage["category"],payload.description)
-    duplicate=find_duplicate(db,user.id,payload.transaction_id,triage["category"],payload.description,item_name=getattr(payload,"item_name",None),order_id=payload.order_id)
     t=Ticket(ticket_number=f"RIT-{datetime.now(timezone.utc):%y%m%d}-{uuid4().hex[:6].upper()}",
        customer_id=user.id,transaction_id=payload.transaction_id,order_id=payload.order_id,
        claimed_amount=payload.claimed_amount,currency=payload.currency.upper(),description=payload.description,
        category=triage["category"],confidence=triage["confidence"],priority=priority,
        queue=ROUTES.get(triage["category"],"Manual Triage"),status=TicketStatus.TRIAGED.value,
-       item_name=getattr(payload, "item_name", None) or (result["transaction"].order_id if result["transaction"] else "Customer Item"),
-       item_category=getattr(payload, "item_category", None) or "GENERAL",
+       item_name=payload.item_name or (own_tx.order_id if own_tx else "Customer Item"),
+       item_category=payload.item_category or "GENERAL",
        customer_name=user.full_name or "Portal Customer",
        customer_email=user.email,
-       payment_verification=result["status"],refund_status=(result["transaction"].payment_status if result["transaction"] else "UNKNOWN"),
-       duplicate_of_id=duplicate.id if duplicate else None,recommended_action=triage["recommended_action"],
+       # The return window counts from the ledger's capture date, never from a date the customer types.
+       purchase_date=own_tx.created_at if own_tx else None,
+       payment_verification="PENDING_VERIFICATION",refund_status=(own_tx.payment_status if own_tx else "UNKNOWN"),
+       recommended_action=triage["recommended_action"],
        classification_evidence={
            "matched_terms":triage["evidence"],
            "classifier":"rules-v1",
-           "transaction_check":result["status"],
-           "evidence_images": getattr(payload, "evidence_images", []) or []
+           "purchase_date_source":"LEDGER_CAPTURE" if own_tx else None,
+           # Kept for reviewers only; policy never reads it.
+           "customer_reported_purchase_date":payload.purchase_date,
+           "evidence_images": payload.evidence_images or []
        })
     db.add(t); db.flush()
     record_event(db,t.id,user.id,"TICKET_CREATED",{"ticket_number":t.ticket_number})
-    record_event(db,t.id,None,"TRIAGE_COMPLETED",{"category":t.category,"priority":t.priority,"queue":t.queue,"duplicate_of_id":t.duplicate_of_id})
+    record_event(db,t.id,None,"TRIAGE_COMPLETED",{"category":t.category,"priority":t.priority,"queue":t.queue})
     audit(db,user.id,"TICKET_CREATED","ticket",t.id,{"ticket_number":t.ticket_number})
     automation_result = run_ticket_pipeline(db, t, None)
     db.commit(); db.refresh(t)
@@ -185,27 +190,28 @@ def ecommerce_ticket_webhook(payload: dict, x_ritos_webhook_secret: str | None =
     if not amount.is_finite() or amount <= 0:
         raise HTTPException(422, "claimed_amount must be greater than zero")
     currency = str(payload.get("currency", "INR")).upper()
-    if currency not in {"INR", "USD", "EUR", "GBP"}:
+    if currency not in settings.currencies:
         raise HTTPException(422, "Unsupported currency")
     transaction_id = str(payload["transaction_id"]).strip()
-    if not db.get(Transaction, transaction_id):
+    tx = db.get(Transaction, transaction_id)
+    if not tx:
         # Do not accept ecommerce-supplied payment facts as proof of payment.
         raise HTTPException(409, "Transaction is not available in the trusted transaction source")
     description = str(payload["description"]).strip()
     if len(description) < 8 or len(description) > 5000:
         raise HTTPException(422, "description must be between 8 and 5000 characters")
-    result = verify_transaction(db, transaction_id, customer.id, amount, currency)
+    own_tx = tx if tx.customer_id == customer.id else None
     triage = classify(description)
     priority = calculate_priority(triage["category"], description)
-    duplicate = find_duplicate(db, customer.id, transaction_id, triage["category"], description, item_name=payload.get("item_name"), order_id=payload.get("order_id"))
     t = Ticket(ticket_number=f"RIT-{datetime.now(timezone.utc):%y%m%d}-{uuid4().hex[:6].upper()}",
         customer_id=customer.id, transaction_id=transaction_id, order_id=payload.get("order_id"),
         claimed_amount=amount, currency=currency, description=description, category=triage["category"],
         confidence=triage["confidence"], priority=priority, queue=ROUTES.get(triage["category"], "Manual Triage"),
-        status=TicketStatus.TRIAGED.value, payment_verification=result["status"],
-        refund_status=(result["transaction"].payment_status if result["transaction"] else "UNKNOWN"),
-        duplicate_of_id=duplicate.id if duplicate else None, recommended_action=triage["recommended_action"],
-        classification_evidence={"matched_terms":triage["evidence"], "classifier":"rules-v1", "source":"ecommerce_webhook", "transaction_check":result["status"]})
+        status=TicketStatus.TRIAGED.value, payment_verification="PENDING_VERIFICATION",
+        refund_status=(own_tx.payment_status if own_tx else "UNKNOWN"),
+        purchase_date=own_tx.created_at if own_tx else None, recommended_action=triage["recommended_action"],
+        classification_evidence={"matched_terms":triage["evidence"], "classifier":"rules-v1", "source":"ecommerce_webhook",
+                                 "purchase_date_source":"LEDGER_CAPTURE" if own_tx else None})
     db.add(t); db.flush()
     record_event(db,t.id,None,"ECOMMERCE_TICKET_RECEIVED",{"source":"ecommerce_webhook"})
     audit(db,None,"ECOMMERCE_TICKET_RECEIVED","ticket",t.id,{"source":"ecommerce_webhook"})
@@ -227,14 +233,15 @@ def list_tickets(status: str|None=None, priority: str|None=None, queue: str|None
     if q:
         like=f"%{q}%"
         stmt=stmt.where((Ticket.ticket_number.ilike(like))|(Ticket.transaction_id.ilike(like))|(Ticket.description.ilike(like)))
-    total=len(db.scalars(stmt).all())
-    rows=db.scalars(stmt.offset((page-1)*page_size).limit(page_size)).all()
+    count_stmt = select(func.count()).select_from(stmt.order_by(None).subquery())
+    total = db.scalar(count_stmt) or 0
+    rows = db.scalars(stmt.options(selectinload(Ticket.comments)).offset((page-1)*page_size).limit(page_size)).all()
     staff=user.role != Role.CUSTOMER.value
     return {"items":[ticket_view(t,include_private=staff) for t in rows],"total":total,"page":page,"page_size":page_size}
 
 @router.get("/tickets/{ticket_id}")
 def get_ticket(ticket_id: str, db: Session=Depends(get_db), user: User=Depends(get_current_user)):
-    t=db.get(Ticket,ticket_id)
+    t=db.scalar(select(Ticket).where(Ticket.id==ticket_id).options(selectinload(Ticket.comments)))
     if not t: raise HTTPException(404,"Ticket not found")
     if user.role==Role.CUSTOMER.value and t.customer_id != user.id: raise HTTPException(404,"Ticket not found")
     return ticket_view(t,include_private=user.role != Role.CUSTOMER.value)
@@ -886,6 +893,8 @@ def ecommerce_ticket_intake(
 
     # Ensure transaction exists or record in ledger for lookup
     tx = db.get(Transaction, payload.transaction_id)
+    # A ledger capture date is only trusted when the transaction existed before this call.
+    ledger_date = tx.created_at if tx and tx.customer_id == customer_id else None
     if not tx:
         # If new transaction provided by eCommerce store, register it as successful
         tx = Transaction(
@@ -902,12 +911,14 @@ def ecommerce_ticket_intake(
         db.flush()
 
     ticket_number = f"RIT-ECOM-{uuid4().hex[:6].upper()}"
+    # This caller is the store (shared secret) or staff, so its order date is authoritative; otherwise use the ledger.
     p_date = None
     if payload.purchase_date:
         try:
-            p_date = datetime.fromisoformat(payload.purchase_date)
-        except Exception:
+            p_date = datetime.fromisoformat(payload.purchase_date.strip().replace("Z", "+00:00"))
+        except ValueError:
             p_date = None
+    p_date_source = "STORE_ORDER" if p_date else ("LEDGER_CAPTURE" if ledger_date else None)
 
     ticket = Ticket(
         ticket_number=ticket_number,
@@ -922,7 +933,8 @@ def ecommerce_ticket_intake(
         customer_phone=payload.customer_phone,
         item_name=payload.item_name or "Product Item",
         item_category=(payload.item_category or "GENERAL").upper(),
-        purchase_date=p_date or datetime.now(timezone.utc)
+        purchase_date=p_date or ledger_date,
+        classification_evidence={"source": "ecommerce_ticket_intake", "purchase_date_source": p_date_source},
     )
     db.add(ticket)
     db.flush()

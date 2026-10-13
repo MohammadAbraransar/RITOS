@@ -59,9 +59,14 @@ def evaluate_policy_eligibility(
     store_facts: Optional[Dict[str, Any]] = None,
     defect_verified: bool = False,
     defect_claimed: bool = False,
+    as_of: Optional[datetime] = None,
 ) -> Dict[str, Any]:
-    """Deterministic eligibility. `eligible` is True, False, or None (cannot be decided automatically)."""
+    """Deterministic eligibility. `eligible` is True, False, or None (cannot be decided automatically).
+
+    `as_of` is the evaluation time; the same inputs and `as_of` always give the same result.
+    """
     facts = store_facts or {}
+    now = as_of or datetime.now(timezone.utc)
     window = policy.get("return_window_days")
     base = {"policy": policy, "rule_version": RULE_VERSION, "days_elapsed": None, "exception_applied": None}
 
@@ -78,7 +83,7 @@ def evaluate_policy_eligibility(
                 "reason": "No delivery or purchase date on record; the return window cannot be checked automatically."}
     else:
         anchor = anchor_date if anchor_date.tzinfo else anchor_date.replace(tzinfo=timezone.utc)
-        days = max(0, int((datetime.now(timezone.utc) - anchor).total_seconds() // 86400))
+        days = max(0, int((now - anchor).total_seconds() // 86400))
         within = window is not None and window > 0 and days <= window
     base["days_elapsed"] = days
 

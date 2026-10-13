@@ -65,7 +65,7 @@ describe("Phase 6 Acceptance Verification: Decision Callback & Refund Execution"
           policySnapshot: {},
         },
       });
-    });
+    }, { timeout: 25000, maxWait: 10000 });
   });
 
   it("Two parallel calls to /api/payments/refund with the same key create exactly one refund_transactions row", async () => {

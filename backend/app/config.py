@@ -7,6 +7,16 @@ class Settings(BaseSettings):
     database_url: str = "sqlite:///./ritos.db"
     # Postgres schema for RITOS tables (e.g. "ritos" on a shared Supabase project). Ignored for SQLite.
     db_schema: str = ""
+    # Connection pool (PostgreSQL only). A Supabase session-mode pooler (port 5432) caps clients per database,
+    # so keep db_pool_size + db_max_overflow below that cap; transaction mode (port 6543) is far less constrained.
+    db_pool_size: int = 5
+    db_max_overflow: int = 5
+    db_pool_timeout_seconds: int = 30
+    db_pool_recycle_seconds: int = 1800
+    # Liveness ping on every checkout: safer against dropped connections, but costs one network round-trip.
+    db_pool_pre_ping: bool = True
+    # Comma-separated ISO codes accepted on refund claims
+    supported_currencies: str = "INR,USD,EUR,GBP"
     cors_origins: str = "http://localhost:5173"
     access_token_minutes: int = 45
     redis_url: str = "redis://localhost:6379/0"
@@ -18,8 +28,18 @@ class Settings(BaseSettings):
     auto_approve_max_inr: float = 5000.0
     # Background outbox delivery (decision callbacks, status updates, notifications to the store)
     run_background_workers: bool = True
-    outbox_poll_seconds: float = 2.0
+    outbox_poll_seconds: float = 8.0
     outbox_max_attempts: int = 6
+    outbox_batch_size: int = 20
+    outbox_http_timeout_seconds: float = 10.0
+    outbox_max_backoff_seconds: int = 300
+    # A claimed message is hidden from other workers for this long; if delivery crashes it becomes due again.
+    outbox_claim_lease_seconds: int = 60
+    # --- Risk rules (Agent 4); score weights are versioned in risk_agent.RULE_VERSION ---
+    risk_high_velocity_claims_30d: int = 3
+    risk_new_account_days: int = 7
+    risk_tier_high_score: int = 60
+    risk_tier_medium_score: int = 30
     # --- Visual evidence ---
     # Semantic vision provider for product identity and defect assessment: "none" or "clip" (local, free).
     # With "none", photo claims are never auto-verified: they are reported inconclusive and go to CS-2.
@@ -54,5 +74,9 @@ class Settings(BaseSettings):
     gateway_webhook_secret: str = ""
     stripe_api_key: str = ""
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    @property
+    def currencies(self) -> set[str]:
+        return {c.strip().upper() for c in self.supported_currencies.split(",") if c.strip()}
 
 settings = Settings()

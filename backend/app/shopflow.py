@@ -232,6 +232,7 @@ def intake(db: Session, ext_id: str, payload: Dict[str, Any], event_id: Optional
         "event_id": event_id,
         "evidence_images": f["evidence_images"],
         "store_facts": f["store_facts"],
+        "purchase_date_source": "STORE_ORDER" if f["purchase_date"] else None,
     }
     if not t:
         t = Ticket(ticket_number=ext_id, customer_id=f["customer_id"], transaction_id=tx.id, status=TicketStatus.NEW.value)

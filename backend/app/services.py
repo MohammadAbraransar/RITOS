@@ -50,19 +50,6 @@ def classify(text: str):
     return {"category":category,"confidence":round(confidence,2),"evidence":matched,
             "recommended_action":ACTIONS.get(category, "Verify transaction records and review the applicable policy.")}
 
-def verify_transaction(db: Session, transaction_id: str, customer_id: str, amount, currency: str):
-    tx = db.get(Transaction, transaction_id)
-    if not tx: return {"status":"TRANSACTION_NOT_FOUND","transaction":None}
-    if tx.customer_id != customer_id: return {"status":"CUSTOMER_MISMATCH","transaction":None}
-    if tx.currency != currency.upper(): return {"status":"AMOUNT_MISMATCH","transaction":None}
-    if tx.payment_status == "PENDING": return {"status":"PAYMENT_PENDING","transaction":tx}
-    if tx.payment_status != "SUCCESSFUL": return {"status":"MANUAL_VERIFICATION_REQUIRED","transaction":tx}
-    remaining = Decimal(str(tx.amount)) - Decimal(str(tx.refunded_amount))
-    if remaining <= 0: return {"status":"ALREADY_REFUNDED","transaction":tx}
-    # Item-level claims on multi-item orders are normal; only claims above the refundable balance mismatch.
-    if Decimal(str(amount)) <= 0 or Decimal(str(amount)) > remaining: return {"status":"AMOUNT_MISMATCH","transaction":tx}
-    return {"status":"VERIFIED","transaction":tx}
-
 def calculate_priority(category: str, description: str, created_at=None):
     text = description.lower()
     if category == "UNAUTHORIZED_PAYMENT" or any(x in text for x in ["fraud","unauthorized","not me","stolen card"]): return "P1"

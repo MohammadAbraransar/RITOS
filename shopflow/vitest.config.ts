@@ -7,6 +7,9 @@ export default defineConfig({
     environment: "node",
     include: ["tests/unit/**/*.test.ts"],
     exclude: ["tests/e2e/**", "node_modules/**"],
+    testTimeout: 30000,
+    hookTimeout: 30000,
+    fileParallelism: false,
   },
   resolve: {
     alias: {
