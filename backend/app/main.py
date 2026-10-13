@@ -63,4 +63,7 @@ def health():
     except Exception:
         from fastapi import HTTPException
         raise HTTPException(status_code=503, detail={"status":"degraded", "database":"unavailable"})
-    return {"status":"ok","database":"reachable","provider":"mock","financial_execution":"disabled_for_real_payments"}
+    from .finance import gateway_status
+    gw = gateway_status()
+    return {"status":"ok","database":"reachable","provider":gw["active_provider"],
+            "financial_execution":"live" if gw["live_payments_enabled"] else "disabled_for_real_payments"}

@@ -1,3 +1,4 @@
+import { config } from "@/server/config";
 import { NextResponse } from "next/server";
 import { prisma } from "@/server/db";
 import { requireAuth, errorResponse } from "@/server/auth/guards";
@@ -17,7 +18,7 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
           select: { id: true, name: true, imageUrl: true, sku: true },
         },
         order: {
-          select: { id: true, orderedAt: true, deliveredAt: true },
+          select: { id: true, orderedAt: true, currency: true, deliveredAt: true },
         },
         evidence: {
           select: { id: true, type: true, filename: true, storedPath: true, mime: true },
@@ -56,6 +57,7 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
             });
           });
           ticket.status = TicketStatus.REFUNDED;
+          pendingTx.status = RefundTxStatus.SUCCESS; // keep the returned copy in step with the database
         } catch (err: any) {
           console.error(`[Settlement] ticket ${ticket.id} could not be settled: ${err?.message || err}`);
         }
@@ -83,7 +85,9 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
         const payload = ae.payload as any;
         if (payload?.decision === "APPROVED") {
           title = "Refund Approved";
-          description = `Approved for ₹${((payload.amount_minor || ticket.requestedAmountMinor) / 100).toLocaleString("en-IN")}.`;
+          description = payload?.refund_amount_minor
+            ? `Approved for ${new Intl.NumberFormat(config.storeLocale, { style: "currency", currency: ticket.order.currency }).format(payload.refund_amount_minor / 100)}.`
+            : "Refund approved.";
         } else if (payload?.decision === "REJECTED") {
           title = "Request Rejected";
           description = payload?.reason || "Refund request did not meet return policy requirements.";
@@ -93,7 +97,15 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
         }
       } else if (ae.event === "REFUND_EXECUTED") {
         title = "Refund Initiated";
-        description = "Payout initiated to your original payment method. Expected credit: 2-5 business days.";
+        description = "Payout initiated to your original payment method." +
+          (config.refundCreditEstimate ? ` Expected credit: ${config.refundCreditEstimate}.` : "");
+      } else if (ae.event === "EVIDENCE_ADDED") {
+        title = "Photos Added";
+        description = "Your new evidence was sent for review.";
+      } else if (ae.event === "RITOS_MESSAGE") {
+        const payload = ae.payload as any;
+        title = payload?.title || "Update on your request";
+        description = payload?.body || "";
       } else if (ae.event === "REFUND_COMPLETED") {
         title = "Refund Settled";
         description = "Payout settled successfully.";

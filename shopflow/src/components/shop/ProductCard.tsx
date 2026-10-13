@@ -2,9 +2,10 @@
 
 import Link from "next/link";
 import { Star, ShieldCheck } from "lucide-react";
+import { formatMoney } from "@/lib/money";
 
 export function ProductCard({ product }: { product: any }) {
-  const priceRupees = (product.price_minor / 100).toLocaleString("en-IN");
+  const priceText = formatMoney(product.price_minor);
 
   return (
     <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-xs hover:shadow-md transition flex flex-col group">
@@ -46,7 +47,7 @@ export function ProductCard({ product }: { product: any }) {
         <div className="pt-2 border-t border-slate-100 flex items-center justify-between">
           <div>
             <span className="text-xs text-slate-400 block">Price</span>
-            <span className="text-lg font-bold text-slate-900">₹{priceRupees}</span>
+            <span className="text-lg font-bold text-slate-900">{priceText}</span>
           </div>
 
           <Link

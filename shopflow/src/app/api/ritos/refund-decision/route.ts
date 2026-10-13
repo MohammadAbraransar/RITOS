@@ -5,8 +5,10 @@ import { requireRitosAuth, errorResponse } from "@/server/auth/ritos-guard";
 import { checkIdempotency, storeIdempotency } from "@/server/ritos/idempotency";
 import { transitionTicket } from "@/server/state-machine/ticket-state-machine";
 import { executeRefundTransaction } from "@/server/services/refund-execution.service";
+import { config } from "@/server/config";
 import { emitOutboxEvent } from "@/server/outbox/outbox-dispatcher";
 import { TicketStatus, DecisionType } from "@prisma/client";
+import { formatMoney } from "@/lib/money";
 
 export const dynamic = "force-dynamic";
 
@@ -142,7 +144,7 @@ export async function POST(req: Request) {
 
       const bodyMsg =
         data.decision === "APPROVED" || data.decision === "PARTIALLY_APPROVED"
-          ? `₹${(data.refund_amount_minor / 100).toLocaleString("en-IN")} refund approved.`
+          ? `${formatMoney(data.refund_amount_minor, undefined, 2)} refund approved.`
           : data.decision === "REJECTED"
           ? "Your refund request could not be approved based on policy terms."
           : "Your refund request has been escalated to our team for additional review.";
@@ -164,24 +166,28 @@ export async function POST(req: Request) {
     });
 
     let nextStep = "CLOSED";
+    let executionError: { code: string; message: string } | null = null;
     if (data.decision === "HUMAN_REVIEW") {
       nextStep = "HUMAN_REVIEW_QUEUE";
     } else if (["APPROVED", "PARTIALLY_APPROVED"].includes(data.decision)) {
       nextStep = "AWAIT_REFUND_EXECUTION";
 
-      // If EXECUTION_OWNER=shopflow (default), auto-execute refund
-      const execOwner = process.env.EXECUTION_OWNER || "shopflow";
-      if (execOwner === "shopflow" && payment) {
+      // If this store owns execution (EXECUTION_OWNER=shopflow), execute the refund now.
+      if (config.executionOwner === "shopflow" && payment) {
         try {
           await executeRefundTransaction({
             transaction_id: payment.transactionId,
             amount_minor: data.refund_amount_minor,
             ticket_id: ticket.id,
-            idempotency_key: `auto-exec-${ticket.id}-${Date.now()}`,
+            // One key per ticket: a retried decision can never start a second refund.
+            idempotency_key: `auto-exec-${ticket.id}`,
           });
           nextStep = "REFUND_EXECUTED";
         } catch (err: any) {
+          // The decision itself was recorded; report the execution failure instead of claiming success.
           console.error("Auto refund execution failed:", err);
+          nextStep = "REFUND_EXECUTION_FAILED";
+          executionError = { code: err?.code || "EXECUTION_FAILED", message: err?.message || String(err) };
         }
       }
     }
@@ -190,6 +196,7 @@ export async function POST(req: Request) {
       ticket_id: ticket.id,
       status: targetStatus,
       next: nextStep,
+      ...(executionError ? { execution_error: executionError } : {}),
     };
 
     await storeIdempotency(idempotencyKey, "/api/ritos/refund-decision", idemp.bodyHash!, 200, responsePayload);

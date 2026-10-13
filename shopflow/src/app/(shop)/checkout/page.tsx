@@ -3,22 +3,18 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { CreditCard, Smartphone, Building, Banknote, ShieldCheck, AlertCircle } from "lucide-react";
+import { formatMoney } from "@/lib/money";
 
 export default function CheckoutPage() {
   const router = useRouter();
-  const [cart, setCart] = useState<{ items: any[]; total_minor: number } | null>(null);
+  const [cart, setCart] = useState<{ items: any[]; total_minor: number; currency?: string } | null>(null);
   const [user, setUser] = useState<any>(null);
   const [paymentMethod, setPaymentMethod] = useState<"UPI" | "CARD" | "NETBANKING" | "COD">("UPI");
   const [paymentIdentifier, setPaymentIdentifier] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  const [address, setAddress] = useState({
-    street: "Flat 402, Lotus Residency, Hitech City",
-    city: "Hyderabad",
-    state: "Telangana",
-    pincode: "500081",
-  });
+  const [address, setAddress] = useState({ street: "", city: "", state: "", pincode: "" });
 
   useEffect(() => {
     fetch("/api/me")
@@ -65,7 +61,7 @@ export default function CheckoutPage() {
     }
   };
 
-  const totalRupees = ((cart?.total_minor || 0) / 100).toLocaleString("en-IN");
+  const totalText = formatMoney(cart?.total_minor || 0, cart?.currency);
 
   return (
     <div className="max-w-4xl mx-auto space-y-8">
@@ -192,7 +188,7 @@ export default function CheckoutPage() {
             </div>
             <div className="flex justify-between">
               <span>Subtotal</span>
-              <span>₹{totalRupees}</span>
+              <span>{totalText}</span>
             </div>
             <div className="flex justify-between">
               <span>Shipping Fee</span>
@@ -202,7 +198,7 @@ export default function CheckoutPage() {
 
           <div className="flex justify-between font-extrabold text-slate-900 text-lg">
             <span>Amount to Pay</span>
-            <span>₹{totalRupees}</span>
+            <span>{totalText}</span>
           </div>
 
           <button
@@ -210,7 +206,7 @@ export default function CheckoutPage() {
             disabled={submitting || (cart?.items?.length || 0) === 0}
             className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-xl text-sm transition shadow-sm disabled:opacity-50"
           >
-            {submitting ? "Processing Payment..." : `Pay ₹${totalRupees}`}
+            {submitting ? "Processing Payment..." : `Pay ${totalText}`}
           </button>
 
           <div className="flex items-center space-x-2 text-[11px] text-slate-400 justify-center">

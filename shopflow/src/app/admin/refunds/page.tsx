@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { ArrowLeft, RefreshCw, AlertOctagon, CheckCircle2 } from "lucide-react";
+import { formatMoney } from "@/lib/money";
 
 export default function AdminRefundsPage() {
   const [tickets, setTickets] = useState<any[]>([]);
@@ -46,13 +47,7 @@ export default function AdminRefundsPage() {
     }
   };
 
-  const formatPrice = (minor: number) => {
-    return new Intl.NumberFormat("en-IN", {
-      style: "currency",
-      currency: "INR",
-      maximumFractionDigits: 0,
-    }).format(minor / 100);
-  };
+  const formatPrice = (minor: number) => formatMoney(minor);
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 pb-12">

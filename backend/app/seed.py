@@ -212,10 +212,10 @@ def main():
 
         # Seed return policies
         if not db.scalar(select(ReturnPolicy).where(ReturnPolicy.category == "ELECTRONICS")):
-            db.add(ReturnPolicy(category="ELECTRONICS", return_window_days=14, policy_summary="14-day warranty for verified hardware defects."))
-            db.add(ReturnPolicy(category="APPAREL", return_window_days=30, policy_summary="30-day return window for unworn items with tags."))
-            db.add(ReturnPolicy(category="GENERAL", return_window_days=14, policy_summary="Standard 14-day eCommerce satisfaction guarantee."))
-            db.add(ReturnPolicy(category="HYGIENE", return_window_days=0, policy_summary="Final sale once unsealed for health standards."))
+            db.add(ReturnPolicy(category="ELECTRONICS", allow_damaged_exceptions=True, return_window_days=14, policy_summary="14-day warranty for verified hardware defects."))
+            db.add(ReturnPolicy(category="APPAREL", allow_damaged_exceptions=True, return_window_days=30, policy_summary="30-day return window for unworn items with tags."))
+            db.add(ReturnPolicy(category="GENERAL", allow_damaged_exceptions=True, return_window_days=14, policy_summary="Standard 14-day eCommerce satisfaction guarantee."))
+            db.add(ReturnPolicy(category="HYGIENE", allow_damaged_exceptions=True, return_window_days=0, policy_summary="Final sale once unsealed for health standards."))
 
         # If t_1005 has settled refund, post balanced double-entry journal if not existing
         from .models import LedgerJournal

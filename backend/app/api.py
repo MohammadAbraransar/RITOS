@@ -87,8 +87,8 @@ def store_decision(db: Session, ticket: Ticket, user: User, decision: str, reaso
     db.refresh(ticket)
     return {"status": "DECISION_QUEUED_FOR_STORE", "decision": decision, **result, "ticket": ticket_view(ticket)}
 
-def rerun_workflow(db: Session, ticket: Ticket, user: User) -> dict:
-    result = run_workflow(db, ticket, trigger="MANUAL_RERUN", actor_id=user.id)
+def rerun_workflow(db: Session, ticket: Ticket, user: User, trigger: str = "MANUAL_RERUN") -> dict:
+    result = run_workflow(db, ticket, trigger=trigger, actor_id=user.id)
     if is_store_linked(ticket) and ticket.refund_status not in {"APPROVED", "REJECTED", "REFUNDED"}:
         result["callbacks"] = apply_next_action(db, ticket, result)
     return result
@@ -128,7 +128,8 @@ def logout(user: User=Depends(get_current_user)):
 
 @router.post("/tickets")
 def create_ticket(payload: TicketCreate, db: Session=Depends(get_db), user: User=Depends(require_roles(Role.CUSTOMER.value))):
-    if payload.currency.upper() not in settings.currencies: raise HTTPException(422,"Unsupported currency")
+    currency=(payload.currency or settings.default_currency).upper()
+    if currency not in settings.currencies: raise HTTPException(422,"Unsupported currency")
     # Ledger, ownership and duplicate checks are Agent 1's job; intake only reads the customer's own transaction.
     tx=db.get(Transaction,payload.transaction_id)
     own_tx=tx if tx and tx.customer_id==user.id else None
@@ -136,7 +137,7 @@ def create_ticket(payload: TicketCreate, db: Session=Depends(get_db), user: User
     priority=calculate_priority(triage["category"],payload.description)
     t=Ticket(ticket_number=f"RIT-{datetime.now(timezone.utc):%y%m%d}-{uuid4().hex[:6].upper()}",
        customer_id=user.id,transaction_id=payload.transaction_id,order_id=payload.order_id,
-       claimed_amount=payload.claimed_amount,currency=payload.currency.upper(),description=payload.description,
+       claimed_amount=payload.claimed_amount,currency=currency,description=payload.description,
        category=triage["category"],confidence=triage["confidence"],priority=priority,
        queue=ROUTES.get(triage["category"],"Manual Triage"),status=TicketStatus.TRIAGED.value,
        item_name=payload.item_name or (own_tx.order_id if own_tx else "Customer Item"),
@@ -189,7 +190,7 @@ def ecommerce_ticket_webhook(payload: dict, x_ritos_webhook_secret: str | None =
         raise HTTPException(422, "claimed_amount must be a valid decimal amount")
     if not amount.is_finite() or amount <= 0:
         raise HTTPException(422, "claimed_amount must be greater than zero")
-    currency = str(payload.get("currency", "INR")).upper()
+    currency = str(payload.get("currency") or settings.default_currency).upper()
     if currency not in settings.currencies:
         raise HTTPException(422, "Unsupported currency")
     transaction_id = str(payload["transaction_id"]).strip()
@@ -472,6 +473,10 @@ def upload_evidence(
         raw_bytes = b""
 
     evidence_file = evidence_store.save_evidence(db, t, raw_bytes, payload.file_name, source="upload")
+    # A ticket paused for proof resumes on its own when the proof arrives (guide, phase 5 step 3).
+    automation = None
+    if _waiting_for_proof(t):
+        automation = rerun_workflow(db, t, user, trigger="EVIDENCE_UPLOADED")
     db.commit()
     db.refresh(evidence_file)
 
@@ -480,8 +485,15 @@ def upload_evidence(
         "sha256": evidence_file.sha256_hash,
         "lifecycle_status": evidence_file.lifecycle_status,
         "file_name": evidence_file.file_name,
-        "tamper_flags": evidence_file.tamper_flags or []
+        "tamper_flags": evidence_file.tamper_flags or [],
+        "automation": automation,
     }
+
+
+def _waiting_for_proof(t: Ticket) -> bool:
+    if t.status in {TicketStatus.RESOLVED.value, TicketStatus.REJECTED.value} or t.refund_status in {"APPROVED", "REJECTED", "REFUNDED"}:
+        return False
+    return t.proof_status == "PROOF_REQUESTED" or t.status == TicketStatus.AWAITING_INFORMATION.value
 
 @router.post("/evidence/verify")
 def verify_evidence(
@@ -594,7 +606,11 @@ def users(db:Session=Depends(get_db),user:User=Depends(require_roles(Role.ADMIN.
 
 @router.get("/admin/health")
 def admin_health(user:User=Depends(require_roles(Role.ADMIN.value))):
-    return {"status":"ok","database":"configured","ai_provider":"rules-only-with-optional-provider","payment_provider":"mock-only","background_worker":"API-triggered pipeline; durable worker requires Redis/Celery deployment","agents":len(AGENTS),"orchestrator":ORCHESTRATOR["id"]}
+    gw = gateway_status()
+    return {"status":"ok","database":"configured","ai_provider":"rules-only-with-optional-provider",
+            "vision":vision_status(),"payment_provider":gw["active_provider"],"live_payments_enabled":gw["live_payments_enabled"],
+            "background_worker":"in-process outbox thread" if settings.run_background_workers else "disabled (RUN_BACKGROUND_WORKERS=false)",
+            "agents":len(AGENTS),"orchestrator":ORCHESTRATOR["id"]}
 
 
 @router.post("/intelligence/classify/{ticket_id}")
@@ -741,7 +757,7 @@ def automation_summary(db:Session=Depends(get_db),user:User=Depends(require_role
       "tickets_total":len(tickets),"tickets_flagged_duplicate":sum(1 for t in tickets if t.duplicate_of_id),
       "tickets_needing_verification":sum(1 for t in tickets if t.payment_verification not in {"VERIFIED","ALREADY_REFUNDED"}),
       "tickets_high_priority":sum(1 for t in tickets if t.priority=="P1"),
-      "refund_execution_mode":"MOCK_ONLY","real_provider_configured":False,
+      "refund_execution_mode":gateway_status()["active_provider"],"real_provider_configured":gateway_status()["live_payments_enabled"],
       "note":"Counts are computed from persisted records; mock provider results are not real financial outcomes."}
 
 @router.get("/desks/summary")
@@ -822,11 +838,13 @@ def cs2_send_proof_request(ticket_id:str, payload:ProofRequestIn, db:Session=Dep
                 {"ticket_id": ticket.ticket_number, "title": "Proof requested", "body": payload.message[:1000], "channel": "IN_APP"},
                 f"ritos-proof-request-{ticket.id}-{uuid4().hex[:8]}")
 
-    dest = ticket.customer_phone or ticket.customer_email or "Customer Mobile"
+    # RITOS sends no SMS or email: the request is posted on the customer's ticket, and store-linked
+    # customers also get an in-app notification from the store.
+    dest = "TICKET_THREAD+STORE_IN_APP" if is_store_linked(ticket) else "TICKET_THREAD"
     db.add(TicketComment(
         ticket_id=ticket.id,
         author_id=user.id,
-        body=f"📲 [CS-2 Dispatch to {dest}]:\n{payload.message}",
+        body=f"📲 [CS-2 proof request, posted to the customer's ticket]:\n{payload.message}",
         internal=False
     ))
     record_event(db, ticket.id, user.id, "CS2_PROOF_REQUEST_DISPATCHED", {"destination": dest, "message": payload.message, "proof_type": payload.proof_type})
@@ -850,11 +868,11 @@ def cs3_send_rejection_notice(ticket_id:str, payload:RejectionNoticeIn, db:Sessi
     if payload.reason:
         ticket.policy_evaluation_reason = payload.reason
         
-    dest = ticket.customer_phone or ticket.customer_email or "Customer Mobile"
+    dest = "TICKET_THREAD+STORE_DECISION" if is_store_linked(ticket) else "TICKET_THREAD"
     db.add(TicketComment(
         ticket_id=ticket.id,
         author_id=user.id,
-        body=f"📩 [CS-3 Policy Rejection Notice dispatched to {dest}]:\n{payload.message}",
+        body=f"📩 [CS-3 policy rejection notice, posted to the customer's ticket]:\n{payload.message}",
         internal=False
     ))
     record_event(db, ticket.id, user.id, "CS3_REJECTION_NOTICE_DISPATCHED", {"destination": dest, "message": payload.message, "reason": payload.reason})
@@ -885,25 +903,35 @@ def ecommerce_ticket_intake(
         if not staff or staff.role not in STAFF_ROLES:
             raise HTTPException(401, "Invalid or missing X-Ecommerce-Secret header")
 
-    # Find customer or create fallback customer
-    cust = db.scalar(select(User).where(User.email == (payload.customer_email or "customer@ritos.local")))
+    # The claim must belong to a known, active customer; it is never attached to someone else.
+    if not payload.customer_email:
+        raise HTTPException(422, "customer_email is required")
+    cust = db.scalar(select(User).where(User.email == payload.customer_email.strip().lower(),
+                                        User.role == Role.CUSTOMER.value, User.active.is_(True)))
     if not cust:
-        cust = db.scalar(select(User).where(User.role == Role.CUSTOMER.value))
-    customer_id = cust.id if cust else str(uuid4())
+        raise HTTPException(404, "Customer identity is not mapped; provision or map the customer before intake")
+    customer_id = cust.id
+    currency = (payload.currency or settings.default_currency).upper()
+    if currency not in settings.currencies:
+        raise HTTPException(422, "Unsupported currency")
 
-    # Ensure transaction exists or record in ledger for lookup
     tx = db.get(Transaction, payload.transaction_id)
     # A ledger capture date is only trusted when the transaction existed before this call.
     ledger_date = tx.created_at if tx and tx.customer_id == customer_id else None
     if not tx:
-        # If new transaction provided by eCommerce store, register it as successful
+        # Only the store (shared secret) may register a payment, and only with the payment facts it holds:
+        # a claim never certifies its own payment.
+        if not secret_ok:
+            raise HTTPException(409, "Transaction is not available in the trusted transaction source")
+        if payload.transaction_amount is None or not payload.payment_status:
+            raise HTTPException(409, "Unknown transaction: send transaction_amount and payment_status to register it")
         tx = Transaction(
             id=payload.transaction_id,
             customer_id=customer_id,
             order_id=payload.order_id,
-            amount=Decimal(str(payload.claimed_amount)).quantize(Decimal("0.01")),
-            currency=payload.currency.upper() if payload.currency else "INR",
-            payment_status="SUCCESSFUL",
+            amount=Decimal(str(payload.transaction_amount)).quantize(Decimal("0.01")),
+            currency=currency,
+            payment_status=payload.payment_status.strip().upper(),
             refunded_amount=Decimal("0.00"),
             provider_reference=f"ECOM-{payload.transaction_id}"
         )
@@ -926,7 +954,7 @@ def ecommerce_ticket_intake(
         transaction_id=payload.transaction_id,
         order_id=payload.order_id,
         claimed_amount=payload.claimed_amount,
-        currency=payload.currency.upper() if payload.currency else "INR",
+        currency=currency,
         description=payload.description,
         customer_name=payload.customer_name or "Valued Customer",
         customer_email=payload.customer_email,
@@ -1037,7 +1065,7 @@ def authorize_payout(ticket_id: str, db: Session = Depends(get_db), user: User =
 # ==========================================
 # SHOPFLOW INTEGRATION ENDPOINTS
 # ==========================================
-from .shopflow import process_shopflow_event, check_shopflow_health, handle_event, StoreUnavailable
+from .shopflow import process_shopflow_event, check_shopflow_health, handle_event, StoreUnavailable, UnknownStoreTicket
 
 class ShopflowWebhookPayload(BaseModel):
     model_config = {"extra": "allow"}
@@ -1078,6 +1106,9 @@ def shopflow_webhook(payload: ShopflowWebhookPayload,
     except StoreUnavailable as e:
         db.rollback()
         raise HTTPException(503, f"Store temporarily unavailable, retry later: {e}")
+    except UnknownStoreTicket as e:
+        db.rollback()
+        raise HTTPException(404, str(e))
     except Exception as e:
         db.rollback()
         raise HTTPException(500, f"ShopFlow processing error: {e}")
@@ -1103,7 +1134,7 @@ def shopflow_sync(db: Session = Depends(get_db),
     if not health.get("connected"):
         return {
             "status": "DISCONNECTED",
-            "message": f"ShopFlow at {settings.shopflow_base_url} is currently unreachable. Start ShopFlow on port 3000 to sync live claims.",
+            "message": f"ShopFlow at {settings.shopflow_base_url} is currently unreachable. Start ShopFlow (SHOPFLOW_BASE_URL) to sync live claims.",
             "synced_count": 0
         }
 
@@ -1113,7 +1144,7 @@ def shopflow_sync(db: Session = Depends(get_db),
     headers = {"Authorization": f"Bearer {settings.ritos_api_key}"}
     synced = []
     try:
-        with httpx.Client(timeout=10.0) as client:
+        with httpx.Client(timeout=settings.store_request_timeout_seconds) as client:
             resp = client.get(url, headers=headers)
             if resp.is_success:
                 data = resp.json()

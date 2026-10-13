@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 
 from .config import settings
 from .models import Ticket, Transaction, TicketStatus, User, InboundEvent, Role
-from .orchestrator import run_workflow, record_human_decision, AUTO_APPROVE, AUTO_REJECT, AWAIT_PROOF
+from .orchestrator import run_workflow, record_human_decision, AUTO_APPROVE, AUTO_REJECT, AWAIT_PROOF, AWAIT_APPROVAL
 from .outbox import enqueue
 from . import evidence_store
 from .services import record_event, audit
@@ -34,6 +34,10 @@ class StoreUnavailable(RuntimeError):
     """The store could not answer right now; the webhook returns 503 so the store's outbox retries."""
 
 
+class UnknownStoreTicket(LookupError):
+    """The store has no such ticket and demo claims are disabled: nothing is invented, the event is refused."""
+
+
 def fetch_shopflow_context(ticket_id: str) -> Optional[Dict[str, Any]]:
     """Fetch the complete claim context dossier from the store.
 
@@ -43,7 +47,7 @@ def fetch_shopflow_context(ticket_id: str) -> Optional[Dict[str, Any]]:
     """
     url = f"{settings.shopflow_base_url}/api/ritos/refund-tickets/{ticket_id}/context"
     try:
-        with httpx.Client(timeout=20.0) as client:
+        with httpx.Client(timeout=settings.store_request_timeout_seconds) as client:
             resp = client.get(url, headers=get_auth_headers())
     except httpx.HTTPError as e:
         raise StoreUnavailable(f"ShopFlow context request failed: {e}") from e
@@ -58,7 +62,7 @@ def fetch_shopflow_context(ticket_id: str) -> Optional[Dict[str, Any]]:
 def check_shopflow_health() -> Dict[str, Any]:
     url = f"{settings.shopflow_base_url}/api/health"
     try:
-        with httpx.Client(timeout=2.0) as client:
+        with httpx.Client(timeout=settings.store_health_timeout_seconds) as client:
             resp = client.get(url)
             data = {}
             try:
@@ -94,7 +98,8 @@ def _parse_dt(value) -> Optional[datetime]:
 def _fields_from_context(ctx: Dict[str, Any]) -> Dict[str, Any]:
     tk, cust, order, product = ctx.get("ticket", {}), ctx.get("customer", {}), ctx.get("order", {}), ctx.get("product", {})
     txn, policy, facts, ledger = ctx.get("transaction", {}), ctx.get("refund_policy", {}), ctx.get("derived_facts", {}), ctx.get("refund_ledger", {})
-    payment_status = str(txn.get("payment_status") or "PAID").upper()
+    # A missing payment status is unknown (a person verifies it), never assumed paid.
+    payment_status = str(txn.get("payment_status") or "UNKNOWN").upper()
     reason = str(tk.get("reason") or "").replace("_", " ").lower()
     return {
         "customer_id": cust.get("customer_id") or "shopflow_guest",
@@ -105,6 +110,7 @@ def _fields_from_context(ctx: Dict[str, Any]) -> Dict[str, Any]:
         "item_name": product.get("name") or "ShopFlow Product",
         "item_category": str(product.get("category") or "GENERAL").upper(),
         "claimed_amount": _minor_to_inr(tk.get("requested_amount_minor")),
+        "currency": str(tk.get("currency") or settings.default_currency).upper(),
         "description": " — ".join(x for x in [reason, tk.get("description")] if x) or "ShopFlow refund request",
         "purchase_date": _parse_dt(order.get("delivered_at")) or _parse_dt(order.get("ordered_at")),
         "evidence_images": [ev.get("filename") for ev in ctx.get("evidence", []) if ev.get("filename")],
@@ -157,6 +163,7 @@ def _fields_from_payload(ticket_id: str, p: Dict[str, Any]) -> Dict[str, Any]:
         "item_name": p.get("item_name") or "ShopFlow Product",
         "item_category": str(p.get("item_category") or "GENERAL").upper(),
         "claimed_amount": amount,
+        "currency": str(p.get("currency") or settings.default_currency).upper(),
         "description": p.get("description") or f"ShopFlow return request for {order_id}",
         "purchase_date": _parse_dt(p.get("purchase_date")),
         "evidence_images": list(p.get("evidence_images") or []),
@@ -191,11 +198,27 @@ def is_store_linked(t: Ticket) -> bool:
     return ev.get("source") == SOURCE and bool(ev.get("store_linked"))
 
 
-def intake(db: Session, ext_id: str, payload: Dict[str, Any], event_id: Optional[str]) -> Dict[str, Any]:
+def fetch_store_data(ext_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Every store HTTP call an intake needs (claim context and photo bytes), made before any database work."""
     ctx = fetch_shopflow_context(ext_id)
-    if not ctx and not (payload.get("claimed_amount") or payload.get("claimed_amount_minor")):
-        # A real store event carries no claim facts; never invent them.
-        raise StoreUnavailable(f"No context for {ext_id} and the event carries no claim details")
+    if not ctx:
+        if not settings.demo_claims_enabled:
+            raise UnknownStoreTicket(f"ShopFlow has no ticket {ext_id} (demo claims are disabled: DEMO_CLAIMS_ENABLED)")
+        if not (payload.get("claimed_amount") or payload.get("claimed_amount_minor")):
+            # A real store event carries no claim facts; never invent them.
+            raise StoreUnavailable(f"No context for {ext_id} and the event carries no claim details")
+    photos = []
+    for ev in (ctx or {}).get("evidence", []):
+        raw = fetch_store_evidence(ev.get("url"))
+        if raw:
+            photos.append((raw, ev.get("filename") or ev.get("evidence_id") or "evidence"))
+    return {"ctx": ctx, "photos": photos}
+
+
+def intake(db: Session, ext_id: str, payload: Dict[str, Any], event_id: Optional[str],
+           store: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    store = store if store is not None else fetch_store_data(ext_id, payload)
+    ctx = store["ctx"]
     f = _fields_from_context(ctx) if ctx else _fields_from_payload(ext_id, payload)
 
     # Ledger entry: mirrors the store's payment record (store-linked) or the authenticated payload (demo).
@@ -204,7 +227,7 @@ def intake(db: Session, ext_id: str, payload: Dict[str, Any], event_id: Optional
     if not tx:
         tx = Transaction(id=txf["id"], customer_id=f["customer_id"], order_id=f["order_id"],
                          amount=txf["amount"] if txf["amount"] is not None else f["claimed_amount"],
-                         currency="INR", payment_status=txf["status"], refunded_amount=txf["refunded"],
+                         currency=f["currency"], payment_status=txf["status"], refunded_amount=txf["refunded"],
                          provider_reference=txf["reference"])
         db.add(tx)
     elif ctx:
@@ -240,15 +263,13 @@ def intake(db: Session, ext_id: str, payload: Dict[str, Any], event_id: Optional
     for key in ["order_id", "item_name", "item_category", "claimed_amount", "description", "purchase_date",
                 "customer_name", "customer_email", "customer_phone"]:
         setattr(t, key, f[key])
-    t.currency = "INR"
+    t.currency = f["currency"]
     t.classification_evidence = {**(t.classification_evidence or {}), **evidence}
     db.flush()
 
     # Real photo bytes from the store go into private evidence storage (validated, hashed, lifecycle-tracked).
-    for ev in (ctx or {}).get("evidence", []):
-        raw = fetch_store_evidence(ev.get("url"))
-        if raw:
-            evidence_store.save_evidence(db, t, raw, ev.get("filename") or ev.get("evidence_id") or "evidence", source="STORE")
+    for raw, filename in store["photos"]:
+        evidence_store.save_evidence(db, t, raw, filename, source="STORE")
 
     system_user_id = _system_user_id(db)
     result = run_workflow(db, t, trigger=trigger, actor_id=system_user_id)
@@ -294,7 +315,8 @@ def queue_decision(db: Session, t: Ticket, decision: str, reason: str, processed
         "refund_percentage": 100 if approved else 0,
         "refund_amount_minor": amount_minor,
         "reason": reason[:1000],
-        "confidence_score": float(t.confidence or 0.9) if processed_by == "RITOS_ORCHESTRATOR" else 1.0,
+        # Routing is decided by fixed rules (or a person), not by a probability, so the store's required score is 1.0.
+        "confidence_score": 1.0,
         "processed_by": processed_by,
         "requires_human_review": False,
         "agent_trace": {
@@ -321,8 +343,11 @@ def queue_review_hold(db: Session, t: Ticket, next_action: str) -> list:
                                                      {"status": "PROCESSING"}, f"ritos-status-{t.id}").id}]
     if next_action == AWAIT_PROOF:
         title, body = "Photo proof needed", (t.customer_message_draft or "Please upload photos of the item and packaging.")
-    else:
+    elif next_action == AWAIT_APPROVAL:
         title, body = "Refund under review", "Your refund request passed automated checks and is with our team for final approval."
+    else:
+        # Manual review: automated checks did not clear the claim, so do not say they passed.
+        title, body = "Refund under review", "Our team is reviewing your refund request and will update you here."
     msg = enqueue(db, t.id, "NOTIFICATION", "/api/ritos/notifications",
                   {"ticket_id": t.ticket_number, "title": title, "body": body[:1000], "channel": "IN_APP"},
                   f"ritos-notify-{t.id}-{next_action}")
@@ -391,8 +416,11 @@ def handle_event(db: Session, payload: Dict[str, Any]) -> Dict[str, Any]:
         if prior:
             return {**(prior.result or {}), "replayed": True}
 
-    if event_type == "refund.ticket.created":
-        result = intake(db, ext_id, payload, event_id)
+    # New evidence on an existing store ticket re-runs the same intake (the store context now includes it).
+    if event_type in ("refund.ticket.created", "refund.evidence.added"):
+        # End the read-only transaction first: no pooled connection is held while the store is called.
+        db.rollback()
+        result = intake(db, ext_id, payload, event_id, fetch_store_data(ext_id, payload))
     elif event_type == "refund.execution.completed":
         result = _on_execution(db, ext_id, payload, success=True)
     elif event_type == "refund.execution.failed":

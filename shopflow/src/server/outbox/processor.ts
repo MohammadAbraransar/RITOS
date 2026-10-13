@@ -1,11 +1,20 @@
 import { prisma } from "@/server/db";
 import { buildRefundContext } from "@/server/ritos/context-builder";
 import { mockDecide } from "@/server/mock-ritos/mock-decide";
+import { config } from "@/server/config";
 
-export async function processOutboxBatch(limit = 10) {
+// Earliest next attempt per failed event (exponential backoff). Kept in memory: after a restart, failed
+// events are simply retried once straight away.
+const nextAttemptAt = new Map<string, number>();
+
+function backoffMs(attempts: number): number {
+  return Math.min(config.outbox.maxBackoffMs, config.outbox.baseBackoffMs * 2 ** Math.max(0, attempts - 1));
+}
+
+export async function processOutboxBatch(limit = config.outbox.batchSize) {
+  const now = Date.now();
   const pendingEvents = await prisma.integrationEvent.findMany({
     where: { status: "PENDING" },
-    take: limit,
     orderBy: { createdAt: "asc" },
   });
 
@@ -13,24 +22,22 @@ export async function processOutboxBatch(limit = 10) {
 
   const handle = async (event: (typeof pendingEvents)[number]) => {
     try {
-      if (process.env.MOCK_RITOS === "true") {
+      if (config.mockRitos) {
         // Direct mock dispatch
         if (event.eventType === "refund.ticket.created") {
           const context = await buildRefundContext(event.ticketId);
           if (context) {
             const decision = mockDecide(context);
 
-            const baseUrl = process.env.SHOPFLOW_BASE_URL || "http://localhost:3000";
-            const apiKey = process.env.RITOS_API_KEY || "ritos_dev_key_secret_2026";
-
-            const res = await fetch(`${baseUrl}/api/ritos/refund-decision`, {
+            const res = await fetch(`${config.storeBaseUrl}/api/ritos/refund-decision`, {
               method: "POST",
               headers: {
                 "Content-Type": "application/json",
-                Authorization: `Bearer ${apiKey}`,
+                Authorization: `Bearer ${config.ritosApiKey}`,
                 "Idempotency-Key": `mock-decision-${event.id}`,
               },
               body: JSON.stringify(decision),
+              signal: AbortSignal.timeout(config.ritosRequestTimeoutMs),
             });
 
             if (!res.ok) {
@@ -48,9 +55,7 @@ export async function processOutboxBatch(limit = 10) {
         results.push({ id: event.id, status: "SENT" });
       } else {
         // Real RITOS Webhook posting
-        const baseUrl = process.env.RITOS_BASE_URL || "http://127.0.0.1:8000";
-        const webhookUrl = `${baseUrl}/webhook/refund-tickets`;
-        const apiKey = process.env.RITOS_API_KEY || "ritos_dev_key_secret_2026";
+        const webhookUrl = `${config.ritosBaseUrl}/webhook/refund-tickets`;
 
         const webhookPayload = {
           event_id: event.id,
@@ -65,9 +70,10 @@ export async function processOutboxBatch(limit = 10) {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            Authorization: `Bearer ${apiKey}`,
+            Authorization: `Bearer ${config.ritosApiKey}`,
           },
           body: JSON.stringify(webhookPayload),
+          signal: AbortSignal.timeout(config.ritosRequestTimeoutMs),
         });
 
         if (!res.ok) {
@@ -82,27 +88,46 @@ export async function processOutboxBatch(limit = 10) {
 
         results.push({ id: event.id, status: "SENT" });
       }
+      nextAttemptAt.delete(event.id);
+      return true;
     } catch (err: any) {
+      const attempts = event.attempts + 1;
+      const failed = attempts >= config.outbox.maxAttempts;
       await prisma.integrationEvent.update({
         where: { id: event.id },
         data: {
-          status: event.attempts >= 4 ? "FAILED" : "PENDING",
-          attempts: event.attempts + 1,
+          status: failed ? "FAILED" : "PENDING",
+          attempts,
           lastError: err.message || "Failed to dispatch outbox event",
         },
       });
-      results.push({ id: event.id, status: "RETRY", error: err.message });
+      if (failed) nextAttemptAt.delete(event.id);
+      else nextAttemptAt.set(event.id, Date.now() + backoffMs(attempts));
+      results.push({ id: event.id, status: failed ? "FAILED" : "RETRY", error: err.message });
+      return false;
     }
   };
 
   // Different tickets are delivered in parallel; events of the same ticket stay in creation order.
+  // An event still backing off holds back the later events of its ticket.
   const byTicket = new Map<string, typeof pendingEvents>();
+  const backingOff = new Set<string>();
+  let selected = 0;
   for (const event of pendingEvents) {
+    if (selected >= limit) break;
+    if (backingOff.has(event.ticketId)) continue;
+    if ((nextAttemptAt.get(event.id) ?? 0) > now) {
+      backingOff.add(event.ticketId);
+      continue;
+    }
     byTicket.set(event.ticketId, [...(byTicket.get(event.ticketId) || []), event]);
+    selected++;
   }
   await Promise.all(
     Array.from(byTicket.values()).map(async (events) => {
-      for (const event of events) await handle(event);
+      for (const event of events) {
+        if (!(await handle(event))) break; // keep per-ticket order behind a failure
+      }
     })
   );
 

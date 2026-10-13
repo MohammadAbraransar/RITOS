@@ -12,6 +12,7 @@ import {
   ShieldCheck,
   FileText
 } from "lucide-react";
+import { formatMoney } from "@/lib/money";
 
 export default function OrderRefundPage({ params }: { params: { id: string } }) {
   const router = useRouter();
@@ -173,7 +174,7 @@ export default function OrderRefundPage({ params }: { params: { id: string } }) 
                       {item.product_name}
                     </p>
                     <p className="text-xs text-slate-500">
-                      Qty: {item.quantity} · ₹{(item.unit_price_minor * item.quantity / 100).toLocaleString("en-IN")}
+                      Qty: {item.quantity} · {formatMoney(item.unit_price_minor * item.quantity)}
                     </p>
                   </div>
                 </label>

@@ -1,4 +1,5 @@
 import { prisma } from "@/server/db";
+import { config } from "@/server/config";
 
 export async function buildRefundContext(ticketId: string) {
   const ticket = await prisma.refundTicket.findUnique({
@@ -117,8 +118,9 @@ export async function buildRefundContext(ticketId: string) {
     };
   });
 
-  // 4. Refund ledger
-  const txnAmountMinor = payment?.amountMinor || ticket.requestedAmountMinor;
+  // 4. Refund ledger. Without a payment record the captured amount is unknown (0): RITOS then routes the
+  // claim to a person instead of trusting the requested amount as proof of payment.
+  const txnAmountMinor = payment?.amountMinor ?? 0;
   const allTxnRefunds = payment
     ? payment.refundTransactions
     : await prisma.refundTransaction.findMany({ where: { transactionId: ticket.transactionId } });
@@ -134,21 +136,21 @@ export async function buildRefundContext(ticketId: string) {
   const remainingRefundableMinor = Math.max(0, txnAmountMinor - alreadyRefundedMinor - inFlightMinor);
 
   // 5. Derived facts calculation
+  // Unknown facts are sent as null so RITOS applies its own versioned policy instead of a store-side guess.
   let daysSinceDelivery: number | null = null;
   let returnWindowExpiresAt: string | null = null;
-  let withinReturnWindow = true;
+  let withinReturnWindow: boolean | null = null;
 
-  const returnWindowDays = policySnapshot.return_window_days ?? (product.policy?.returnWindowDays || 30);
+  const returnWindowDays: number | null = policySnapshot.return_window_days ?? product.policy?.returnWindowDays ?? null;
 
-  if (order.deliveredAt) {
+  if (order.deliveredAt && returnWindowDays !== null) {
     const delivTime = new Date(order.deliveredAt).getTime();
     daysSinceDelivery = Math.max(0, Math.floor((now.getTime() - delivTime) / (1000 * 60 * 60 * 24)));
     const expiresDate = new Date(delivTime + returnWindowDays * 24 * 60 * 60 * 1000);
     returnWindowExpiresAt = expiresDate.toISOString();
     withinReturnWindow = daysSinceDelivery <= returnWindowDays;
-  } else {
-    // If not delivered yet, window hasn't expired unless order was cancelled
-    withinReturnWindow = true;
+  } else if (order.deliveredAt) {
+    daysSinceDelivery = Math.max(0, Math.floor((now.getTime() - new Date(order.deliveredAt).getTime()) / (1000 * 60 * 60 * 24)));
   }
 
   // Evidence required calculation
@@ -158,8 +160,9 @@ export async function buildRefundContext(ticketId: string) {
 
   const requestedExceedsRemaining = ticket.requestedAmountMinor > remainingRefundableMinor;
 
-  const hvThreshold = policySnapshot.human_approval_threshold_minor ?? product.policy?.humanApprovalThresholdMinor ?? 5000000;
-  const aboveHighValueThreshold = ticket.requestedAmountMinor >= (hvThreshold || 5000000);
+  // Only a configured store threshold is reported; RITOS always applies its own automatic-approval limit too.
+  const hvThreshold: number | null = policySnapshot.human_approval_threshold_minor ?? product.policy?.humanApprovalThresholdMinor ?? null;
+  const aboveHighValueThreshold = hvThreshold !== null && ticket.requestedAmountMinor >= hvThreshold;
 
   // Conflict detection
   const claimDataConflicts: string[] = [];
@@ -180,7 +183,7 @@ export async function buildRefundContext(ticketId: string) {
     reasonPolicyNotes.push("Policy accepts damaged items with evidence");
   }
 
-  const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000";
+  const baseUrl = config.storeBaseUrl;
 
   return {
     context_version: "1.0",
@@ -192,7 +195,7 @@ export async function buildRefundContext(ticketId: string) {
       description: ticket.description,
       requested_action: ticket.requestedAction,
       requested_amount_minor: ticket.requestedAmountMinor,
-      currency: "INR",
+      currency: order.currency,
       created_at: ticket.createdAt.toISOString(),
     },
     customer: {
@@ -235,25 +238,27 @@ export async function buildRefundContext(ticketId: string) {
     },
     transaction: {
       transaction_id: ticket.transactionId,
-      payment_id: payment?.id || `PAY-${ticket.transactionId.replace("TXN-", "")}`,
-      amount_minor: txnAmountMinor,
-      payment_method: payment?.method || "UPI",
-      payment_status: payment?.status || "PAID",
-      paid_at: payment?.paidAt ? payment.paidAt.toISOString() : order.orderedAt.toISOString(),
+      // No payment record: report it as unknown, never as paid.
+      payment_id: payment?.id ?? null,
+      amount_minor: payment?.amountMinor ?? null,
+      payment_method: payment?.method ?? null,
+      payment_status: payment?.status ?? "UNKNOWN",
+      paid_at: payment?.paidAt ? payment.paidAt.toISOString() : null,
     },
     refund_policy: {
-      policy_version: policySnapshot.policy_version || product.policy?.version || 1,
-      policy_type: policySnapshot.policy_type || product.policy?.policyType || "FULL",
-      refund_percentage: policySnapshot.refund_percentage ?? product.policy?.refundPercentage ?? 100,
+      // Policy terms come from the snapshot or the product's policy; a missing term is null, not a default.
+      policy_version: policySnapshot.policy_version ?? product.policy?.version ?? null,
+      policy_type: policySnapshot.policy_type ?? product.policy?.policyType ?? null,
+      refund_percentage: policySnapshot.refund_percentage ?? product.policy?.refundPercentage ?? null,
       return_window_days: returnWindowDays,
-      opened_allowed: policySnapshot.opened_allowed ?? product.policy?.openedAllowed ?? true,
-      requires_unused: policySnapshot.requires_unused ?? product.policy?.requiresUnused ?? false,
-      defective_only: policySnapshot.defective_only ?? product.policy?.defectiveOnly ?? false,
-      exchange_only: policySnapshot.exchange_only ?? product.policy?.exchangeOnly ?? false,
-      replacement_allowed: policySnapshot.replacement_allowed ?? product.policy?.replacementAllowed ?? true,
-      return_required: policySnapshot.return_required ?? product.policy?.returnRequired ?? true,
-      return_shipping: policySnapshot.return_shipping || product.policy?.returnShipping || "FREE",
-      verification_required: policySnapshot.verification_required || product.policy?.verificationRequired || "NONE",
+      opened_allowed: policySnapshot.opened_allowed ?? product.policy?.openedAllowed ?? null,
+      requires_unused: policySnapshot.requires_unused ?? product.policy?.requiresUnused ?? null,
+      defective_only: policySnapshot.defective_only ?? product.policy?.defectiveOnly ?? null,
+      exchange_only: policySnapshot.exchange_only ?? product.policy?.exchangeOnly ?? null,
+      replacement_allowed: policySnapshot.replacement_allowed ?? product.policy?.replacementAllowed ?? null,
+      return_required: policySnapshot.return_required ?? product.policy?.returnRequired ?? null,
+      return_shipping: policySnapshot.return_shipping ?? product.policy?.returnShipping ?? null,
+      verification_required: policySnapshot.verification_required ?? product.policy?.verificationRequired ?? null,
       evidence_required_reasons: evidenceRequiredReasons,
       human_approval_threshold_minor: policySnapshot.human_approval_threshold_minor ?? product.policy?.humanApprovalThresholdMinor ?? null,
       exceptions: policySnapshot.exceptions || product.policy?.exceptions || {},

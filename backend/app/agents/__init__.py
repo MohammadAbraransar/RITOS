@@ -67,6 +67,9 @@ AGENTS = [
      "purpose": "Tell the customer exactly how far the case has progressed."},
 ]
 
+# Carrier outcomes that confirm a parcel will not arrive
+LOSS_STATUSES = {"LOST", "DELIVERY_FAILED", "RETURNED_TO_SENDER"}
+
 ORCHESTRATOR = {
     "id": "central_orchestrator",
     "name": "Central Workflow Orchestrator",
@@ -290,7 +293,7 @@ def risk_assessment(s: PipelineState) -> dict:
                                as_of=s.evaluated_at)
     s.risk = {"score": r["risk_score"], "tier": r["risk_tier"], "signals": r["risk_signals"],
               "requires_supervisory_review": r["requires_supervisory_review"]}
-    return {k: r[k] for k in ("risk_score", "risk_tier", "risk_signals", "claims_30d", "claims_90d", "claims_365d",
+    return {k: r[k] for k in ("risk_score", "risk_tier", "risk_signals", "claims_30d", "claims_90d", "claims_365d", "lifetime_orders", "refund_to_gmv_ratio",
                               "is_high_value", "requires_supervisory_review", "rule_version", "thresholds", "findings")}
 
 
@@ -320,6 +323,9 @@ def decision_arbiter(s: PipelineState) -> dict:
         auto_approve_limit=Decimal(str(settings.auto_approve_max_inr)),
         near_duplicate_photos=any("NEAR_DUPLICATE_OF_OTHER_CLAIM" in (r.tamper_flags or []) for r in s.evidence_rows),
         operational_category=t.category or "OTHER",
+        delivery_loss_confirmed=s.logistics.get("source") == "CARRIER" and (
+            s.logistics.get("status") in LOSS_STATUSES
+            or any("lost" in str(e).lower() for e in s.logistics.get("carrier_exceptions") or [])),
     )
     d = arbitrate(inputs)
     s.decision = d.as_dict()

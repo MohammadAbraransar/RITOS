@@ -44,10 +44,9 @@ def _load_reference(ref: Any) -> Optional[Image.Image]:
 class ClipVisionProvider:
     """Zero-shot CLIP: identity by similarity to the store's reference photos, defect by text-image prompts."""
 
-    def __init__(self, model_name: str):
+    def __init__(self, model_name: str, pretrained: str):
         import open_clip  # optional dependency
         import torch
-        pretrained = {"ViT-B-32": "laion2b_s34b_b79k", "ViT-B-16": "laion2b_s34b_b88k"}.get(model_name, "openai")
         self.torch = torch
         self.model, _, self.preprocess = open_clip.create_model_and_transforms(model_name, pretrained=pretrained)
         self.model.eval()
@@ -120,7 +119,7 @@ def get_vision_provider() -> Optional[VisionProvider]:
         if _provider is None and _provider_error is None:
             try:
                 if name == "clip":
-                    _provider = ClipVisionProvider(settings.vision_model_name)
+                    _provider = ClipVisionProvider(settings.vision_model_name, settings.vision_model_pretrained)
                 else:
                     _provider_error = f"Unknown VISION_PROVIDER '{name}'"
             except Exception as exc:

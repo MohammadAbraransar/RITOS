@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { PolicyPanel } from "@/components/shop/PolicyPanel";
 import { Star, ShoppingBag, Check, AlertCircle } from "lucide-react";
 import { useRouter } from "next/navigation";
+import { formatMoney } from "@/lib/money";
 
 export default function ProductDetailPage({
   params,
@@ -59,7 +60,7 @@ export default function ProductDetailPage({
     );
   }
 
-  const priceRupees = (product.price_minor / 100).toLocaleString("en-IN");
+  const priceText = formatMoney(product.price_minor);
 
   return (
     <div className="space-y-10">
@@ -103,7 +104,7 @@ export default function ProductDetailPage({
           <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 flex items-baseline justify-between">
             <div>
               <span className="text-xs text-slate-500 block">Total Price (incl. GST)</span>
-              <span className="text-3xl font-extrabold text-slate-900">₹{priceRupees}</span>
+              <span className="text-3xl font-extrabold text-slate-900">{priceText}</span>
             </div>
             <span className="text-xs font-medium text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-full border border-emerald-200">
               {product.stock > 0 ? `In Stock (${product.stock} units)` : "Out of Stock"}

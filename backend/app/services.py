@@ -1,5 +1,6 @@
 import re, uuid, hashlib
 from decimal import Decimal
+from .config import settings
 from sqlalchemy.orm import Session
 from sqlalchemy import select, func
 from .models import Ticket, Transaction, TicketEvent, AuditLog, RefundRequest, RefundStatus, TicketStatus
@@ -298,8 +299,9 @@ def generate_customer_message_draft(
     if decision_bucket == "GENUINE_REFUNDABLE":
         return (
             f"Dear {name}, your refund request for order {order}{item} ({formatted_amt}) has been "
-            f"verified and approved under our store policy. Our Customer Service team is processing your "
-            f"refund to your original payment method. Please allow 3-5 business days for settlement."
+            f"verified under our store policy and moved to refund authorization. You will be notified as soon as "
+            f"the refund to your original payment method is issued."
+            + (f" Settlement usually takes {settings.refund_settlement_days} business days." if settings.refund_settlement_days else "")
         )
 
     if decision_bucket == "EXCEPTIONAL_PROOF_NEEDED":

@@ -34,15 +34,21 @@ export async function POST(req: Request) {
       return errorResponse("NOT_FOUND", `Ticket ${ticket_id} not found`, 404);
     }
 
-    const notif = await prisma.notification.create({
-      data: {
-        userId: ticket.customerId,
-        ticketId: ticket.id,
-        title,
-        body: msgBody,
-        channel: channel as NotificationChannel,
-      },
-    });
+    const [notif] = await prisma.$transaction([
+      prisma.notification.create({
+        data: {
+          userId: ticket.customerId,
+          ticketId: ticket.id,
+          title,
+          body: msgBody,
+          channel: channel as NotificationChannel,
+        },
+      }),
+      // Also on the ticket timeline, so the customer sees what RITOS asked for (e.g. a photo) where they track the claim.
+      prisma.auditEvent.create({
+        data: { entityType: "REFUND_TICKET", entityId: ticket.id, event: "RITOS_MESSAGE", actor: "RITOS", payload: { title, body: msgBody } },
+      }),
+    ]);
 
     return NextResponse.json({
       id: notif.id,

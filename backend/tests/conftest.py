@@ -10,3 +10,5 @@ os.environ["APP_ENV"] = "development"
 os.environ["RITOS_API_KEY"] = "test-key"
 os.environ["SEED_PASSWORD"] = "ChangeMe123!"
 os.environ["AUTO_APPROVE_MAX_INR"] = "5000"
+# The storefront demo-claim path is exercised by tests, so it is enabled explicitly here.
+os.environ["DEMO_CLAIMS_ENABLED"] = "true"

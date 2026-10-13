@@ -3,6 +3,9 @@ import { transitionTicket } from "@/server/state-machine/ticket-state-machine";
 import { emitOutboxEvent } from "@/server/outbox/outbox-dispatcher";
 import { TicketStatus, RefundTxStatus, PaymentStatus } from "@prisma/client";
 import { qualified } from "@/server/db-schema";
+import { config } from "@/server/config";
+
+const newRefundId = () => `REF-${crypto.randomUUID().replace(/-/g, "").slice(0, 16).toUpperCase()}`;
 
 export interface RefundExecutionParams {
   transaction_id: string;
@@ -17,7 +20,10 @@ export async function executeRefundTransaction(params: RefundExecutionParams) {
   return prisma.$transaction(async (tx) => {
     // 1. Concurrency-safe lock on the payment row using raw query FOR UPDATE
     const paymentRows = await tx.$queryRawUnsafe<any[]>(
-      `SELECT * FROM ${qualified("payments")} WHERE transaction_id = $1 FOR UPDATE;`,
+      // The order's currency comes back with the locked payment row: no extra round-trip inside the transaction.
+      `SELECT p.*, o.currency AS order_currency FROM ${qualified("payments")} p
+         JOIN ${qualified("orders")} o ON o.id = p.order_id
+        WHERE p.transaction_id = $1 FOR UPDATE OF p;`,
       transaction_id
     );
 
@@ -26,6 +32,7 @@ export async function executeRefundTransaction(params: RefundExecutionParams) {
     }
 
     const payment = paymentRows[0];
+    const currency: string = payment.order_currency;
 
     // Check payment status: must be PAID or PARTIALLY_REFUNDED
     if (!["PAID", "PARTIALLY_REFUNDED"].includes(payment.status)) {
@@ -44,11 +51,11 @@ export async function executeRefundTransaction(params: RefundExecutionParams) {
         isReplay: true,
         refund: {
           refund_id: sameKeyTx.id,
-          status: sameKeyTx.status === "PENDING" ? "SUCCESS" : sameKeyTx.status,
+          status: sameKeyTx.status, // the real state: PENDING stays PENDING until it settles
           transaction_id,
           amount_minor: sameKeyTx.amountMinor,
-          currency: "INR",
-          estimated_credit_time: "2-5 business days",
+          currency,
+          estimated_credit_time: config.refundCreditEstimate,
         },
       };
     }
@@ -93,7 +100,7 @@ export async function executeRefundTransaction(params: RefundExecutionParams) {
 
     if (ticket.simulateRefundFailure) {
       // Record failed transaction attempt and mark ticket FAILED
-      const failedRefundId = `REF-${Math.floor(10000 + Math.random() * 90000)}`;
+      const failedRefundId = newRefundId();
       await tx.refundTransaction.create({
         data: {
           id: failedRefundId,
@@ -128,8 +135,8 @@ export async function executeRefundTransaction(params: RefundExecutionParams) {
     }
 
     // 4. Success path: create refund transaction
-    const refundId = `REF-${Math.floor(10000 + Math.random() * 90000)}`;
-    const mockSettleMs = process.env.MOCK_SETTLE_MS ? parseInt(process.env.MOCK_SETTLE_MS, 10) : 3000;
+    const refundId = newRefundId();
+    const mockSettleMs = config.mockSettleMs;
     const settleAt = new Date(Date.now() + mockSettleMs);
 
     const createdRefund = await tx.refundTransaction.create({
@@ -183,13 +190,13 @@ export async function executeRefundTransaction(params: RefundExecutionParams) {
     }
 
     // Customer Notification
-    const amountRupees = (amount_minor / 100).toLocaleString("en-IN");
+    const amountText = new Intl.NumberFormat(config.storeLocale, { style: "currency", currency }).format(amount_minor / 100);
     await tx.notification.create({
       data: {
         userId: ticket.customerId,
         ticketId: ticket.id,
         title: "Refund approved",
-        body: `₹${amountRupees} refund initiated. Expected credit: 2-5 business days.`,
+        body: `${amountText} refund initiated.` + (config.refundCreditEstimate ? ` Expected credit: ${config.refundCreditEstimate}.` : ""),
         channel: "IN_APP",
       },
     });
@@ -205,11 +212,11 @@ export async function executeRefundTransaction(params: RefundExecutionParams) {
       isReplay: false,
       refund: {
         refund_id: refundId,
-        status: "SUCCESS",
+        status: createdRefund.status,
         transaction_id,
         amount_minor,
-        currency: "INR",
-        estimated_credit_time: "2-5 business days",
+        currency,
+        estimated_credit_time: config.refundCreditEstimate,
       },
     };
   });

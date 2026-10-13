@@ -4,7 +4,6 @@ import { prisma } from "@/server/db";
 import { verifyPassword } from "@/server/auth/password";
 import { createDbSession } from "@/server/auth/session";
 import { errorResponse } from "@/server/auth/guards";
-import { USERS_SEED_DATA } from "../../../../../prisma/seed-data/customers";
 
 const LoginSchema = z.object({
   email: z.string().email(),
@@ -20,51 +19,20 @@ export async function POST(req: Request) {
     }
 
     const { email, password } = parsed.data;
-    let user: any = null;
-
+    let user;
     try {
-      user = await prisma.user.findUnique({
-        where: { email },
-      });
+      user = await prisma.user.findUnique({ where: { email } });
     } catch (dbError) {
-      console.warn("[Login] PostgreSQL unreachable, verifying against seed users fallback");
+      console.error("[Login] Database unreachable:", (dbError as Error).message);
+      return errorResponse("SERVICE_UNAVAILABLE", "Sign-in is temporarily unavailable, please retry", 503);
     }
 
-    // If database returned null or is offline, check seed users
-    if (!user) {
-      const seedMatch = USERS_SEED_DATA.find((u) => u.email.toLowerCase() === email.toLowerCase());
-      if (seedMatch) {
-        // Allow default prefilled credentials 'Demo@1234' or common demo passwords
-        user = {
-          id: seedMatch.id,
-          name: seedMatch.name,
-          email: seedMatch.email,
-          role: seedMatch.role,
-          passwordHash: null,
-        };
-      } else if (email === "admin@shopflow.dev" || email === "admin@example.com") {
-        user = {
-          id: "USR-ADMIN-01",
-          name: "ShopFlow Administrator",
-          email: email,
-          role: "ADMIN",
-          passwordHash: null,
-        };
-      }
-    }
-
-    if (!user) {
+    // Only stored accounts with a verified password can sign in.
+    if (!user || !user.passwordHash || !(await verifyPassword(password, user.passwordHash))) {
       return errorResponse("UNAUTHORIZED", "Invalid email or password", 401);
     }
 
-    if (user.passwordHash) {
-      const isMatch = await verifyPassword(password, user.passwordHash);
-      if (!isMatch) {
-        return errorResponse("UNAUTHORIZED", "Invalid email or password", 401);
-      }
-    }
-
-    await createDbSession(user.id, user);
+    await createDbSession(user.id);
 
     return NextResponse.json({
       success: true,

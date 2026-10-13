@@ -14,6 +14,7 @@ import {
   MapPin, 
   ShieldCheck 
 } from "lucide-react";
+import { formatMoney, STORE_LOCALE } from "@/lib/money";
 
 export default function OrderDetailPage({ params }: { params: { id: string } }) {
   const [order, setOrder] = useState<any>(null);
@@ -39,13 +40,7 @@ export default function OrderDetailPage({ params }: { params: { id: string } }) 
       });
   }, [params.id]);
 
-  const formatPrice = (minor: number) => {
-    return new Intl.NumberFormat("en-IN", {
-      style: "currency",
-      currency: "INR",
-      maximumFractionDigits: 0,
-    }).format(minor / 100);
-  };
+  const formatPrice = (minor: number) => formatMoney(minor);
 
   if (loading) {
     return (
@@ -99,8 +94,8 @@ export default function OrderDetailPage({ params }: { params: { id: string } }) 
               Order {isDelivered ? "Delivered" : order.status}
             </h1>
             <p className="text-xs text-slate-500 mt-1">
-              Placed on {new Date(order.ordered_at).toLocaleString("en-IN")}
-              {order.delivered_at && ` · Delivered on ${new Date(order.delivered_at).toLocaleDateString("en-IN")}`}
+              Placed on {new Date(order.ordered_at).toLocaleString(STORE_LOCALE)}
+              {order.delivered_at && ` · Delivered on ${new Date(order.delivered_at).toLocaleDateString(STORE_LOCALE)}`}
             </p>
           </div>
 
@@ -205,11 +200,11 @@ export default function OrderDetailPage({ params }: { params: { id: string } }) 
             <div className="space-y-2 text-xs">
               <div className="flex justify-between">
                 <span className="text-slate-500">Method</span>
-                <span className="font-medium text-slate-800">{order.payment?.method || "UPI"}</span>
+                <span className="font-medium text-slate-800">{order.payment?.method ?? "—"}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-slate-500">Status</span>
-                <span className="font-medium text-emerald-600">{order.payment?.status || "PAID"}</span>
+                <span className="font-medium text-emerald-600">{order.payment?.status ?? "No payment recorded"}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-slate-500">Txn Ref</span>

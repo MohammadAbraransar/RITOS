@@ -34,7 +34,7 @@ This prompt tells you (1) the rules you must not break, (2) what is already buil
 
 - **Run everything with pnpm from the repo root.** No `.bat` files.
   - `pnpm bootstrap` — Python venv, packages, `.env` files (secrets generated), migrations, demo data if empty
-  - `pnpm dev` — split-pane terminal (mprocs): `links`, `api` :8000, `desk` :5173, `shop` :3000, `shop-fallback` :3001; Ctrl+C stops all
+  - `pnpm dev` — split-pane terminal (mprocs): `links`, `api` :8000, `desk` :5173, `shop` :3000; Ctrl+C stops all
   - `pnpm db:migrate` — RITOS Alembic + ShopFlow Prisma migrations
   - `pnpm db:seed` — resets BOTH demo databases (store data + RITOS ticket history; users kept)
   - `pnpm stop` — frees ports

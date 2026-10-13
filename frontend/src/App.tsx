@@ -8,7 +8,7 @@ import {
   Shield, ShieldAlert, Sparkles, Ticket as TicketIcon, Users, WalletCards, X, Zap,
   Camera, Cpu, GitFork, UploadCloud, Trash2
 } from 'lucide-react'
-import { api, getToken, setToken, type Ticket, type User } from './api'
+import { api, API_ROOT, getToken, setToken, type Ticket, type User } from './api'
 import { isClosedStatus, priorityRank } from './logic'
 
 export { isClosedStatus, priorityRank }
@@ -22,6 +22,9 @@ const roles = [
   { label: 'Finance Approver', role: 'finance_approver', email: 'finance@ritos.local', icon: CircleDollarSign, desc: 'Settlement authorization' },
   { label: 'Customer Portal', role: 'customer', email: 'customer@ritos.local', icon: Users, desc: 'Self-service claims' }
 ]
+
+// Local demo only: lets the role buttons sign in. Never set in production builds.
+const DEMO_PASSWORD: string = import.meta.env.VITE_DEMO_PASSWORD || ''
 
 const AGENT_CATALOG = [
   { id: 'ledger_ground_truth', name: 'Agent 1 · Ledger Ground Truth', mode: 'Deterministic SQL / Double-Entry', purpose: 'Verifies transaction existence, customer identity, currency match, and refundable balance accounting for pending reservations and duplicates.', guardrail: 'Customer statements never establish payment proof; ledger is authoritative.' },
@@ -82,21 +85,21 @@ const navFor = (role: string) => {
     ['💰 Finance Approvals Queue', 'finance_queue'],
     ['All Team Tickets Queue', 'tickets'],
     ['🛒 eCommerce Integration Hub', 'ecommerce'],
-    ['8 Specialist Agents Registry', 'automation'],
+    [`${AGENT_CATALOG.length} Specialist Agents Registry`, 'automation'],
     ['Settlement Register', 'refunds'],
     ['Security Audit Trail', 'audit']
   ]
 }
 
 const roleTitle = (r: string) => roles.find(x => x.role === r)?.label || r
-const money = (n: number, c = 'INR') =>
+const money = (n: number, c: string = import.meta.env.VITE_DEFAULT_CURRENCY || 'INR') =>
   new Intl.NumberFormat('en-IN', { style: 'currency', currency: c, maximumFractionDigits: 2 }).format(n || 0)
 const date = (d: string) => new Date(d).toLocaleString()
 
 function App() {
   const [user, setUser] = useState<User | null>(null)
   const [email, setEmail] = useState('cs1@ritos.local')
-  const [password, setPassword] = useState('ChangeMe123!')
+  const [password, setPassword] = useState('')
   const [loginError, setLoginError] = useState('')
   const [busy, setBusy] = useState(false)
 
@@ -134,8 +137,9 @@ function App() {
 
   // eCommerce Webhook Simulator state
   const [simEcom, setSimEcom] = useState({
-    order_id: 'ORD-9022',
+    order_id: 'ORD-1002',
     transaction_id: 'TXN-1002',
+    customer_email: 'customer@ritos.local',
     customer_name: 'Pooja Verma',
     customer_phone: '+91-9876543220',
     item_name: 'Fastrack Smartwatch',
@@ -306,7 +310,11 @@ function App() {
   async function quickSwitch(targetEmail: string) {
     setBusy(true)
     try {
-      const data = await api.login(targetEmail, 'ChangeMe123!')
+      if (!DEMO_PASSWORD) {
+        setNotice('Quick switch needs VITE_DEMO_PASSWORD (local demo only).')
+        return
+      }
+      const data = await api.login(targetEmail, DEMO_PASSWORD)
       setToken(data.access_token)
       setUser(data.user)
       setSelected(null)
@@ -506,7 +514,10 @@ function App() {
     setBusy(true)
     try {
       const res = await api.executeRefund(r.id, `exec-${r.id}`)
-      setNotice(`✅ Payout Settled via Gateway (${res.provider || 'Gateway'})! Ref: ${res.provider_reference || 'N/A'}`)
+      // Only a REFUNDED status is a completed payout; anything else (e.g. RECONCILIATION_REQUIRED) is reported as is.
+      setNotice(res.status === 'REFUNDED'
+        ? `✅ Payout completed via ${res.provider} (ref ${res.provider_reference})`
+        : `Payout status: ${res.status}${res.provider_reference ? ` (ref ${res.provider_reference})` : ''}. ${res.error || 'Check the settlement register.'}`)
       await load()
     } catch (err) {
       setNotice(`Execution Failed: ${(err as Error).message}`)
@@ -534,7 +545,7 @@ function App() {
     try {
       const res = await api.runAllAutomation()
       setAllAgentsResult(res)
-      setNotice(`🤖 AI Orchestrator: 8 Specialist Agents executed across ${res.processed_count} active tickets!`)
+      setNotice(`Orchestrator: ${AGENT_CATALOG.length} specialist agents run on ${res.processed_count} active tickets.`)
       await load()
     } catch (err) {
       setNotice(`Multi-Agent Run Failed: ${(err as Error).message}`)
@@ -611,7 +622,7 @@ function App() {
       setShowNew(false)
       setPage('tickets')
       await load()
-      setNotice(`✓ Claim ${created.ticket_number} submitted! Triage & computer vision inspection complete.`)
+      setNotice(`✓ Claim ${created.ticket_number} submitted and routed to ${created.assigned_desk || 'review'}.`)
     } catch (e) {
       setNotice((e as Error).message)
     }
@@ -699,13 +710,13 @@ function App() {
                 <div className="login-pillar-item">
                   <Shield size={16} color="#38bdf8" style={{ flexShrink: 0, marginTop: '2px' }} />
                   <div>
-                    <strong>Ledger Ground Truth:</strong> Real-time payment gateway ledger audits eliminate duplicate and ghost refund losses.
+                    <strong>Ledger Ground Truth:</strong> Every claim is checked against the transaction ledger, refundable balance and earlier claims before any refund.
                   </div>
                 </div>
                 <div className="login-pillar-item">
                   <Camera size={16} color="#34d399" style={{ flexShrink: 0, marginTop: '2px' }} />
                   <div>
-                    <strong>Pillow Vision Engine:</strong> Computer vision inspects physical tears, cracks, and EXIF tamper tokens.
+                    <strong>Evidence checks:</strong> Image quality gates and reused-photo detection; with the local vision model enabled, product identity and visible-defect checks. Unclear photos go to a person.
                   </div>
                 </div>
                 <div className="login-pillar-item">
@@ -734,7 +745,7 @@ function App() {
             </div>
 
             <div className="login-foot" style={{ marginTop: '20px' }}>
-              RITOS CORE ENGINE · PRODUCTION GRADE · LOCAL ACTIVE
+              RITOS CORE ENGINE · {import.meta.env.MODE.toUpperCase()}
             </div>
           </div>
 
@@ -757,7 +768,7 @@ function App() {
                     className={`role-pill-btn ${email === r.email ? 'active' : ''}`}
                     onClick={() => {
                       setEmail(r.email)
-                      setPassword('ChangeMe123!')
+                      setPassword(DEMO_PASSWORD)
                     }}
                   >
                     <strong style={{ fontSize: '11px', display: 'flex', alignItems: 'center', gap: '6px' }}>
@@ -790,7 +801,7 @@ function App() {
               </button>
 
               <div className="hint" style={{ marginTop: '14px', textAlign: 'center' }}>
-                Enterprise Default Password: <code>ChangeMe123!</code>
+                {DEMO_PASSWORD ? 'Demo accounts: pick a role above to sign in.' : 'Sign in with your RITOS account.'}
               </div>
             </form>
           </div>
@@ -954,9 +965,9 @@ function App() {
 
               <div className="metric-grid" style={{ marginBottom: '24px' }}>
                 <Metric icon={<CheckCircle2 />} label="Active Genuine Claims" value={cs1Tickets.length} note="Eligible for immediate refund" tone="green" />
-                <Metric icon={<BadgeCheck />} label="Gateway Verification" value="100% MATCH" note="Double-entry ledger verified" tone="blue" />
-                <Metric icon={<CircleDollarSign />} label="Settlement Execution" value="1-Click Direct" note="SHA-256 idempotency locked" tone="green" />
-                <Metric icon={<Clock3 />} label="Average Triage SLA" value="< 3s" note="Real-time multi-agent arbitration" tone="blue" />
+                <Metric icon={<BadgeCheck />} label="Ledger-Verified Claims" value={tickets.filter(t => t.payment_verification === 'VERIFIED').length} note="Agent 1 ledger check passed" tone="blue" />
+                <Metric icon={<CircleDollarSign />} label="Refunds Executed" value={refunds.filter((r: any) => r.status === 'REFUNDED').length} note="Four-eyes approved, idempotent" tone="green" />
+                <Metric icon={<Clock3 />} label="Pipeline Runs" value={automation?.pipeline_runs ?? '—'} note="Each run records every agent step" tone="blue" />
               </div>
 
               <SectionTitle title="CS-1 Genuine Queue" action="View Full Desk Queue" onAction={() => setPage('cs1_desk')} />
@@ -1014,9 +1025,9 @@ function App() {
 
               <div className="metric-grid" style={{ marginBottom: '24px' }}>
                 <Metric icon={<X />} label="Ineligible Cases" value={cs3Tickets.length} note="Disqualified by policy engine" tone="rose" />
-                <Metric icon={<FileText />} label="Policy Explanations Drafted" value={cs3Tickets.filter(t => t.customer_message_draft).length} note="Legally compliant notices" tone="blue" />
+                <Metric icon={<FileText />} label="Policy Explanations Drafted" value={cs3Tickets.filter(t => t.customer_message_draft).length} note="Drafted from policy reason codes" tone="blue" />
                 <Metric icon={<Send />} label="Denial Notices Sent" value={cs3Tickets.filter(t => t.rejection_notice_sent_at).length} note="Dispatched to customer" tone="green" />
-                <Metric icon={<Shield />} label="Hard Policy Boundaries" value="100% Enforced" note="Category limits strictly applied" tone="amber" />
+                <Metric icon={<Shield />} label="Policy Rejections" value={cs3Tickets.length} note="Decided by versioned policy rules" tone="amber" />
               </div>
 
               <SectionTitle title="CS-3 Ineligible Queue" action="View Full Desk Queue" onAction={() => setPage('cs3_desk')} />
@@ -1093,7 +1104,7 @@ function App() {
                 <Metric icon={<TicketIcon />} label="Total Ingested Tickets" value={tickets.length} note="Live database records" tone="blue" />
                 <Metric icon={<CheckCircle2 />} label="Resolved / Settled" value={desks?.resolved_count ?? 0} note="Processed refunds or closed" tone="green" />
                 <Metric icon={<BrainCircuit />} label="Automated Pipeline Runs" value={automation?.pipeline_runs ?? 0} note="AI evaluations completed" tone="blue" />
-                <Metric icon={<CircleDollarSign />} label="Total Refund Volume" value={money(metrics?.refund_completed || 0)} note="Settled via gateway" tone="green" />
+                <Metric icon={<CircleDollarSign />} label="Total Refund Volume" value={money(metrics?.refund_completed || 0)} note="Recorded refund executions" tone="green" />
               </div>
 
               <SectionTitle title="Live Ingested Cases" action="View All Tickets" onAction={() => setPage('tickets')} />
@@ -1681,7 +1692,7 @@ function App() {
                           <td>
                             <span className="pill green"><i />{t.payment_verification}</span>
                             <small className="subline" style={{ maxWidth: '240px', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                              {t.policy_evaluation_reason || 'Verified'}
+                              {t.policy_evaluation_reason || '—'}
                             </small>
                           </td>
                           <td><StatusPill value={t.status} /></td>
@@ -1972,7 +1983,7 @@ function App() {
                 <div>
                   <div className="eyebrow" style={{ color: 'var(--primary-700)', fontWeight: 800 }}>ONLINE CLAIM &amp; RETURN INTAKE</div>
                   <h1>File a Return or Refund Claim</h1>
-                  <p>Submit order details for real-time payment gateway ledger verification, category policy window compliance, and 8-agent automated triage.</p>
+                  <p>Submit order details for real-time payment gateway ledger verification, category policy window compliance, and automated triage by all specialist agents.</p>
                 </div>
                 <div className="heading-actions">
                   <button className="secondary" onClick={() => setPage(isCustomer ? 'dashboard' : 'tickets')}>
@@ -2149,7 +2160,7 @@ function App() {
                         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
                           <span style={{ fontSize: '12px', fontWeight: 800, color: 'var(--navy-900)', display: 'flex', alignItems: 'center', gap: '6px' }}>
                             <Camera size={14} color="var(--primary-700)" />
-                            Photo Proof (Pillow Computer Vision Engine)
+                            Photo Proof (checked by Agent 7)
                           </span>
                           <span style={{ fontSize: '10px', background: 'var(--emerald-50)', color: 'var(--emerald-700)', padding: '2px 6px', borderRadius: '4px', fontWeight: 700 }}>
                             Agent 7 Verified
@@ -2240,7 +2251,7 @@ function App() {
 
                     <div style={{ marginTop: '20px', display: 'flex', gap: '12px', alignItems: 'center' }}>
                       <button className="primary" type="submit" disabled={busy} style={{ flex: 1, padding: '12px 18px', fontSize: '13px' }}>
-                        <Send size={15} /> Submit Claim to RITOS 8-Agent Orchestrator
+                        <Send size={15} /> Submit Claim to the RITOS {AGENT_CATALOG.length}-Agent Orchestrator
                       </button>
                       <button className="secondary" type="button" onClick={() => setPage(isCustomer ? 'dashboard' : 'tickets')}>
                         Cancel
@@ -2265,7 +2276,6 @@ function App() {
                         <GitFork size={15} /> 3-Step Decision Tree Architecture
                       </span>
                       <span style={{ fontSize: '10px', background: 'rgba(56, 189, 248, 0.2)', color: '#7dd3fc', padding: '2px 6px', borderRadius: '4px', fontFamily: 'monospace' }}>
-                        v2.6 Real Engine
                       </span>
                     </div>
 
@@ -2273,19 +2283,19 @@ function App() {
                       {/* Step 1 */}
                       <div style={{ padding: '10px 12px', background: 'rgba(30, 41, 59, 0.7)', borderRadius: '8px', borderLeft: '3px solid #10b981' }}>
                         <strong style={{ color: '#6ee7b7', display: 'block' }}>Step 1: Ledger Verification</strong>
-                        <span style={{ color: '#cbd5e1' }}>Does transaction exist in payment gateway? Is unrefunded balance &gt; claimed amount?</span>
+                        <span style={{ color: '#cbd5e1' }}>Does the transaction exist in the ledger? Is the refundable balance at least the claimed amount?</span>
                       </div>
 
                       {/* Step 2 */}
                       <div style={{ padding: '10px 12px', background: 'rgba(30, 41, 59, 0.7)', borderRadius: '8px', borderLeft: '3px solid #3b82f6' }}>
                         <strong style={{ color: '#93c5fd', display: 'block' }}>Step 2: Category Policy Window</strong>
-                        <span style={{ color: '#cbd5e1' }}>Is filing date within category limit (Electronics: 7d, Apparel: 14d, Perishable: 0d)?</span>
+                        <span style={{ color: '#cbd5e1' }}>Is the claim within the category's return window (from the versioned return-policy table)?</span>
                       </div>
 
                       {/* Step 3 */}
                       <div style={{ padding: '10px 12px', background: 'rgba(30, 41, 59, 0.7)', borderRadius: '8px', borderLeft: '3px solid #f59e0b' }}>
                         <strong style={{ color: '#fcd34d', display: 'block' }}>Step 3: Risk &amp; Proof Inspection</strong>
-                        <span style={{ color: '#cbd5e1' }}>Velocity check (&lt; 3 claims/30d), Pillow edge anomaly analysis, and EXIF authenticity.</span>
+                        <span style={{ color: '#cbd5e1' }}>Claim velocity, account age and amount thresholds (configured in settings); photo quality and reused-photo checks.</span>
                       </div>
                     </div>
                   </div>
@@ -2354,7 +2364,7 @@ function App() {
                         ShopFlow Storefront Connection
                       </h2>
                       <p style={{ margin: '6px 0 0', fontSize: '13px', color: '#94a3b8', lineHeight: 1.5 }}>
-                        ShopFlow acts as the System of Record (SoR). RITOS autonomously receives refund events, fetches rich claim context dossiers, runs the 8 specialist agents, and submits payment execution callbacks.
+                        ShopFlow acts as the System of Record (SoR). RITOS autonomously receives refund events, fetches rich claim context dossiers, runs the {AGENT_CATALOG.length} specialist agents, and submits payment execution callbacks.
                       </p>
                     </div>
 
@@ -2382,7 +2392,7 @@ function App() {
                   <div style={{ marginTop: '20px', paddingTop: '16px', borderTop: '1px solid rgba(255,255,255,0.1)', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px', fontSize: '12px' }}>
                     <div>
                       <small style={{ color: '#94a3b8', display: 'block', textTransform: 'uppercase', letterSpacing: '0.5px' }}>ShopFlow Instance URL</small>
-                      <strong style={{ color: '#ffffff', fontFamily: 'var(--font-mono)' }}>{shopflowStatus?.shopflow_base_url || 'http://localhost:3000'}</strong>
+                      <strong style={{ color: '#ffffff', fontFamily: 'var(--font-mono)' }}>{shopflowStatus?.shopflow_base_url || 'not reachable'}</strong>
                     </div>
                     <div>
                       <small style={{ color: '#94a3b8', display: 'block', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Connection State</small>
@@ -2392,7 +2402,7 @@ function App() {
                     </div>
                     <div>
                       <small style={{ color: '#94a3b8', display: 'block', textTransform: 'uppercase', letterSpacing: '0.5px' }}>RITOS Webhook Target</small>
-                      <code style={{ color: '#38bdf8' }}>http://localhost:8000/webhook/refund-tickets</code>
+                      <code style={{ color: '#38bdf8' }}>{`${API_ROOT}/webhook/refund-tickets`}</code>
                     </div>
                     <div>
                       <small style={{ color: '#94a3b8', display: 'block', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Decision Callback</small>
@@ -2483,7 +2493,7 @@ function App() {
                       POST Endpoint URL
                     </small>
                     <div style={{ padding: '10px 12px', background: 'var(--navy-900)', color: '#93c5fd', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: '12px', margin: '6px 0 16px' }}>
-                      http://localhost:8000/api/v1/integrations/ecommerce/ticket
+                      {`${API_ROOT}/api/v1/integrations/ecommerce/ticket`}
                     </div>
 
                     <small style={{ fontWeight: 700, color: 'var(--navy-700)', textTransform: 'uppercase', fontSize: '11px' }}>
@@ -2500,13 +2510,17 @@ await fetch('http://YOUR_RITOS_URL/api/v1/integrations/ecommerce/ticket', {
   body: JSON.stringify({
     order_id: order.id,
     transaction_id: order.payment_reference,
+    customer_email: customer.email, // must match a provisioned RITOS customer
     customer_name: customer.name,
     customer_phone: customer.phone,
     item_name: item.title,
     item_category: item.category, // 'ELECTRONICS' | 'APPAREL'
     claimed_amount: item.price,
     purchase_date: order.created_at,
-    description: refundRequest.user_reason
+    description: refundRequest.user_reason,
+    // Only needed when RITOS does not know this transaction yet: the store's payment facts
+    transaction_amount: order.paid_amount,
+    payment_status: order.payment_status
   })
 });`}
                     </pre>
@@ -2779,7 +2793,7 @@ await fetch('http://YOUR_RITOS_URL/api/v1/integrations/ecommerce/ticket', {
                 <ShieldAlert size={44} color="var(--rose-600)" style={{ margin: '0 auto 16px' }} />
                 <h2 style={{ fontSize: '20px', fontWeight: 800, color: 'var(--navy-900)' }}>Internal Operations Access Required</h2>
                 <p style={{ color: 'var(--navy-600)', margin: '10px 0 24px', lineHeight: 1.6, fontSize: '14px' }}>
-                  The 8 Specialist Agents Registry and pipeline control plane are restricted to operational staff and administrators.
+                  The {AGENT_CATALOG.length} Specialist Agents Registry and pipeline control plane are restricted to operational staff and administrators.
                 </p>
                 <button
                   className="primary"
@@ -2793,7 +2807,7 @@ await fetch('http://YOUR_RITOS_URL/api/v1/integrations/ecommerce/ticket', {
                 <div className="page-heading">
                   <div>
                     <div className="eyebrow">AUTOMATION CONTROL PLANE</div>
-                    <h1>8 Specialist Agents Registry</h1>
+                    <h1>{AGENT_CATALOG.length} Specialist Agents Registry</h1>
                     <p>Autonomous verification and classification agents coordinated by the Central Workflow Orchestrator.</p>
                   </div>
                   <div className="heading-actions">
@@ -2804,7 +2818,7 @@ await fetch('http://YOUR_RITOS_URL/api/v1/integrations/ecommerce/ticket', {
                       style={{ background: '#2563eb', borderColor: '#3b82f6', display: 'flex', alignItems: 'center', gap: '8px' }}
                     >
                       {runningAllAgents ? <RefreshCw size={15} className="spin" /> : <Play size={15} />}
-                      <span>{runningAllAgents ? 'Executing 8 Agents...' : '▶ Run All 8 Agents Across Active Tickets'}</span>
+                      <span>{runningAllAgents ? `Executing ${AGENT_CATALOG.length} Agents...` : `▶ Run All ${AGENT_CATALOG.length} Agents Across Active Tickets`}</span>
                     </button>
                   </div>
                 </div>
@@ -2831,7 +2845,7 @@ await fetch('http://YOUR_RITOS_URL/api/v1/integrations/ecommerce/ticket', {
                       style={{ background: '#2563eb', borderColor: '#3b82f6', padding: '12px 22px', fontSize: '13px', fontWeight: 700, borderRadius: 'var(--radius-md)', display: 'inline-flex', alignItems: 'center', gap: '8px', boxShadow: '0 4px 14px rgba(37,99,235,0.4)' }}
                     >
                       {runningAllAgents ? <RefreshCw size={16} className="spin" /> : <Play size={16} />}
-                      <span>{runningAllAgents ? 'Executing 8 Agents Pipeline...' : '▶ Run All 8 AI Agents Now'}</span>
+                      <span>{runningAllAgents ? `Executing ${AGENT_CATALOG.length} Agents Pipeline...` : `▶ Run All ${AGENT_CATALOG.length} Agents Now`}</span>
                     </button>
                   </div>
 
@@ -3166,7 +3180,7 @@ await fetch('http://YOUR_RITOS_URL/api/v1/integrations/ecommerce/ticket', {
                               style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                             />
                             <span style={{ position: 'absolute', bottom: 0, left: 0, right: 0, background: 'rgba(15,23,42,0.75)', color: '#ffffff', fontSize: '9px', textAlign: 'center', padding: '2px 0', fontFamily: 'monospace' }}>
-                              Pillow Verified
+                              Vision: {selected.classification_evidence?.visual_analysis?.verification_status || 'not assessed'}
                             </span>
                           </div>
                         )}
@@ -3230,7 +3244,7 @@ await fetch('http://YOUR_RITOS_URL/api/v1/integrations/ecommerce/ticket', {
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
                         <span style={{ fontSize: '12px', fontWeight: 800, color: 'var(--navy-900)', display: 'flex', alignItems: 'center', gap: '6px' }}>
                           <Shield size={14} color="var(--indigo-600)" />
-                          Decision Arbiter Trace (Rule Version: {selected.classification_evidence?.decision?.rule_version || 'routing-rules-1.0'})
+                          Decision Arbiter Trace (Rule Version: {selected.classification_evidence?.decision?.rule_version || 'not recorded'})
                         </span>
                         <span className="pill blue" style={{ fontSize: '10px' }}>
                           {selected.classification_evidence?.decision?.next_action || selected.status}
@@ -3356,12 +3370,12 @@ await fetch('http://YOUR_RITOS_URL/api/v1/integrations/ecommerce/ticket', {
                 </div>
               </div>
 
-              {/* 8 SPECIALIST AGENTS AUTONOMOUS TELEMETRY TRACE */}
+              {/* SPECIALIST AGENTS EXECUTION TRACE */}
               {selected.classification_evidence?.agents?.length > 0 && (
                 <div style={{ marginTop: '16px', marginBottom: '18px', padding: '16px', background: 'var(--bg-card)', border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-lg)' }}>
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
                     <strong style={{ fontSize: '13px', display: 'flex', alignItems: 'center', gap: '6px', color: 'var(--navy-900)' }}>
-                      <Cpu size={16} color="var(--indigo-600)" /> RITOS 8 Specialist Agents Autonomous Execution Trace
+                      <Cpu size={16} color="var(--indigo-600)" /> RITOS {AGENT_CATALOG.length} Specialist Agents Execution Trace
                     </strong>
                     <span className={`pill ${selected.classification_evidence?.workflow?.status === 'WAITING_HUMAN' ? 'amber' : 'green'}`}>
                       <i />
@@ -3383,7 +3397,7 @@ await fetch('http://YOUR_RITOS_URL/api/v1/integrations/ecommerce/ticket', {
                           <span style={{ fontWeight: 700, color: 'var(--navy-900)' }}>
                             {idx + 1}. {ag.agent_name}
                           </span>
-                          <span style={{ fontSize: '9px', fontWeight: 700, color: 'var(--emerald-700)' }}>✓ {ag.status}</span>
+                          <span style={{ fontSize: '9px', fontWeight: 700, color: ag.status === 'COMPLETED' ? 'var(--emerald-700)' : ag.status === 'FAILED' ? '#b91c1c' : 'var(--navy-500)' }}>{ag.status === 'COMPLETED' ? '✓' : ag.status === 'FAILED' ? '✕' : '–'} {ag.status}</span>
                         </div>
                         <p style={{ margin: 0, color: 'var(--navy-600)', lineHeight: '1.4' }}>
                           {ag.findings}
@@ -3402,7 +3416,9 @@ await fetch('http://YOUR_RITOS_URL/api/v1/integrations/ecommerce/ticket', {
                       💰 Authorized for Gateway Settlement
                     </div>
                     <div style={{ fontSize: '11px', color: 'var(--indigo-800)' }}>
-                      Anti-fraud cleared and policy approved under CS-1.
+                      {selected.classification_evidence?.workflow?.next_action === 'AUTO_APPROVE'
+                        ? 'All automated checks passed (CS-1 auto-approval).'
+                        : `Needs approval: ${selected.policy_evaluation_reason || 'see decision trace'}`}
                     </div>
                   </div>
                   <button
@@ -3638,7 +3654,7 @@ function TicketTable({ tickets, onSelect }: { tickets: Ticket[]; onSelect: (t: T
                 </td>
                 <td>
                   <span className={`pill ${t.assigned_desk === 'CS_1' ? 'green' : t.assigned_desk === 'CS_2' ? 'amber' : 'red'}`}>
-                    <i />{t.assigned_desk || 'CS-2'} ({t.decision_bucket?.replace(/_/g, ' ') || 'EXCEPTIONS'})
+                    <i />{t.assigned_desk || 'Not routed'}{t.decision_bucket ? ` (${t.decision_bucket.replace(/_/g, ' ')})` : ''}
                   </span>
                 </td>
                 <td><StatusPill value={t.status} /></td>

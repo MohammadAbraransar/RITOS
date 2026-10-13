@@ -120,7 +120,8 @@ def deliver_due(db: Session, limit: int | None = None) -> list[dict]:
             if row.attempts >= settings.outbox_max_attempts:
                 row.status = "FAILED"
             else:
-                row.next_attempt_at = _now() + timedelta(seconds=min(settings.outbox_max_backoff_seconds, 2 ** row.attempts))
+                row.next_attempt_at = _now() + timedelta(seconds=min(settings.outbox_max_backoff_seconds,
+                                                                       settings.outbox_base_backoff_seconds * 2 ** (row.attempts - 1)))
         results.append({"id": row.id, "kind": row.kind, "status": row.status, "attempts": row.attempts, "error": row.last_error})
     db.commit()
     return results

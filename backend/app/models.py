@@ -68,7 +68,7 @@ class Transaction(Base):
     order_id: Mapped[str]=mapped_column(String(80), index=True)
     amount: Mapped[float]=mapped_column(Numeric(12,2))
     currency: Mapped[str]=mapped_column(String(3), default="INR")
-    payment_status: Mapped[str]=mapped_column(String(30), default="SUCCESSFUL")
+    payment_status: Mapped[str]=mapped_column(String(30), default="UNKNOWN")  # a payment is never assumed captured
     refunded_amount: Mapped[float]=mapped_column(Numeric(12,2), default=0)
     provider_reference: Mapped[str|None]=mapped_column(String(120), nullable=True)
     created_at: Mapped[datetime]=mapped_column(DateTime(timezone=True), default=now_utc)
@@ -373,7 +373,7 @@ class ReturnPolicy(Base):
     return_window_days: Mapped[int] = mapped_column(Integer, default=14)
     requires_serial: Mapped[bool] = mapped_column(Boolean, default=False)
     requires_tags: Mapped[bool] = mapped_column(Boolean, default=False)
-    allow_damaged_exceptions: Mapped[bool] = mapped_column(Boolean, default=True)
+    allow_damaged_exceptions: Mapped[bool] = mapped_column(Boolean, default=False)  # never assumed; set per policy
     policy_summary: Mapped[str] = mapped_column(Text)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)

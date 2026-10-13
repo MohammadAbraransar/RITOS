@@ -13,11 +13,33 @@ import {
   Calendar,
   CreditCard
 } from "lucide-react";
+import { formatMoney, STORE_LOCALE } from "@/lib/money";
 
 export default function CustomerRefundTicketPage({ params }: { params: { id: string } }) {
   const [ticket, setTicket] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [uploadMsg, setUploadMsg] = useState<string | null>(null);
+
+  // Send the photos RITOS asked for; RITOS re-runs its checks with them.
+  const uploadEvidence = async (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    setUploading(true);
+    setUploadMsg(null);
+    const form = new FormData();
+    Array.from(files).forEach((f) => form.append("files", f));
+    try {
+      const res = await fetch(`/api/me/refund-tickets/${params.id}/evidence`, { method: "POST", body: form });
+      const data = await res.json();
+      setUploadMsg(res.ok ? `${data.added} file(s) sent for review.` : data.error?.message || "Upload failed");
+      fetchTicket();
+    } catch (err: any) {
+      setUploadMsg(err.message || "Upload failed");
+    } finally {
+      setUploading(false);
+    }
+  };
 
   const fetchTicket = () => {
     fetch(`/api/me/refund-tickets/${params.id}`)
@@ -50,13 +72,7 @@ export default function CustomerRefundTicketPage({ params }: { params: { id: str
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params.id]);
 
-  const formatPrice = (minor: number) => {
-    return new Intl.NumberFormat("en-IN", {
-      style: "currency",
-      currency: "INR",
-      maximumFractionDigits: 0,
-    }).format(minor / 100);
-  };
+  const formatPrice = (minor: number) => formatMoney(minor);
 
   if (loading) {
     return (
@@ -80,6 +96,7 @@ export default function CustomerRefundTicketPage({ params }: { params: { id: str
   }
 
   const isApprovedOrRefunded = ["APPROVED", "REFUND_INITIATED", "REFUND_PROCESSING", "REFUNDED"].includes(ticket.status);
+  const refundTx = (ticket.refund_transactions || []).find((rt: any) => rt.status !== "FAILED");
   const isRefunded = ticket.status === "REFUNDED";
   const isPending = ["PENDING_RITOS", "PROCESSING"].includes(ticket.status);
   const isHumanReview = ticket.status === "HUMAN_REVIEW";
@@ -107,7 +124,7 @@ export default function CustomerRefundTicketPage({ params }: { params: { id: str
               </span>
             </div>
             <p className="text-xs text-slate-500 mt-1">
-              Submitted on {new Date(ticket.created_at).toLocaleString("en-IN")}
+              Submitted on {new Date(ticket.created_at).toLocaleString(STORE_LOCALE)}
             </p>
           </div>
 
@@ -132,12 +149,14 @@ export default function CustomerRefundTicketPage({ params }: { params: { id: str
               <CheckCircle2 className="w-4 h-4 text-emerald-600" />
               <span>Refund approved</span>
             </div>
-            <p className="text-sm font-semibold text-emerald-950">
-              {formatPrice(ticket.requested_amount_minor)} refund initiated
-            </p>
-            <p className="text-xs text-emerald-800">
-              Expected credit: 2-5 business days to your original payment method.
-            </p>
+            {/* Amount and state come from the actual refund transaction, not from the requested amount. */}
+            {refundTx ? (
+              <p className="text-sm font-semibold text-emerald-950">
+                {formatPrice(refundTx.amountMinor)} refund {refundTx.status === "SUCCESS" ? "settled" : "initiated"}
+              </p>
+            ) : (
+              <p className="text-sm font-semibold text-emerald-950">Refund approved; payout not started yet</p>
+            )}
           </div>
         )}
 
@@ -219,6 +238,22 @@ export default function CustomerRefundTicketPage({ params }: { params: { id: str
           </div>
         </div>
 
+        {["PENDING_RITOS", "PROCESSING", "HUMAN_REVIEW"].includes(ticket.status) && (
+          <div className="pt-4 border-t border-slate-100 space-y-2">
+            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-700">Add photos or documents</h3>
+            <p className="text-xs text-slate-500">If we asked for proof, upload it here (JPEG, PNG, WEBP or PDF, up to 5 files of 5 MB).</p>
+            <input
+              type="file"
+              multiple
+              accept="image/jpeg,image/png,image/webp,application/pdf"
+              disabled={uploading}
+              onChange={(e) => uploadEvidence(e.target.files)}
+              className="text-xs"
+            />
+            {uploadMsg && <p className="text-xs text-slate-700">{uploadMsg}</p>}
+          </div>
+        )}
+
         {/* Customer Timeline */}
         <div className="pt-6 border-t border-slate-100 space-y-4">
           <h3 className="text-xs font-bold uppercase tracking-wider text-slate-700">
@@ -233,7 +268,7 @@ export default function CustomerRefundTicketPage({ params }: { params: { id: str
                   <div className="flex items-center justify-between">
                     <p className="text-xs font-bold text-slate-900">{item.title}</p>
                     <span className="text-[10px] text-slate-400">
-                      {new Date(item.occurred_at).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}
+                      {new Date(item.occurred_at).toLocaleTimeString(STORE_LOCALE, { hour: "2-digit", minute: "2-digit" })}
                     </span>
                   </div>
                   <p className="text-xs text-slate-600 mt-0.5">{item.description}</p>

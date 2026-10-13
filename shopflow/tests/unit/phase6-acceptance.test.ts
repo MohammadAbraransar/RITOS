@@ -183,7 +183,7 @@ describe("Phase 6 Acceptance Verification: Decision Callback & Refund Execution"
           policySnapshot: {},
         },
       });
-    });
+    }, { timeout: 25000, maxWait: 10000 }); // WAN latency to Supabase: setup exceeds the 5s default
 
     const results = await Promise.allSettled([
       executeRefundTransaction({

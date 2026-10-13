@@ -17,12 +17,19 @@ class Settings(BaseSettings):
     db_pool_pre_ping: bool = True
     # Comma-separated ISO codes accepted on refund claims
     supported_currencies: str = "INR,USD,EUR,GBP"
+    # Currency assumed when a store or form omits one
+    default_currency: str = "INR"
+    # Storefront demo claims that do not exist in the store DB (RITOS invents their order/transaction). Never in production.
+    demo_claims_enabled: bool = False
     cors_origins: str = "http://localhost:5173"
     access_token_minutes: int = 45
     redis_url: str = "redis://localhost:6379/0"
     ecommerce_webhook_secret: str = ""
     # 127.0.0.1 instead of localhost: on Windows, localhost tries IPv6 first and adds ~2s per call.
     shopflow_base_url: str = "http://127.0.0.1:3000"
+    # Store calls: claim context / sync (can be slow over WAN) and the quick health probe
+    store_request_timeout_seconds: float = 20.0
+    store_health_timeout_seconds: float = 2.0
     ritos_api_key: str = "ritos_dev_key_secret_2026"
     # Orchestrator guardrails: CS-1 claims above this amount (or with any risk signal) wait for a human.
     auto_approve_max_inr: float = 5000.0
@@ -32,12 +39,16 @@ class Settings(BaseSettings):
     outbox_max_attempts: int = 6
     outbox_batch_size: int = 20
     outbox_http_timeout_seconds: float = 10.0
+    outbox_base_backoff_seconds: int = 2
     outbox_max_backoff_seconds: int = 300
     # A claimed message is hidden from other workers for this long; if delivery crashes it becomes due again.
     outbox_claim_lease_seconds: int = 60
     # --- Risk rules (Agent 4); score weights are versioned in risk_agent.RULE_VERSION ---
     risk_high_velocity_claims_30d: int = 3
     risk_new_account_days: int = 7
+    # Refunded share of lifetime spend that raises a review signal, once the customer has this many orders
+    risk_refund_ratio_threshold: float = 0.5
+    risk_refund_ratio_min_orders: int = 3
     risk_tier_high_score: int = 60
     risk_tier_medium_score: int = 30
     # --- Visual evidence ---
@@ -45,6 +56,8 @@ class Settings(BaseSettings):
     # With "none", photo claims are never auto-verified: they are reported inconclusive and go to CS-2.
     vision_provider: str = "none"
     vision_model_name: str = "ViT-B-32"
+    # OpenCLIP weights tag for the model (see open_clip.list_pretrained())
+    vision_model_pretrained: str = "laion2b_s34b_b79k"
     vision_max_pixels: int = 25_000_000        # decompression-bomb ceiling
     vision_max_bytes: int = 10 * 1024 * 1024   # largest accepted upload
     # Image-quality gates: below these an image is "not_assessable" (tune per merchant)

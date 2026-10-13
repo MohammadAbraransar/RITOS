@@ -10,8 +10,8 @@ function LoginForm() {
   const searchParams = useSearchParams();
   const redirect = searchParams.get("redirect") || "/products";
 
-  const [email, setEmail] = useState("aarav@example.com");
-  const [password, setPassword] = useState("Demo@1234");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 

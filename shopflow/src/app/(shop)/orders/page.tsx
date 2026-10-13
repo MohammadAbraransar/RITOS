@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Package, ArrowRight, Clock, CheckCircle2, AlertCircle, ShoppingBag } from "lucide-react";
+import { formatMoney, STORE_LOCALE } from "@/lib/money";
 
 export default function MyOrdersPage() {
   const [orders, setOrders] = useState<any[]>([]);
@@ -24,13 +25,7 @@ export default function MyOrdersPage() {
       .catch(() => setLoading(false));
   }, []);
 
-  const formatPrice = (minor: number) => {
-    return new Intl.NumberFormat("en-IN", {
-      style: "currency",
-      currency: "INR",
-      maximumFractionDigits: 0,
-    }).format(minor / 100);
-  };
+  const formatPrice = (minor: number) => formatMoney(minor);
 
   const getStatusBadge = (status: string) => {
     switch (status) {
@@ -115,7 +110,7 @@ export default function MyOrdersPage() {
                   <div>
                     <span className="text-slate-500 block">Order Placed</span>
                     <span className="font-medium text-slate-800">
-                      {new Date(order.ordered_at).toLocaleDateString("en-IN", {
+                      {new Date(order.ordered_at).toLocaleDateString(STORE_LOCALE, {
                         day: "numeric",
                         month: "short",
                         year: "numeric",

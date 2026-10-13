@@ -65,7 +65,10 @@ def run_workflow(db: Session, ticket: Ticket, trigger: str = "MANUAL", actor_id:
             continue
         try:
             output = STEP_FUNCTIONS[agent["id"]](state)
-            record = {"agent_id": agent["id"], "agent_name": agent["name"], "status": "COMPLETED", **output}
+            # The step status always wins; an agent's own "status" field (e.g. a shipment status) is kept separately.
+            record = {"agent_id": agent["id"], "agent_name": agent["name"], **output, "status": "COMPLETED"}
+            if "status" in output:
+                record["result_status"] = output["status"]
             status, error = "SUCCEEDED", None
         except Exception as exc:  # fail safe: a broken agent routes the ticket to a human, never to a refund
             failed_step = agent["id"]

@@ -1,5 +1,6 @@
 import { prisma } from "@/server/db";
 import crypto from "crypto";
+import { config } from "@/server/config";
 
 export async function emitOutboxEvent(
   tx: any,
@@ -8,8 +9,7 @@ export async function emitOutboxEvent(
   payloadData: Record<string, any> = {}
 ) {
   const eventId = `EVT-${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
-  const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000";
-  const contextUrl = `${baseUrl}/api/ritos/refund-tickets/${ticketId}/context`;
+  const contextUrl = `${config.storeBaseUrl}/api/ritos/refund-tickets/${ticketId}/context`;
 
   const payload = {
     event_id: eventId,

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { 
   ShoppingBag, 
@@ -27,6 +27,7 @@ import {
   GitFork,
   ArrowDown
 } from "lucide-react";
+import { formatMoney } from "@/lib/money";
 
 interface OrderItem {
   orderId: string;
@@ -41,6 +42,9 @@ interface OrderItem {
   defaultDesc: string;
   suggestedProofImage?: string;
 }
+
+// RITOS desk console link; hidden destinations fall back to "#" when not configured.
+const RITOS_CONSOLE_URL = process.env.NEXT_PUBLIC_RITOS_CONSOLE_URL;
 
 const DEMO_ORDERS: OrderItem[] = [
   {
@@ -122,6 +126,13 @@ export default function ShopFlowStorePage() {
   const [submitting, setSubmitting] = useState(false);
   const [ticketResult, setTicketResult] = useState<any | null>(null);
   const [recentClaims, setRecentClaims] = useState<any[]>([]);
+  const [me, setMe] = useState<{ name: string } | null>(null);
+  useEffect(() => {
+    fetch("/api/me")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => setMe(d?.user ?? d ?? null))
+      .catch(() => setMe(null));
+  }, []);
 
   // Form states inside modal
   const [claimCategory, setClaimCategory] = useState("DEFECTIVE_PRODUCT");
@@ -200,10 +211,7 @@ export default function ShopFlowStorePage() {
           category: claimCategory,
           description: claimDesc,
           purchase_date: purchaseDate,
-          evidence_images: evidenceImages,
-          customer_name: "Aarav Mehta",
-          customer_email: "aarav@example.com",
-          customer_phone: "+91 98765 43210"
+          evidence_images: evidenceImages
         })
       });
 
@@ -232,11 +240,11 @@ export default function ShopFlowStorePage() {
               <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
             </span>
             <span className="font-semibold text-emerald-400">ShopFlow eCommerce Store:</span>
-            <span className="text-slate-300">Live Integrated with RITOS 8-Agent Orchestrator</span>
+            <span className="text-slate-300">Live Integrated with the RITOS 9-Agent Orchestrator</span>
           </div>
           <div className="flex items-center gap-4 text-slate-300">
             <Link 
-              href="http://localhost:5173" 
+              href={RITOS_CONSOLE_URL || "#"} 
               target="_blank" 
               className="inline-flex items-center gap-1 text-indigo-400 hover:text-indigo-300 font-semibold"
             >
@@ -276,10 +284,10 @@ export default function ShopFlowStorePage() {
           <div className="flex items-center gap-3">
             <div className="flex items-center gap-2 bg-slate-100 hover:bg-slate-200 px-3 py-1.5 rounded-lg text-xs font-medium text-slate-700 transition">
               <User size={14} className="text-indigo-600" />
-              <span>Aarav Mehta</span>
+              {me ? <span>{me.name}</span> : <Link href="/login" className="hover:underline">Sign in</Link>}
             </div>
             <Link 
-              href="http://localhost:5173" 
+              href={RITOS_CONSOLE_URL || "#"} 
               target="_blank" 
               className="bg-indigo-600 hover:bg-indigo-700 text-white px-3.5 py-2 rounded-lg text-xs font-semibold flex items-center gap-1.5 shadow-sm transition"
             >
@@ -300,7 +308,7 @@ export default function ShopFlowStorePage() {
               Customer Orders &amp; Refund Center
             </h1>
             <p className="text-sm text-slate-300 leading-relaxed">
-              Select any delivered item below and submit a refund request. RITOS’s 8 specialist agents 
+              Select any delivered item below and submit a refund request. RITOS’s 9 specialist agents 
               autonomously verify the financial ledger, inspect photo evidence, enforce category return policies, 
               assess risk signals, and route the case dynamically in real time.
             </p>
@@ -353,7 +361,7 @@ export default function ShopFlowStorePage() {
                       <h3 className="font-bold text-sm text-slate-900">{order.itemName}</h3>
                     </div>
                     <span className="font-extrabold text-sm text-slate-900">
-                      ₹{order.amount.toLocaleString()}
+                      {formatMoney(order.amount * 100)}
                     </span>
                   </div>
 
@@ -398,7 +406,7 @@ export default function ShopFlowStorePage() {
               <div>
                 <span className="text-[10px] font-semibold text-indigo-600 uppercase tracking-wider">{item.cat}</span>
                 <h4 className="font-semibold text-xs text-slate-900 truncate">{item.name}</h4>
-                <div className="font-bold text-xs text-slate-900 mt-0.5">₹{item.price.toLocaleString()}</div>
+                <div className="font-bold text-xs text-slate-900 mt-0.5">{formatMoney(item.price * 100)}</div>
               </div>
               <button
                 onClick={() => handleInstantBuyAndClaim(item)}
@@ -421,7 +429,7 @@ export default function ShopFlowStorePage() {
                 Live Customer Claims Dispatched ({recentClaims.length})
               </h3>
               <Link 
-                href="http://localhost:5173" 
+                href={RITOS_CONSOLE_URL || "#"} 
                 target="_blank" 
                 className="text-xs font-semibold text-indigo-600 hover:underline flex items-center gap-1"
               >
@@ -437,14 +445,16 @@ export default function ShopFlowStorePage() {
                     <span className="text-slate-400 mx-1.5">•</span>
                     <span className="font-medium text-slate-800">{claim.payload_sent?.item_name}</span>
                     <span className="text-slate-400 mx-1.5">•</span>
-                    <span className="text-slate-500">₹{claim.payload_sent?.claimed_amount}</span>
+                    <span className="text-slate-500">{formatMoney((claim.payload_sent?.claimed_amount || 0) * 100)}</span>
                   </div>
                   <div className="flex items-center gap-2">
                     <span className="bg-slate-100 text-slate-800 border border-slate-200 px-2 py-0.5 rounded text-[11px] font-bold">
-                      Desk: {claim.ritos_response?.data?.assigned_desk || "CS_1"} ({claim.ritos_response?.data?.decision || "APPROVED"})
+                      {claim.ritos_response?.data?.assigned_desk
+                        ? `Desk: ${claim.ritos_response.data.assigned_desk} (${claim.ritos_response.data.next_action || claim.ritos_response.data.decision || "routed"})`
+                        : "RITOS decision pending"}
                     </span>
                     <Link 
-                      href="http://localhost:5173" 
+                      href={RITOS_CONSOLE_URL || "#"} 
                       target="_blank" 
                       className="text-indigo-600 hover:underline text-[11px] font-semibold"
                     >
@@ -467,7 +477,7 @@ export default function ShopFlowStorePage() {
                 <span className="text-xs font-semibold text-indigo-600">Customer Refund Request</span>
                 <h3 className="font-extrabold text-lg text-slate-900">{selectedOrder.itemName}</h3>
                 <span className="text-xs text-slate-500 font-mono">
-                  Order: {selectedOrder.orderId} • Claim Amount: ₹{selectedOrder.amount.toLocaleString()}
+                  Order: {selectedOrder.orderId} • Claim Amount: {formatMoney(selectedOrder.amount * 100)}
                 </span>
               </div>
               <button 
@@ -504,9 +514,6 @@ export default function ShopFlowStorePage() {
                         <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse"></span>
                         Under Active Review
                       </span>
-                      <span className="text-[11px] text-emerald-700 bg-white/70 px-2 py-0.5 rounded font-medium border border-emerald-200">
-                        Estimated turnaround: 24–48 hours
-                      </span>
                     </div>
                   </div>
                 </div>
@@ -527,7 +534,7 @@ export default function ShopFlowStorePage() {
                     </div>
                     <div className="bg-white p-3 rounded-lg border border-slate-200">
                       <span className="text-slate-500 text-[10px] block">Refund Claimed</span>
-                      <span className="font-extrabold text-indigo-600 text-xs font-mono">₹{claimAmount.toLocaleString()}</span>
+                      <span className="font-extrabold text-indigo-600 text-xs font-mono">{formatMoney(claimAmount * 100)}</span>
                     </div>
                   </div>
 
@@ -693,7 +700,7 @@ export default function ShopFlowStorePage() {
                               Click or drag real product photo here
                             </p>
                             <p className="text-[10px] text-slate-400">
-                              PNG, JPG, or WEBP • Will be read by Pillow Computer Vision Engine
+                              PNG, JPG, or WEBP • Checked by RITOS Agent 7 (image quality + product/defect vision)
                             </p>
                           </div>
                         )}
@@ -722,7 +729,7 @@ export default function ShopFlowStorePage() {
                       </div>
 
                       <p className="text-[11px] text-slate-500">
-                        RITOS Agent 7 applies Pillow edge-detection, fracture asymmetry, and token OCR verification in real-time.
+                        RITOS Agent 7 checks image quality and duplicate photos, and (with the vision model enabled) whether the photo shows this product and the claimed defect. Unclear photos go to a human, never to an automatic denial.
                       </p>
                     </div>
                   )}
@@ -751,7 +758,7 @@ export default function ShopFlowStorePage() {
                     {submitting ? (
                       <>
                         <span className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
-                        Transmitting to RITOS 8 Agents...
+                        Transmitting to RITOS 9 Agents...
                       </>
                     ) : (
                       <>

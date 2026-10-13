@@ -47,7 +47,7 @@ The left list holds the services and the right pane shows the selected one's liv
 | `pnpm dev:api` / `pnpm dev:desk` / `pnpm dev:shop` | One service only |
 | `pnpm db:migrate` | Apply pending database migrations (RITOS Alembic + ShopFlow Prisma) without reinstalling packages |
 | `pnpm db:seed` | **Reset both demo databases**: ShopFlow store data and RITOS ticket history (RITOS user accounts are kept) |
-| `pnpm stop` | Free ports 5173, 8000, 3000, 3001 if anything was left behind |
+| `pnpm stop` | Free ports 5173, 8000, 3000 if anything was left behind |
 
 ---
 
@@ -56,9 +56,8 @@ The left list holds the services and the right pane shows the selected one's liv
 | Service | Technology | Directory | URL |
 | :--- | :--- | :--- | :--- |
 | **RITOS Desk Portal** | React + Vite + TypeScript | `frontend/` | [http://localhost:5173](http://localhost:5173) |
-| **RITOS API** (orchestrator + 8 agents) | Python FastAPI | `backend/` | [http://localhost:8000/docs](http://localhost:8000/docs) |
+| **RITOS API** (orchestrator + 9 agents) | Python FastAPI | `backend/` | [http://localhost:8000/docs](http://localhost:8000/docs) |
 | **ShopFlow Store** | Next.js 14 + Prisma | `shopflow/` | [http://localhost:3000](http://localhost:3000) |
-| ShopFlow fallback API | Node (used by the storefront demo when RITOS is offline) | `shopflow/standalone-backend.js` | http://localhost:3001 |
 
 ```
  ShopFlow store (:3000)  ── outbox event: refund.ticket.created ──►  RITOS API (:8000)

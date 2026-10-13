@@ -1,4 +1,7 @@
-const API = import.meta.env.VITE_API_URL || 'http://localhost:8000/api/v1'
+const API: string = import.meta.env.VITE_API_URL
+if (!API) throw new Error('VITE_API_URL is not set (see frontend/.env.example)')
+// API host without the /api/v1 prefix (webhook and integration URLs shown in the desk)
+export const API_ROOT = API.replace(/\/api\/v1\/?$/, '')
 
 export type User = { id:string; email:string; full_name:string; role:string }
 

@@ -30,8 +30,8 @@ export async function POST(req: Request) {
       return errorResponse("VALIDATION_ERROR", "Email already in use", 409);
     }
 
-    const count = await prisma.user.count({ where: { role: "CUSTOMER" } });
-    const customerId = `CUS-${10001 + count}`;
+    // Random, not count-based: concurrent sign-ups can never be given the same id.
+    const customerId = `CUS-${crypto.randomUUID().replace(/-/g, "").slice(0, 12).toUpperCase()}`;
     const passwordHash = await hashPassword(password);
 
     const user = await prisma.user.create({

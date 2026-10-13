@@ -27,6 +27,8 @@ PAYMENT_ISSUE_CATEGORIES = {"REFUND_NOT_RECEIVED", "DUPLICATE_PAYMENT", "PAYMENT
 LEDGER_REVIEW = {"CUSTOMER_MISMATCH", "AMOUNT_MISMATCH", "CURRENCY_MISMATCH", "INSUFFICIENT_REFUNDABLE_BALANCE",
                  "PAYMENT_PENDING", "MANUAL_VERIFICATION_REQUIRED"}
 UNRESOLVED_EVIDENCE = {"inconclusive", "not_assessable", "processing_failed"}
+# A parcel that may still arrive is not refunded automatically: the carrier must confirm it is lost or returned.
+NON_DELIVERY_REASONS = {"ITEM_NOT_RECEIVED"}
 
 
 @dataclass
@@ -50,6 +52,7 @@ class DecisionInputs:
     auto_approve_limit: Decimal
     near_duplicate_photos: bool = False
     operational_category: str = "OTHER"
+    delivery_loss_confirmed: bool = False  # carrier record says lost / failed / returned to sender
 
 
 @dataclass
@@ -123,6 +126,13 @@ def arbitrate(i: DecisionInputs) -> Decision:
         return _review("Claim conflicts with recorded facts: " + "; ".join(i.contradictions),
                        ["CLAIM_CONTRADICTION"], checklist=["Compare the claim with carrier, order and photo records"])
 
+    # 3b. Non-delivery needs the carrier's outcome before any refund
+    if i.claim_reason in NON_DELIVERY_REASONS and not i.delivery_loss_confirmed:
+        return _review("Non-delivery claim: no carrier record yet confirms the parcel was lost or returned.",
+                       ["LOGISTICS_UNVERIFIED"],
+                       checklist=["Check the carrier's tracking for the parcel",
+                                  "Refund only once it is confirmed lost, failed or returned to sender"])
+
     # 4. Evidence
     needs_evidence = i.evidence_required or i.claim_reason in EVIDENCE_REASONS
     if needs_evidence:
@@ -148,8 +158,9 @@ def arbitrate(i: DecisionInputs) -> Decision:
 
     # 5. Risk and amount
     if i.requires_supervisory_review or i.risk_tier == "HIGH":
+        codes = ["RISK_SUPERVISORY_REVIEW"] + (["AMOUNT_ABOVE_AUTO_LIMIT"] if i.claimed_amount > i.auto_approve_limit else [])
         return _review("Risk signals require supervisory review: " + (", ".join(i.risk_signals) or i.risk_tier),
-                       ["RISK_SUPERVISORY_REVIEW"], next_action="AWAIT_APPROVAL", bucket="GENUINE_REFUNDABLE",
+                       codes, next_action="AWAIT_APPROVAL", bucket="GENUINE_REFUNDABLE",
                        checklist=["Review claim history and velocity", "Approve or escalate within limits"])
     if i.claimed_amount > i.auto_approve_limit:
         return _review(f"Amount above the {i.auto_approve_limit:,.2f} automatic settlement limit.", ["AMOUNT_ABOVE_AUTO_LIMIT"],

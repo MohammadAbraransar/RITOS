@@ -1,36 +1,28 @@
 import { prisma } from "@/server/db";
 import { qualified } from "@/server/db-schema";
 
+// Ticket ids are RIT-<year>-<sequence>. If the sequence cannot be read the error propagates: a guessed id
+// could collide with or impersonate another ticket.
+const MAX_COLLISION_RETRIES = 100; // ids inserted outside the sequence (e.g. imports) are skipped
+const ticketId = (seq: number) => `RIT-${new Date().getUTCFullYear()}-${String(seq).padStart(6, "0")}`;
+
 export async function peekNextTicketId(tx?: any): Promise<string> {
   const client = tx || prisma;
-  try {
-    const res = (await client.$queryRawUnsafe(
-      `SELECT last_value FROM ${qualified("refund_ticket_seq")};`
-    )) as Array<{ last_value: string | number }>;
-    const seqVal = parseInt(String(res[0]?.last_value || 122), 10);
-    return `RIT-2026-${String(seqVal + 1).padStart(6, "0")}`;
-  } catch {
-    return `RIT-2026-000123`;
-  }
+  const res = (await client.$queryRawUnsafe(
+    `SELECT last_value FROM ${qualified("refund_ticket_seq")};`
+  )) as Array<{ last_value: string | number }>;
+  return ticketId(parseInt(String(res[0].last_value), 10) + 1);
 }
 
 export async function getNextTicketId(tx?: any): Promise<string> {
   const client = tx || prisma;
-  for (let i = 0; i < 100; i++) {
-    let num = 123;
-    try {
-      const res = (await client.$queryRawUnsafe(
-        `SELECT nextval('${qualified("refund_ticket_seq")}')::text as next_val;`
-      )) as Array<{ next_val: string }>;
-      num = parseInt(res[0]?.next_val || "123", 10);
-    } catch {
-      num = 123 + i;
-    }
-    const candidate = `RIT-2026-${String(num).padStart(6, "0")}`;
+  for (let i = 0; i < MAX_COLLISION_RETRIES; i++) {
+    const res = (await client.$queryRawUnsafe(
+      `SELECT nextval('${qualified("refund_ticket_seq")}')::text as next_val;`
+    )) as Array<{ next_val: string }>;
+    const candidate = ticketId(parseInt(res[0].next_val, 10));
     const exists = await client.refundTicket.findUnique({ where: { id: candidate } });
-    if (!exists) {
-      return candidate;
-    }
+    if (!exists) return candidate;
   }
-  return `RIT-2026-${String(Date.now()).slice(-6)}`;
+  throw new Error(`No free ticket id after ${MAX_COLLISION_RETRIES} sequence values`);
 }

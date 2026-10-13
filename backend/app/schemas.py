@@ -9,7 +9,7 @@ class TicketCreate(BaseModel):
     transaction_id: str = Field(min_length=3, max_length=80)
     order_id: Optional[str] = Field(default=None, max_length=80)
     claimed_amount: float = Field(gt=0, le=100000000)
-    currency: str = Field(default="INR", min_length=3, max_length=3)
+    currency: Optional[str] = Field(default=None, min_length=3, max_length=3)  # settings.default_currency when omitted
     description: str = Field(min_length=8, max_length=5000)
     item_name: Optional[str] = None
     item_category: Optional[str] = None
@@ -83,9 +83,12 @@ class EcommerceTicketIn(BaseModel):
     item_name: Optional[str] = "Product Item"
     item_category: Optional[str] = "GENERAL"
     claimed_amount: float = Field(gt=0)
-    currency: Optional[str] = "INR"
+    currency: Optional[str] = None  # settings.default_currency when omitted
     purchase_date: Optional[str] = None
     description: str = Field(min_length=5, max_length=5000)
+    # Payment facts from the store; required only to register a transaction RITOS does not know yet
+    transaction_amount: Optional[float] = Field(default=None, gt=0)
+    payment_status: Optional[str] = None
 
 class EvidenceUploadIn(BaseModel):
     ticket_id: str

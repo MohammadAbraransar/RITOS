@@ -3,9 +3,10 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Trash2, Plus, Minus, ArrowRight, ShoppingBag } from "lucide-react";
+import { formatMoney } from "@/lib/money";
 
 export default function CartPage() {
-  const [cart, setCart] = useState<{ items: any[]; total_minor: number } | null>(null);
+  const [cart, setCart] = useState<{ items: any[]; total_minor: number; currency?: string } | null>(null);
   const [loading, setLoading] = useState(true);
 
   const fetchCart = () => {
@@ -41,7 +42,7 @@ export default function CartPage() {
   }
 
   const items = cart?.items || [];
-  const totalRupees = ((cart?.total_minor || 0) / 100).toLocaleString("en-IN");
+  const totalText = formatMoney(cart?.total_minor || 0, cart?.currency);
 
   if (items.length === 0) {
     return (
@@ -89,7 +90,7 @@ export default function CartPage() {
                 <div>
                   <h3 className="font-semibold text-slate-900 text-sm">{item.name}</h3>
                   <span className="text-xs text-slate-500">
-                    ₹{(item.priceMinor / 100).toLocaleString("en-IN")} each
+                    {formatMoney(item.priceMinor, cart?.currency)} each
                   </span>
                 </div>
               </div>
@@ -130,7 +131,7 @@ export default function CartPage() {
           <div className="space-y-2 text-xs text-slate-600">
             <div className="flex justify-between">
               <span>Items Total ({items.length})</span>
-              <span>₹{totalRupees}</span>
+              <span>{totalText}</span>
             </div>
             <div className="flex justify-between">
               <span>Estimated Shipping</span>
@@ -140,7 +141,7 @@ export default function CartPage() {
 
           <div className="border-t border-slate-100 pt-3 flex justify-between font-bold text-slate-900 text-base">
             <span>Total</span>
-            <span>₹{totalRupees}</span>
+            <span>{totalText}</span>
           </div>
 
           <Link

@@ -1,5 +1,6 @@
 import { prisma } from "@/server/db";
 import { processOutboxBatch } from "@/server/outbox/processor";
+import { config } from "@/server/config";
 
 export async function register() {
   if (process.env.NEXT_RUNTIME === "nodejs") {
@@ -15,19 +16,19 @@ export async function register() {
       if (running) return;
       running = true;
       try {
-        const results = await processOutboxBatch(10);
+        const results = await processOutboxBatch();
         for (const r of results) {
           if (r.error) console.warn(`[ShopFlow outbox] ${r.id} ${r.status}: ${r.error}`);
         }
         lastError = "";
       } catch (err: any) {
-        // Log each distinct failure once (e.g. DATABASE_URL missing) instead of every 5 seconds
+        // Log each distinct failure once (e.g. DATABASE_URL missing) instead of on every poll
         const msg = err?.message?.split("\n").filter(Boolean).pop() || String(err);
         if (msg !== lastError) console.error(`[ShopFlow outbox] poller failed: ${msg}`);
         lastError = msg;
       } finally {
         running = false;
       }
-    }, 5000);
+    }, config.outbox.pollIntervalMs);
   }
 }

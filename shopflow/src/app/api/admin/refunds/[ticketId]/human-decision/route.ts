@@ -4,8 +4,10 @@ import { prisma } from "@/server/db";
 import { requireAuth, errorResponse } from "@/server/auth/guards";
 import { transitionTicket } from "@/server/state-machine/ticket-state-machine";
 import { executeRefundTransaction } from "@/server/services/refund-execution.service";
+import { config } from "@/server/config";
 import { emitOutboxEvent } from "@/server/outbox/outbox-dispatcher";
 import { TicketStatus, DecisionType } from "@prisma/client";
+import { formatMoney } from "@/lib/money";
 
 export const dynamic = "force-dynamic";
 
@@ -118,7 +120,7 @@ export async function POST(req: Request, { params }: { params: { ticketId: strin
           body:
             targetStatus === "REJECTED"
               ? `Review note: ${note}`
-              : `Support approved ₹${(finalAmountMinor / 100).toLocaleString("en-IN")}. Note: ${note}`,
+              : `Support approved ${formatMoney(finalAmountMinor, undefined, 2)}. Note: ${note}`,
           channel: "IN_APP",
         },
       });
@@ -132,13 +134,12 @@ export async function POST(req: Request, { params }: { params: { ticketId: strin
 
     // Execute refund if approved
     if (["APPROVED", "PARTIALLY_APPROVED"].includes(targetStatus) && payment) {
-      const execOwner = process.env.EXECUTION_OWNER || "shopflow";
-      if (execOwner === "shopflow") {
+      if (config.executionOwner === "shopflow") {
         await executeRefundTransaction({
           transaction_id: payment.transactionId,
           amount_minor: finalAmountMinor,
           ticket_id: ticket.id,
-          idempotency_key: `human-exec-${ticket.id}-${Date.now()}`,
+          idempotency_key: `human-exec-${ticket.id}`, // one key per ticket: a retry never refunds twice
         });
       }
     }

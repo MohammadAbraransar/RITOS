@@ -13,6 +13,7 @@ import {
   Clock, 
   RefreshCw 
 } from "lucide-react";
+import { formatMoney } from "@/lib/money";
 
 export default function AdminOrdersPage() {
   const [orders, setOrders] = useState<any[]>([]);
@@ -81,13 +82,7 @@ export default function AdminOrdersPage() {
     }
   };
 
-  const formatPrice = (minor: number) => {
-    return new Intl.NumberFormat("en-IN", {
-      style: "currency",
-      currency: "INR",
-      maximumFractionDigits: 0,
-    }).format(minor / 100);
-  };
+  const formatPrice = (minor: number) => formatMoney(minor);
 
   const filteredOrders = orders.filter((o) => {
     const q = search.toLowerCase();

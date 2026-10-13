@@ -1,5 +1,6 @@
 import fs from "fs/promises";
 import path from "path";
+import { config } from "@/server/config";
 import crypto from "crypto";
 
 export interface StorageProvider {
@@ -17,7 +18,7 @@ export class LocalStorageProvider implements StorageProvider {
   private baseDir: string;
 
   constructor(baseDir?: string) {
-    this.baseDir = baseDir || process.env.UPLOAD_DIR || path.join(process.cwd(), "uploads");
+    this.baseDir = baseDir || config.uploadDir;
   }
 
   async save(buffer: Buffer, originalFilename: string, mime: string) {

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/server/db";
 import { requireAuth, errorResponse } from "@/server/auth/guards";
-import { storage } from "@/server/storage/evidence-storage";
+import { saveEvidenceFiles, evidenceRows } from "@/server/evidence/uploads";
 import { emitOutboxEvent } from "@/server/outbox/outbox-dispatcher";
 import { getNextTicketId } from "@/server/services/ticket-sequence";
 import { 
@@ -13,14 +13,7 @@ import {
 
 export const dynamic = "force-dynamic";
 
-const ALLOWED_MIMES = [
-  "image/jpeg",
-  "image/png",
-  "image/webp",
-  "application/pdf",
-];
-const MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024; // 5 MB
-const MAX_FILES = 5;
+
 
 export async function POST(req: Request, { params }: { params: { id: string } }) {
   const { user, error } = await requireAuth(["CUSTOMER", "ADMIN", "SUPPORT_ANALYST"]);
@@ -36,6 +29,12 @@ export async function POST(req: Request, { params }: { params: { id: string } })
 
     if (!orderItemId || !reason || !requestedAction) {
       return errorResponse("VALIDATION_ERROR", "Missing required fields: order_item_id, reason, requested_action", 422);
+    }
+    if (!Object.values(TicketReason).includes(reason) || !Object.values(RequestedAction).includes(requestedAction)) {
+      return errorResponse("VALIDATION_ERROR", "Unknown reason or requested_action", 422, {
+        reason: Object.values(TicketReason),
+        requested_action: Object.values(RequestedAction),
+      });
     }
 
     // Verify order ownership
@@ -87,47 +86,12 @@ export async function POST(req: Request, { params }: { params: { id: string } })
       );
     }
 
-    // Process file uploads
-    const files = formData.getAll("files") as File[];
-    if (files.length > MAX_FILES) {
-      return errorResponse("VALIDATION_ERROR", `Maximum ${MAX_FILES} evidence files allowed`, 422);
+    // Validate and store uploads (shared rules with "add evidence")
+    const upload = await saveEvidenceFiles(formData.getAll("files") as Array<File | string>);
+    if ("error" in upload) {
+      return errorResponse(upload.error.code, upload.error.message, 422);
     }
-
-    const savedFiles: Array<{
-      storedPath: string;
-      sha256: string;
-      sizeBytes: number;
-      mime: string;
-      filename: string;
-      type: EvidenceType;
-    }> = [];
-
-    for (const file of files) {
-      if (typeof file === "string" || !file.name) continue;
-
-      if (!ALLOWED_MIMES.includes(file.type)) {
-        return errorResponse(
-          "INVALID_FILE_TYPE",
-          `File type ${file.type} is not allowed. Only JPEG, PNG, WEBP, and PDF are supported.`,
-          422
-        );
-      }
-
-      if (file.size > MAX_FILE_SIZE_BYTES) {
-        return errorResponse(
-          "FILE_TOO_LARGE",
-          `File ${file.name} exceeds maximum limit of 5 MB`,
-          422
-        );
-      }
-
-      const buffer = Buffer.from(await file.arrayBuffer());
-      const saved = await storage.save(buffer, file.name, file.type);
-      savedFiles.push({
-        ...saved,
-        type: file.type === "application/pdf" ? EvidenceType.DOCUMENT : EvidenceType.IMAGE,
-      });
-    }
+    const savedFiles = upload.saved;
 
     // Generate atomic ticket number
     const result = await prisma.$transaction(async (tx) => {
@@ -160,17 +124,7 @@ export async function POST(req: Request, { params }: { params: { id: string } })
           requestedAmountMinor,
           status: TicketStatus.PENDING_RITOS,
           policySnapshot,
-          evidence: {
-            create: savedFiles.map((f) => ({
-              id: `EVD-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
-              type: f.type,
-              filename: f.filename,
-              storedPath: f.storedPath,
-              mime: f.mime,
-              sizeBytes: f.sizeBytes,
-              sha256: f.sha256,
-            })),
-          },
+          evidence: { create: evidenceRows(savedFiles) },
         },
       });
 

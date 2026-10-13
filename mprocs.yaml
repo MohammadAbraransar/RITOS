@@ -26,8 +26,3 @@ procs:
     cwd: <CONFIG_DIR>/shopflow
     cmd: ["node", "node_modules/next/dist/bin/next", "dev", "-p", "3000"]
     stop: hard-kill
-  shop-fallback:
-    # Port 3001: the storefront demo page forwards here when RITOS is offline
-    cwd: <CONFIG_DIR>/shopflow
-    cmd: ["node", "standalone-backend.js"]
-    stop: hard-kill

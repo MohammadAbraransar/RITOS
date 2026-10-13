@@ -280,7 +280,8 @@ def test_store_event_without_context_or_facts_is_retried(store):
     assert r.status_code == 503
 
 
-ECOM = {"order_id": "ORD-ECOM-1", "transaction_id": "TXN-ECOM-1", "claimed_amount": 499, "currency": "INR",
+ECOM = {"order_id": "ORD-1002", "transaction_id": "TXN-1002", "claimed_amount": 499, "currency": "INR",
+        "customer_email": "customer@ritos.local",
         "description": "Item arrived damaged in transit", "item_name": "Desk Lamp", "item_category": "GENERAL"}
 
 
@@ -293,7 +294,19 @@ def test_ecommerce_intake_accepts_secret_or_staff_only():
     assert client.post(url, json=ECOM, headers=login("agent@ritos.local")).status_code == 200
     settings.ecommerce_webhook_secret = "server-secret"
     try:
-        assert client.post(url, json={**ECOM, "order_id": "ORD-ECOM-2", "transaction_id": "TXN-ECOM-2"},
-                           headers={"X-Ecommerce-Secret": "server-secret"}).status_code == 200
+        store = {"X-Ecommerce-Secret": "server-secret"}
+        new_tx = {**ECOM, "order_id": "ORD-ECOM-2", "transaction_id": "TXN-ECOM-2"}
+        # A claim never certifies its own payment: an unknown transaction needs the store's payment facts.
+        assert client.post(url, json=new_tx, headers=store).status_code == 409
+        assert client.post(url, json={**new_tx, "transaction_amount": 999, "payment_status": "SUCCESSFUL"},
+                           headers=store).status_code == 200
     finally:
         settings.ecommerce_webhook_secret = ""
+
+
+def test_ecommerce_intake_never_guesses_customer_or_payment():
+    staff = login("agent@ritos.local")
+    url = "/api/v1/integrations/ecommerce/ticket"
+    assert client.post(url, json={**ECOM, "customer_email": "nobody@example.com"}, headers=staff).status_code == 404
+    unknown_tx = {**ECOM, "transaction_id": "TXN-NOT-IN-LEDGER", "transaction_amount": 999, "payment_status": "SUCCESSFUL"}
+    assert client.post(url, json=unknown_tx, headers=staff).status_code == 409  # staff cannot create payments

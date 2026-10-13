@@ -2,7 +2,7 @@
 
 Calculates:
 - Trailing 30, 90, and 365-day claim velocity
-- Lifetime refund-to-GMV ratios
+- Lifetime refund-to-GMV ratio (ledger)
 - High-value supervisory review requirements (e.g. claims > INR 5,000)
 - Risk tiering (LOW, MEDIUM, HIGH)
 """
@@ -24,6 +24,7 @@ WEIGHT_UNAUTHORIZED_PAYMENT = 50
 WEIGHT_HIGH_VELOCITY = 25
 WEIGHT_REPEAT_CLAIMANT = 10
 WEIGHT_NEW_ACCOUNT = 15
+WEIGHT_HIGH_REFUND_RATIO = 20
 
 
 def evaluate_customer_risk(
@@ -95,6 +96,18 @@ def evaluate_customer_risk(
         score += WEIGHT_REPEAT_CLAIMANT
         signals.append({"signal": "REPEAT_CLAIMANT_30D", "severity": "LOW", "score_delta": WEIGHT_REPEAT_CLAIMANT, "count": claims_30d})
 
+    # Lifetime refund-to-GMV ratio from the ledger; only meaningful once the customer has enough orders.
+    orders, gmv, refunded = db.execute(
+        select(func.count(Transaction.id), func.coalesce(func.sum(Transaction.amount), 0),
+               func.coalesce(func.sum(Transaction.refunded_amount), 0))
+        .where(Transaction.customer_id == customer_id)).one()
+    gmv, refunded = Decimal(str(gmv)), Decimal(str(refunded))
+    refund_ratio = float((refunded / gmv).quantize(Decimal("0.0001"))) if gmv > 0 else 0.0
+    if orders >= settings.risk_refund_ratio_min_orders and refund_ratio >= settings.risk_refund_ratio_threshold:
+        score += WEIGHT_HIGH_REFUND_RATIO
+        signals.append({"signal": "HIGH_REFUND_TO_GMV_RATIO", "severity": "MEDIUM", "score_delta": WEIGHT_HIGH_REFUND_RATIO,
+                        "ratio": refund_ratio, "orders": orders})
+
     account_age = (store_facts or {}).get("account_age_days")
     if account_age is not None and int(account_age) < new_account_days:
         score += WEIGHT_NEW_ACCOUNT
@@ -110,10 +123,15 @@ def evaluate_customer_risk(
         "claims_30d": claims_30d,
         "claims_90d": claims_90d,
         "claims_365d": claims_365d,
+        "lifetime_orders": orders,
+        "refund_to_gmv_ratio": refund_ratio,
         "rule_version": RULE_VERSION,
         # Recorded so a decision can be replayed with the thresholds that were in force
         "thresholds": {"high_value_inr": float(high_value_threshold), "high_velocity_claims_30d": velocity_high,
-                       "new_account_days": new_account_days, "tier_high_score": settings.risk_tier_high_score,
+                       "new_account_days": new_account_days,
+                       "refund_ratio_threshold": settings.risk_refund_ratio_threshold,
+                       "refund_ratio_min_orders": settings.risk_refund_ratio_min_orders,
+                       "tier_high_score": settings.risk_tier_high_score,
                        "tier_medium_score": settings.risk_tier_medium_score},
         "is_high_value": is_high_value,
         "requires_supervisory_review": requires_supervisory_review,

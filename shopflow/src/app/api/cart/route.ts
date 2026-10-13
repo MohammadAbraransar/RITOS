@@ -3,6 +3,7 @@ import { z } from "zod";
 import { getCart, setCart, clearCart } from "@/server/services/cart.service";
 import { getProductById } from "@/server/services/product.service";
 import { errorResponse } from "@/server/auth/guards";
+import { STORE_CURRENCY } from "@/lib/money";
 
 export const dynamic = "force-dynamic";
 
@@ -17,7 +18,7 @@ export async function GET() {
   return NextResponse.json({
     items,
     total_minor: totalMinor,
-    currency: "INR",
+    currency: STORE_CURRENCY,
     item_count: items.reduce((sum, item) => sum + item.quantity, 0),
   });
 }
@@ -55,7 +56,7 @@ export async function POST(req: Request) {
   return NextResponse.json({
     items,
     total_minor: totalMinor,
-    currency: "INR",
+    currency: STORE_CURRENCY,
   });
 }
 
@@ -80,7 +81,7 @@ export async function PATCH(req: Request) {
   return NextResponse.json({
     items,
     total_minor: totalMinor,
-    currency: "INR",
+    currency: STORE_CURRENCY,
   });
 }
 

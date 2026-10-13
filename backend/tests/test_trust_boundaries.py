@@ -62,6 +62,40 @@ def test_portal_claim_without_a_date_uses_the_ledger_capture_date():
     assert "POLICY_WITHIN_WINDOW" in auto["reason_codes"]
 
 
+def test_uploading_requested_proof_resumes_the_workflow():
+    import base64, io, random
+    from PIL import Image
+    txid = _old_transaction(days_ago=2)
+    data = _claim(txid, description="The screen arrived cracked and the product is damaged.")
+    assert data["automation"]["next_action"] == "AWAIT_PROOF"
+
+    rng = random.Random(7)
+    img = Image.new("RGB", (320, 320))
+    img.putdata([(rng.randrange(256), rng.randrange(256), rng.randrange(256)) for _ in range(320 * 320)])
+    buf = io.BytesIO(); img.save(buf, format="JPEG")
+    r = client.post("/api/v1/evidence/upload", headers=_customer_headers(), json={
+        "ticket_id": data["id"], "file_name": "crack.jpg", "file_type": "image/jpeg",
+        "base64_data": base64.b64encode(buf.getvalue()).decode()})
+    assert r.status_code == 200, r.text
+    automation = r.json()["automation"]
+    assert automation and automation["trigger"] == "EVIDENCE_UPLOADED"
+    assert "EVIDENCE_MISSING" not in automation["reason_codes"]
+
+
+def test_high_refund_to_gmv_ratio_is_a_review_signal_not_a_denial():
+    from app.agents.risk_agent import evaluate_customer_risk
+    customer_id = f"cust-{uuid4().hex[:8]}"
+    with SessionLocal() as db:
+        for i, refunded in enumerate((1000, 1000, 0)):
+            db.add(Transaction(id=f"TXN-R-{customer_id}-{i}", customer_id=customer_id, order_id=f"O-{i}", amount=1000,
+                               currency="INR", payment_status="SUCCESSFUL", refunded_amount=refunded))
+        db.commit()
+        risk = evaluate_customer_risk(db, customer_id, "no-ticket", 500, "DEFECTIVE_PRODUCT")
+    assert risk["refund_to_gmv_ratio"] == 0.6667 and risk["lifetime_orders"] == 3
+    assert "HIGH_REFUND_TO_GMV_RATIO" in [s["signal"] for s in risk["risk_signals"]]
+    assert risk["risk_tier"] != "HIGH"  # one signal alone never forces supervisory review
+
+
 def test_policy_result_depends_only_on_inputs_and_as_of():
     policy = {"source": "RITOS_POLICY", "category": "ELECTRONICS", "return_window_days": 14,
               "allow_damaged_exceptions": False, "policy_summary": ""}
@@ -101,3 +135,40 @@ def test_outbox_does_not_resend_a_leased_message(monkeypatch):
         with SessionLocal() as db:
             db.query(OutboxMessage).filter(OutboxMessage.id == msg_id).update({"status": "SENT"})
             db.commit()
+
+
+def test_unknown_store_ticket_is_refused_when_demo_claims_are_off(monkeypatch):
+    from app import shopflow
+    from app.config import settings
+    monkeypatch.setattr(settings, "demo_claims_enabled", False)
+    monkeypatch.setattr(shopflow, "fetch_shopflow_context", lambda tid: None)
+    r = client.post("/webhook/refund-tickets", headers={"Authorization": "Bearer test-key"}, json={
+        "event_id": f"evt-{uuid4().hex}", "event_type": "refund.ticket.created", "ticket_id": "SF-NOT-IN-STORE",
+        "claimed_amount": 999, "description": "Invented claim that the store never recorded"})
+    assert r.status_code == 404
+
+
+def _arbiter_inputs(**over):
+    from decimal import Decimal
+    from app.agents.decision_agent import DecisionInputs
+    base = dict(ledger_status="VERIFIED", is_duplicate=False, policy_eligible=True, policy_reason_code="POLICY_WITHIN_WINDOW",
+                policy_reason="ok", claim_reason="CHANGED_MIND", contradictions=[], evidence_required=False, evidence_count=0,
+                identity_status="inconclusive", defect_status="inconclusive", evidence_next_step="", risk_tier="LOW",
+                requires_supervisory_review=False, risk_signals=[], claimed_amount=Decimal("1000"), auto_approve_limit=Decimal("5000"))
+    return DecisionInputs(**{**base, **over})
+
+
+def test_non_delivery_is_never_auto_refunded_without_carrier_confirmation():
+    from app.agents.decision_agent import arbitrate
+    d = arbitrate(_arbiter_inputs(claim_reason="ITEM_NOT_RECEIVED"))
+    assert (d.assigned_desk, d.next_action, d.reason_codes) == ("CS_2", "MANUAL_REVIEW", ["LOGISTICS_UNVERIFIED"])
+    confirmed = arbitrate(_arbiter_inputs(claim_reason="ITEM_NOT_RECEIVED", delivery_loss_confirmed=True))
+    assert confirmed.next_action == "AUTO_APPROVE"
+
+
+def test_above_limit_claim_carries_the_amount_reason_code():
+    from decimal import Decimal
+    from app.agents.decision_agent import arbitrate
+    d = arbitrate(_arbiter_inputs(claimed_amount=Decimal("5499"), requires_supervisory_review=True,
+                                  risk_signals=["HIGH_VALUE_CLAIM_THRESHOLD_EXCEEDED"]))
+    assert d.next_action == "AWAIT_APPROVAL" and {"RISK_SUPERVISORY_REVIEW", "AMOUNT_ABOVE_AUTO_LIMIT"} <= set(d.reason_codes)

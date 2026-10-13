@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const ports = [5173, 8000, 3000, 3001];
+const ports = [5173, 8000, 3000];
 
 try {
   if (process.platform === "win32") {
