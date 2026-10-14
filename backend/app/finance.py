@@ -27,6 +27,7 @@ from .models import (
     IdempotencyRecord, AccountType, EntryType, JournalStatus, AuditLog, TicketEvent
 )
 from .config import settings
+from .permissions import PAYOUT_ROLES, EXECUTE, RECONCILE
 
 # Standard Chart of Accounts
 DEFAULT_ACCOUNTS = [
@@ -346,7 +347,7 @@ class FinancialSettlementService:
         3. Record: lock again and apply the outcome. ACCEPTED/SETTLED -> balanced journal + REFUNDED.
            UNKNOWN (timeout) -> RECONCILIATION_REQUIRED; never retried blindly. FAILED -> FAILED, balance released.
         """
-        if executor.role not in (Role.FINANCE.value, Role.ADMIN.value):
+        if executor.role not in PAYOUT_ROLES[EXECUTE]:  # same policy as the endpoints and the desk (permissions.py)
             raise HTTPException(403, f"Role '{executor.role}' may not execute settlements.")
         route = f"/refunds/{refund_id}/execute"
         cached = cls.check_idempotency(db, idempotency_key, route, {"refund_id": refund_id, "provider": provider})
@@ -453,8 +454,8 @@ class FinancialSettlementService:
     @classmethod
     def reconcile_settlement(cls, db: Session, refund_id: str, actor: User) -> Dict[str, Any]:
         """Ask the provider what actually happened to an uncertain settlement, then apply it exactly once."""
-        if actor.role not in (Role.FINANCE.value, Role.ADMIN.value, Role.AUDITOR.value):
-            raise HTTPException(403, "Only finance, administrators or auditors may reconcile settlements.")
+        if actor.role not in PAYOUT_ROLES[RECONCILE]:
+            raise HTTPException(403, f"Role '{actor.role}' may not reconcile settlements.")
         refund = db.scalar(select(RefundRequest).where(RefundRequest.id == refund_id).with_for_update())
         if not refund:
             raise HTTPException(404, "Refund request not found")

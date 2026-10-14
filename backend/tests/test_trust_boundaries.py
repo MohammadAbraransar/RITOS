@@ -172,3 +172,40 @@ def test_above_limit_claim_carries_the_amount_reason_code():
     d = arbitrate(_arbiter_inputs(claimed_amount=Decimal("5499"), requires_supervisory_review=True,
                                   risk_signals=["HIGH_VALUE_CLAIM_THRESHOLD_EXCEEDED"]))
     assert d.next_action == "AWAIT_APPROVAL" and {"RISK_SUPERVISORY_REVIEW", "AMOUNT_ABOVE_AUTO_LIMIT"} <= set(d.reason_codes)
+
+
+def test_payout_policy_drives_desk_flags_and_four_eyes():
+    from types import SimpleNamespace as NS
+    from app.permissions import next_step, user_permissions, can_propose, PAYOUT_ROLES
+    finance = NS(id="u-fin", role="finance_approver")
+    cs1 = NS(id="u-cs1", role="cs_1")
+    analyst = NS(id="u-risk", role="risk_analyst")
+    normal = NS(classification_evidence={"workflow": {"next_action": "AUTO_APPROVE"}})
+    supervised = NS(classification_evidence={"workflow": {"next_action": "AWAIT_APPROVAL"}})
+    assert can_propose(cs1, normal) is True            # CS-1 keeps its fast-track refund
+    assert can_propose(cs1, supervised) is False       # but not for claims routed to a supervisor
+    assert can_propose(finance, supervised) is True
+    assert user_permissions(analyst)["payout"] == {a: False for a in PAYOUT_ROLES}
+    pending = NS(status="PENDING_APPROVAL", requested_by_id="u-fin", approved_by_id=None)
+    assert next_step(pending, finance)["can_act"] is False  # the proposer cannot approve
+    admin = NS(id="u-admin", role="administrator")
+    assert next_step(pending, admin)["can_act"] is True
+    approved = NS(status="APPROVED", requested_by_id="u-fin", approved_by_id="u-admin")
+    assert next_step(approved, admin)["can_act"] is False  # the approver cannot execute
+    assert next_step(approved, NS(id="u-ops", role="refund_operations"))["can_act"] is True
+
+
+def test_supervised_claim_payout_is_refused_for_cs1_and_me_reports_roles():
+    def login(email):
+        return client.post("/api/v1/auth/login", json={"email": email, "password": "ChangeMe123!"}).json()
+    data = login("cs1@ritos.local")
+    assert "supervisor" in data["user"]["permissions"]["payout_roles"]["propose_supervised"]
+    # an above-limit claim is routed for supervisor approval; a CS-1 agent cannot approve its payout
+    txid = _old_transaction(days_ago=2)
+    with SessionLocal() as db:
+        db.query(Transaction).filter(Transaction.id == txid).update({"amount": 9000})
+        db.commit()
+    auto = _claim(txid, claimed_amount=9000)["automation"]
+    assert auto["next_action"] == "AWAIT_APPROVAL"
+    r = client.post(f"/api/v1/tickets/{auto['ticket_id']}/authorize-payout", headers={"Authorization": f"Bearer {data['access_token']}"})
+    assert r.status_code == 403 and "supervisor" in r.json()["detail"]

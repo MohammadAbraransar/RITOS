@@ -31,7 +31,7 @@ from ..config import settings
 from ..models import Ticket, Transaction, TicketStatus, EvidenceLifecycle, Product, ProductReferenceImage
 from ..services import classify, calculate_priority, ROUTES, refund_key
 from ..proof_reader import run_proof_reading_pipeline, verify_product_identity_and_defect
-from .. import evidence_store
+from .. import evidence_store, llm
 
 from .ledger_agent import verify_ledger_ground_truth
 from .logistics_agent import verify_shipment_logistics
@@ -43,28 +43,39 @@ from .risk_agent import evaluate_customer_risk
 from .decision_agent import DecisionInputs, arbitrate, EVIDENCE_REASONS
 from .review_agent import coordinate_review
 from .communication_agent import draft_customer_resolution_message, customer_state_for
+from .llm_assist import suggest_claim_reason, apply_claim_suggestion, review_briefing, polish_message
+from .decision_agent import PAYMENT_ISSUE_CATEGORIES
 
 logger = logging.getLogger("ritos.agents")
 
 AGENTS = [
     {"id": "ledger_ground_truth", "name": "Agent 1 · Ledger Ground Truth", "mode": "deterministic",
-     "purpose": "Verify the transaction, customer, currency and refundable balance; detect duplicate claims."},
+     "purpose": "Verify the transaction, customer, currency and refundable balance; detect duplicate claims.",
+     "guardrail": "Customer statements never establish payment proof; the ledger is authoritative."},
     {"id": "logistics_verification", "name": "Agent 5 · Carrier & Logistics", "mode": "carrier-adapter",
-     "purpose": "Delivery milestones and proof of delivery, labelled by source (carrier or store record)."},
-    {"id": "claim_analysis", "name": "Agent 3 · Claim Intent & Contradictions", "mode": "rules",
-     "purpose": "Map the claim to the controlled taxonomy and find conflicts with recorded facts."},
+     "purpose": "Delivery milestones and proof of delivery, labelled by source (carrier or store record).",
+     "guardrail": "Reports NOT_CONFIGURED when no carrier integration exists; never invents tracking status."},
+    {"id": "claim_analysis", "name": "Agent 3 · Claim Intent & Contradictions", "mode": "rules+llm-assist",
+     "purpose": "Map the claim to the controlled taxonomy and find conflicts with recorded facts.",
+     "guardrail": "The LLM may only tighten handling and must quote the customer's words; it never moves a claim toward approval."},
     {"id": "evidence_verification", "name": "Agent 7 · Product Identity & Defect Evidence", "mode": "image-quality+vision-provider",
-     "purpose": "Check photos show the purchased product (7A) and the claimed defect (7B); never assume either."},
+     "purpose": "Check photos show the purchased product (7A) and the claimed defect (7B); never assume either.",
+     "guardrail": "Uncalibrated scores; no synthetic certainty. Missing EXIF is never treated as tampering."},
     {"id": "policy_enforcement", "name": "Agent 2 · Return Policy", "mode": "versioned-policy",
-     "purpose": "Apply the store or RITOS policy version, window and merchant defect exceptions."},
+     "purpose": "Apply the store or RITOS policy version, window and merchant defect exceptions.",
+     "guardrail": "Merchant defect exceptions strictly require a verified defect."},
     {"id": "risk_assessment", "name": "Agent 4 · Risk & Velocity", "mode": "versioned-rules",
-     "purpose": "30/90/365-day claim velocity, account age and amount thresholds as review signals."},
+     "purpose": "30/90/365-day claim velocity, account age and amount thresholds as review signals.",
+     "guardrail": "Risk indicators are review flags, not proof of fraud. Never auto-penalizes customers."},
     {"id": "decision_arbiter", "name": "Agent 6 · Decision & Routing Arbiter", "mode": "deterministic",
-     "purpose": "Route to CS-1 / CS-2 / CS-3 by fixed precedence with machine-readable reason codes."},
-    {"id": "review_coordination", "name": "Agent 9 · Human Review Coordinator", "mode": "deterministic",
-     "purpose": "Assign a reviewer, SLA, checklist, required evidence and permitted actions."},
-    {"id": "customer_communication", "name": "Agent 8 · Customer Communication", "mode": "templates",
-     "purpose": "Tell the customer exactly how far the case has progressed."},
+     "purpose": "Route to CS-1 / CS-2 / CS-3 by fixed precedence with machine-readable reason codes.",
+     "guardrail": "Sole routing authority. Models never authorize refunds or execute payouts."},
+    {"id": "review_coordination", "name": "Agent 9 · Human Review Coordinator", "mode": "deterministic+llm-briefing",
+     "purpose": "Assign a reviewer, SLA, checklist, required evidence and permitted actions.",
+     "guardrail": "Briefings are advisory; reviewers decide. Four-eyes separation of duties on payouts."},
+    {"id": "customer_communication", "name": "Agent 8 · Customer Communication", "mode": "templates+llm-wording",
+     "purpose": "Tell the customer exactly how far the case has progressed.",
+     "guardrail": "Never promises a refund or states 'refunded' before settlement; LLM wording cannot add amounts or dates."},
 ]
 
 # Carrier outcomes that confirm a parcel will not arrive
@@ -171,6 +182,14 @@ def claim_analysis(s: PipelineState) -> dict:
     t.queue = ROUTES.get(t.category, "Manual Triage")
 
     s.claim = classify_claim_reason(t.description, s.store_facts.get("reason"))
+    # LLM assist: may only tighten handling (catch what the keyword rules missed); see agents/llm_assist.py
+    assist = suggest_claim_reason(t.description, t.customer_name)
+    applied = apply_claim_suggestion(s.claim, assist)
+    if applied["adopted"]:
+        s.claim.update(controlled_reason=applied["adopted"], source="LLM_ASSIST", matched_terms=[assist["suggestion"]["quote"]])
+        if applied["adopted"] in PAYMENT_ISSUE_CATEGORIES:  # payment disputes are reconciled, never auto-paid
+            t.category = applied["adopted"]
+            t.queue = ROUTES.get(t.category, "Manual Triage")
     contradictions = analyze_contradictions(
         claimed_reason=s.claim["controlled_reason"],
         product_category=t.item_category or "GENERAL",
@@ -178,8 +197,11 @@ def claim_analysis(s: PipelineState) -> dict:
         evidence_features=[],
         signed_delivery=bool(s.logistics.get("signed_delivery")),
     )
+    if applied["contradiction"]:
+        contradictions.append(applied["contradiction"])
     s.claim["contradictions"] = contradictions
     return {
+        "llm_assist": {"suggestion": assist["suggestion"], "outcome": applied["note"], **assist["llm"]},
         "controlled_reason": s.claim["controlled_reason"],
         "reason_source": s.claim["source"],
         "matched_terms": s.claim["matched_terms"],
@@ -350,6 +372,22 @@ def decision_arbiter(s: PipelineState) -> dict:
 # ---------------------------------------------------------------------------
 def review_coordination(s: PipelineState) -> dict:
     s.review = coordinate_review(s.db, s.ticket, s.decision)
+    if s.review.get("review_required"):
+        t = s.ticket
+        context = {
+            "routing decision": s.decision.get("reason"),
+            "reason codes": ", ".join(s.decision.get("reason_codes", [])),
+            "ledger check": s.verification.get("status"),
+            "policy": s.policy.get("reason"),
+            "claim reason": s.claim.get("controlled_reason"),
+            "contradictions": "; ".join(s.claim.get("contradictions", [])),
+            "photo evidence": f"{s.vision.get('images_count', 0)} photo(s); product identity {s.identity.get('identity_status')}, "
+                              f"defect {s.defect.get('defect_status')}",
+            "risk": f"{s.risk.get('tier')} ({', '.join(sig['signal'] for sig in s.risk.get('signals', []))})",
+            "evidence still needed": ", ".join(s.decision.get("required_evidence", [])),
+            "customer's words": llm.redact(t.description, [t.customer_name]),
+        }
+        s.review["briefing"] = review_briefing(context, s.decision.get("reviewer_checklist", []), s.decision.get("reason", ""))
     return dict(s.review)
 
 
@@ -363,7 +401,10 @@ def customer_communication(s: PipelineState) -> dict:
         customer_name=t.customer_name, order_id=t.order_id, item_name=t.item_name,
         claimed_amount=float(t.claimed_amount), currency=t.currency, lifecycle_status=state,
         reason=s.decision["reason"], proof_required=t.proof_required)
+    polished = polish_message(t.customer_message_draft, t.customer_name)
+    t.customer_message_draft = polished["text"]
     return {"customer_state": state, "customer_message_draft": t.customer_message_draft,
+            "message_source": polished["source"], "llm_assist": polished["llm"],
             "findings": f"Drafted '{state.replace('_', ' ').lower()}' message for the customer."}
 
 

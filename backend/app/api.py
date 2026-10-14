@@ -6,7 +6,7 @@ from typing import Optional
 from pydantic import BaseModel
 from fastapi import APIRouter, Depends, HTTPException, Query, Header, Request
 from sqlalchemy.orm import Session, selectinload
-from sqlalchemy import select, func, desc
+from sqlalchemy import select, func, desc, case, and_
 from .database import get_db
 from .models import (
     User, Ticket, TicketComment, TicketEvent, Transaction, RefundRequest, RefundStatus, TicketStatus,
@@ -20,6 +20,8 @@ from .schemas import (
     EvidenceUploadIn, EvidenceVerifyIn, SettlementExecuteIn
 )
 from .security import verify_password, create_access_token, get_current_user, require_roles
+from .permissions import (require_payout, user_permissions, next_step, can_propose, require_can_propose, proposal_action,
+                          PAYOUT_ROLES, PROPOSE, APPROVE, EXECUTE, RECONCILE)
 from .services import (
     classify, calculate_priority, find_duplicate,
     record_event, audit, refund_key, ROUTES, generate_customer_message_draft
@@ -116,10 +118,10 @@ def login(payload: LoginIn, db: Session=Depends(get_db)):
         raise HTTPException(401,"Incorrect email or password")
     audit(db,user.id,"LOGIN","user",user.id,{"role":user.role})
     db.commit()
-    return {"access_token":create_access_token(user),"token_type":"bearer","user":user_view(user)}
+    return {"access_token":create_access_token(user),"token_type":"bearer","user":user_view(user) | {"permissions":user_permissions(user)}}
 
 @router.get("/auth/me")
-def me(user: User=Depends(get_current_user)): return user_view(user)
+def me(user: User=Depends(get_current_user)): return user_view(user) | {"permissions":user_permissions(user)}
 
 @router.post("/auth/logout")
 def logout(user: User=Depends(get_current_user)):
@@ -297,8 +299,14 @@ def refunds(db:Session=Depends(get_db),user:User=Depends(get_current_user)):
     if user.role==Role.CUSTOMER.value:
         stmt=stmt.join(Ticket,RefundRequest.ticket_id==Ticket.id).where(Ticket.customer_id==user.id)
     rows=db.scalars(stmt).all()
-    return [{"id":r.id,"ticket_id":r.ticket_id,"transaction_id":r.transaction_id,"amount":float(r.amount),"currency":r.currency,
-      "status":r.status,"reason":r.reason,"provider_reference":r.provider_reference,"created_at":r.created_at.isoformat()} for r in rows]
+    return [refund_row(r, user) for r in rows]
+
+def refund_row(r: RefundRequest, user: User) -> dict:
+    """Refund for the desk, with what it is waiting for and whether this user may do it (permissions.py policy)."""
+    return {"id":r.id,"ticket_id":r.ticket_id,"transaction_id":r.transaction_id,"amount":float(r.amount),"currency":r.currency,
+            "status":r.status,"reason":r.reason,"provider_reference":r.provider_reference,"created_at":r.created_at.isoformat(),
+            "updated_at":r.updated_at.isoformat() if r.updated_at else None,
+            "requested_by_id":r.requested_by_id,"approved_by_id":r.approved_by_id,"next_step":next_step(r, user)}
 
 def propose_refund(db: Session, t: Ticket, user: User, amount: Decimal, reason: str) -> dict:
     """Create (or return) the refund proposal for a ticket. Money moves only after an independent approval
@@ -337,7 +345,7 @@ def create_refund(payload:RefundCreate,db:Session=Depends(get_db),user:User=Depe
     return propose_refund(db, t, user, payload.amount, payload.reason)
 
 @router.post("/refunds/{refund_id}/approve")
-def approve_refund(refund_id:str,payload:RefundDecision,db:Session=Depends(get_db),user:User=Depends(require_roles(Role.FINANCE.value,Role.ADMIN.value))):
+def approve_refund(refund_id:str,payload:RefundDecision,db:Session=Depends(get_db),user:User=Depends(require_payout(APPROVE))):
     r=db.get(RefundRequest,refund_id)
     if not r: raise HTTPException(404,"Refund request not found")
     if r.requested_by_id==user.id: raise HTTPException(409,"Separation of duties: approver cannot approve their own request")
@@ -349,7 +357,7 @@ def approve_refund(refund_id:str,payload:RefundDecision,db:Session=Depends(get_d
     return {"id":r.id,"status":r.status}
 
 @router.post("/refunds/{refund_id}/reject")
-def reject_refund(refund_id:str,payload:RefundDecision,db:Session=Depends(get_db),user:User=Depends(require_roles(Role.FINANCE.value,Role.ADMIN.value))):
+def reject_refund(refund_id:str,payload:RefundDecision,db:Session=Depends(get_db),user:User=Depends(require_payout(APPROVE))):
     r=db.get(RefundRequest,refund_id)
     if not r: raise HTTPException(404,"Refund request not found")
     if r.status!=RefundStatus.PENDING_APPROVAL.value: raise HTTPException(409,"Refund is not awaiting approval")
@@ -363,7 +371,7 @@ def execute_refund(
     refund_id: str,
     idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),
     db: Session = Depends(get_db),
-    user: User = Depends(require_roles(Role.FINANCE.value, Role.REFUNDS.value, Role.ADMIN.value))
+    user: User = Depends(require_payout(EXECUTE))
 ):
     if not idempotency_key:
         raise HTTPException(400, "Idempotency-Key header is required for settlement execution")
@@ -579,19 +587,25 @@ def analytics(db:Session=Depends(get_db),user:User=Depends(require_roles(
     Role.SUPPORT.value,Role.SUPERVISOR.value,Role.ADMIN.value,Role.REFUNDS.value,
     Role.RISK.value,Role.FINANCE.value,Role.AUDITOR.value,Role.CS_1.value,Role.CS_2.value,Role.CS_3.value
 ))):
-    tickets = db.scalars(visible_ticket_query(db, user)).all()
-    ticket_ids = {t.id for t in tickets}
-    all_refunds = db.scalars(select(RefundRequest)).all()
-    refunds = [r for r in all_refunds if r.ticket_id in ticket_ids] if user.role in {Role.CS_1.value, Role.CS_2.value, Role.CS_3.value} else all_refunds
-    status_counts={}
-    category_counts={}
-    for t in tickets:
-        status_counts[t.status]=status_counts.get(t.status,0)+1
-        category_counts[t.category]=category_counts.get(t.category,0)+1
-    return {"total_tickets":len(tickets),"open_tickets":sum(1 for t in tickets if t.status not in {TicketStatus.RESOLVED.value,TicketStatus.REJECTED.value}),
-      "urgent_tickets":sum(1 for t in tickets if t.priority=="P1"),"unassigned_tickets":sum(1 for t in tickets if not t.assigned_to_id),
-      "sla_breaches":sum(1 for t in tickets if t.status=="ESCALATED"),"refund_requested":float(sum((Decimal(str(r.amount)) for r in refunds),Decimal("0"))),
-      "refund_completed":float(sum((Decimal(str(r.amount)) for r in refunds if r.status==RefundStatus.REFUNDED.value),Decimal("0"))),
+    # Aggregated in the database over the tickets this user can see (same scope as the ticket list).
+    visible = visible_ticket_query(db, user).order_by(None).subquery()
+    closed = [TicketStatus.RESOLVED.value, TicketStatus.REJECTED.value]
+    totals = db.execute(select(
+        func.count(visible.c.id),
+        func.count(case((visible.c.status.notin_(closed), 1))),
+        func.count(case((visible.c.priority == "P1", 1))),
+        func.count(case((visible.c.assigned_to_id.is_(None), 1))),
+        func.count(case((visible.c.status == "ESCALATED", 1))),
+    )).one()
+    status_counts = dict(db.execute(select(visible.c.status, func.count()).group_by(visible.c.status)).all())
+    category_counts = dict(db.execute(select(visible.c.category, func.count()).group_by(visible.c.category)).all())
+    refund_q = select(func.coalesce(func.sum(RefundRequest.amount), 0),
+                      func.coalesce(func.sum(case((RefundRequest.status == RefundStatus.REFUNDED.value, RefundRequest.amount))), 0))
+    if user.role in {Role.CS_1.value, Role.CS_2.value, Role.CS_3.value}:
+        refund_q = refund_q.where(RefundRequest.ticket_id.in_(select(visible.c.id)))
+    requested, completed = db.execute(refund_q).one()
+    return {"total_tickets":totals[0],"open_tickets":totals[1],"urgent_tickets":totals[2],"unassigned_tickets":totals[3],
+      "sla_breaches":totals[4],"refund_requested":float(requested),"refund_completed":float(completed),
       "status_counts":status_counts,"category_counts":category_counts,"as_of":datetime.now(timezone.utc).isoformat()}
 
 @router.get("/admin/audit-logs")
@@ -691,13 +705,11 @@ def get_refund(refund_id:str,db:Session=Depends(get_db),user:User=Depends(get_cu
     if not r: raise HTTPException(404,"Refund request not found")
     t=db.get(Ticket,r.ticket_id)
     if user.role==Role.CUSTOMER.value and t.customer_id!=user.id: raise HTTPException(404,"Refund request not found")
-    return {"id":r.id,"ticket_id":r.ticket_id,"transaction_id":r.transaction_id,"amount":float(r.amount),
-            "currency":r.currency,"status":r.status,"reason":r.reason,"approved_by_id":r.approved_by_id,
-            "provider_reference":r.provider_reference,"created_at":r.created_at.isoformat(),"updated_at":r.updated_at.isoformat()}
+    return refund_row(r, user)
 
 @router.post("/refunds/{refund_id}/reconcile")
 def reconcile_refund(refund_id: str, db: Session = Depends(get_db),
-                     user: User = Depends(require_roles(Role.FINANCE.value, Role.ADMIN.value, Role.AUDITOR.value))):
+                     user: User = Depends(require_payout(RECONCILE))):
     """Ask the payment provider what actually happened to an uncertain settlement and apply it exactly once."""
     return FinancialSettlementService.reconcile_settlement(db, refund_id, user)
 
@@ -710,7 +722,7 @@ async def gateway_webhook(provider: str, request: Request, db: Session = Depends
     return FinancialSettlementService.handle_gateway_webhook(db, provider, raw, signature or "")
 
 @router.get("/automation/agents")
-def automation_agents(user:User=Depends(require_roles(Role.SUPPORT.value,Role.SUPERVISOR.value,Role.ADMIN.value,Role.REFUNDS.value,Role.RISK.value,Role.FINANCE.value,Role.AUDITOR.value,Role.CS_1.value,Role.CS_2.value,Role.CS_3.value))):
+def automation_agents(user:User=Depends(get_current_user)):  # the registry is not sensitive; screens for every role use it
     return {"orchestrator":ORCHESTRATOR,"agents":AGENTS,"count":len(AGENTS),"total_components":len(AGENTS)+1,
             "execution_policy":"Deterministic financial controls; no refund execution from classification or risk signals alone."}
 
@@ -751,38 +763,40 @@ def customer_transactions(db:Session=Depends(get_db),
 
 @router.get("/automation/summary")
 def automation_summary(db:Session=Depends(get_db),user:User=Depends(require_roles(Role.SUPPORT.value,Role.SUPERVISOR.value,Role.ADMIN.value,Role.REFUNDS.value,Role.RISK.value,Role.FINANCE.value,Role.AUDITOR.value,Role.CS_1.value,Role.CS_2.value,Role.CS_3.value))):
-    tickets=db.scalars(select(Ticket)).all()
-    events=db.scalars(select(TicketEvent).where(TicketEvent.event_type=="AUTOMATION_PIPELINE_COMPLETED")).all()
-    return {"agent_count":len(AGENTS),"orchestrator_count":1,"pipeline_runs":len(events),
-      "tickets_total":len(tickets),"tickets_flagged_duplicate":sum(1 for t in tickets if t.duplicate_of_id),
-      "tickets_needing_verification":sum(1 for t in tickets if t.payment_verification not in {"VERIFIED","ALREADY_REFUNDED"}),
-      "tickets_high_priority":sum(1 for t in tickets if t.priority=="P1"),
+    # Counted in the database: loading every ticket and event (with their traces) took ~20 s over the WAN.
+    t = db.execute(select(
+        func.count(Ticket.id),
+        func.count(Ticket.duplicate_of_id),
+        func.count(case((Ticket.payment_verification.notin_(["VERIFIED", "ALREADY_REFUNDED"]), 1))),
+        func.count(case((Ticket.priority == "P1", 1))),
+    )).one()
+    runs = db.scalar(select(func.count(TicketEvent.id)).where(TicketEvent.event_type == "AUTOMATION_PIPELINE_COMPLETED")) or 0
+    return {"agent_count":len(AGENTS),"orchestrator_count":1,"pipeline_runs":runs,
+      "tickets_total":t[0],"tickets_flagged_duplicate":t[1],"tickets_needing_verification":t[2],"tickets_high_priority":t[3],
       "refund_execution_mode":gateway_status()["active_provider"],"real_provider_configured":gateway_status()["live_payments_enabled"],
       "note":"Counts are computed from persisted records; mock provider results are not real financial outcomes."}
 
 @router.get("/desks/summary")
 def desks_summary(db:Session=Depends(get_db),user:User=Depends(get_current_user)):
-    tickets=db.scalars(select(Ticket)).all()
-    cs1_pending = [t for t in tickets if t.decision_bucket=="GENUINE_REFUNDABLE" and t.status not in {TicketStatus.RESOLVED.value, TicketStatus.REJECTED.value}]
-    cs2_pending = [t for t in tickets if t.decision_bucket=="EXCEPTIONAL_PROOF_NEEDED" and t.status not in {TicketStatus.RESOLVED.value, TicketStatus.REJECTED.value}]
-    cs3_pending = [t for t in tickets if t.decision_bucket=="NON_REFUNDABLE" and t.status not in {TicketStatus.RESOLVED.value, TicketStatus.REJECTED.value}]
-    resolved = [t for t in tickets if t.status in {TicketStatus.RESOLVED.value, TicketStatus.REJECTED.value}]
-    return {
-        "cs1_count": len(cs1_pending),
-        "cs2_count": len(cs2_pending),
-        "cs3_count": len(cs3_pending),
-        "resolved_count": len(resolved),
-        "total_active": len(cs1_pending) + len(cs2_pending) + len(cs3_pending),
-        "total_tickets": len(tickets)
-    }
+    closed = [TicketStatus.RESOLVED.value, TicketStatus.REJECTED.value]
+    is_open = Ticket.status.notin_(closed)
+    row = db.execute(select(
+        func.count(case((and_(Ticket.decision_bucket == "GENUINE_REFUNDABLE", is_open), 1))),
+        func.count(case((and_(Ticket.decision_bucket == "EXCEPTIONAL_PROOF_NEEDED", is_open), 1))),
+        func.count(case((and_(Ticket.decision_bucket == "NON_REFUNDABLE", is_open), 1))),
+        func.count(case((Ticket.status.in_(closed), 1))),
+        func.count(Ticket.id),
+    )).one()
+    return {"cs1_count": row[0], "cs2_count": row[1], "cs3_count": row[2], "resolved_count": row[3],
+            "total_active": row[0] + row[1] + row[2], "total_tickets": row[4]}
 
 @router.post("/cs1/tickets/{ticket_id}/direct-refund")
-def cs1_direct_refund(ticket_id:str, db:Session=Depends(get_db),
-                      user:User=Depends(require_roles(Role.CS_1.value, Role.SUPPORT.value, Role.REFUNDS.value, Role.ADMIN.value, Role.SUPERVISOR.value))):
+def cs1_direct_refund(ticket_id:str, db:Session=Depends(get_db), user:User=Depends(get_current_user)):
     """CS-1 fast track: approve the claim. Store orders are refunded by the store; RITOS-ledger orders get a
     refund proposal that a different finance approver must approve and a third person must execute."""
     ticket = db.get(Ticket, ticket_id)
     if not ticket: raise HTTPException(404, "Ticket not found")
+    require_can_propose(user, ticket)  # same payout policy as authorize-payout (permissions.py)
     require_cs1_bucket(ticket)
     if ticket.payment_verification != "VERIFIED":
         raise HTTPException(409, f"Cannot issue refund: Ledger status is {ticket.payment_verification}")
@@ -1048,10 +1062,31 @@ def handle_proof_action(ticket_id: str, payload: ProofActionPayload, db: Session
     db.refresh(t)
     return {"status": "SUCCESS", "ticket": ticket_view(t)}
 
+@router.get("/payouts/awaiting-authorization")
+def payouts_awaiting_authorization(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """CS-1 tickets whose refund still needs someone to authorize the payout.
+
+    Excludes tickets already refunded or decided, ones the store is already paying (decision sent), and ones with
+    an active refund proposal (those are in the approvals queue).
+    """
+    active = select(RefundRequest.ticket_id).where(RefundRequest.status.notin_([RefundStatus.REJECTED.value, RefundStatus.FAILED.value]))
+    rows = db.scalars(select(Ticket).where(
+        Ticket.decision_bucket == "GENUINE_REFUNDABLE",
+        Ticket.refund_status.notin_(["APPROVED", "REJECTED", "REFUNDED"]),
+        Ticket.status.notin_([TicketStatus.RESOLVED.value, TicketStatus.REJECTED.value]),
+        Ticket.id.notin_(active),
+    ).options(selectinload(Ticket.comments)).order_by(Ticket.created_at)).all()
+    if user.role == Role.CUSTOMER.value:
+        raise HTTPException(403, "Your role is not permitted to perform this action")
+    # Every staff user sees the queue; can_authorize says whether this user may approve each claim's payout.
+    return [ticket_view(t, include_private=True) | {"can_authorize": can_propose(user, t),
+            "authorize_roles": sorted(PAYOUT_ROLES[proposal_action(t)])} for t in rows]
+
 @router.post("/tickets/{ticket_id}/authorize-payout")
-def authorize_payout(ticket_id: str, db: Session = Depends(get_db), user: User = Depends(require_roles(Role.FINANCE.value, Role.REFUNDS.value, Role.ADMIN.value))):
+def authorize_payout(ticket_id: str, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     t = db.get(Ticket, ticket_id)
     if not t: raise HTTPException(404, "Ticket not found")
+    require_can_propose(user, t)
     if t.refund_status == "REFUNDED":
         return {"status": "ALREADY_REFUNDED", "ticket": ticket_view(t)}
     require_cs1_bucket(t)

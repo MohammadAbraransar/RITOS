@@ -7,9 +7,14 @@ import { TicketStatus } from "@prisma/client";
 
 export const dynamic = "force-dynamic";
 
+// PROCESSING = RITOS is working on it; HUMAN_REVIEW = a person on the RITOS desk must decide.
 const StatusReportSchema = z.object({
-  status: z.literal("PROCESSING"),
+  status: z.enum(["PROCESSING", "HUMAN_REVIEW"]),
 });
+const ALLOWED_FROM: Record<"PROCESSING" | "HUMAN_REVIEW", string[]> = {
+  PROCESSING: ["PENDING_RITOS"],
+  HUMAN_REVIEW: ["PENDING_RITOS", "PROCESSING"],
+};
 
 export async function POST(req: Request, { params }: { params: { ticketId: string } }) {
   const { error } = requireRitosAuth(req);
@@ -18,7 +23,7 @@ export async function POST(req: Request, { params }: { params: { ticketId: strin
   const body = await req.json();
   const parsed = StatusReportSchema.safeParse(body);
   if (!parsed.success) {
-    return errorResponse("VALIDATION_ERROR", "Only PROCESSING status is allowed", 422);
+    return errorResponse("VALIDATION_ERROR", "status must be PROCESSING or HUMAN_REVIEW", 422);
   }
 
   try {
@@ -30,28 +35,25 @@ export async function POST(req: Request, { params }: { params: { ticketId: strin
       return errorResponse("NOT_FOUND", `Ticket ${params.ticketId} not found`, 404);
     }
 
-    if (ticket.status !== "PENDING_RITOS") {
-      return errorResponse(
-        "ILLEGAL_TRANSITION",
-        `Cannot set ticket in status ${ticket.status} to PROCESSING`,
-        409
-      );
+    const target = parsed.data.status;
+    if (ticket.status === target) {
+      return NextResponse.json({ ticket_id: ticket.id, status: target, unchanged: true }); // replay
+    }
+    if (!ALLOWED_FROM[target].includes(ticket.status)) {
+      return errorResponse("ILLEGAL_TRANSITION", `Cannot set ticket in status ${ticket.status} to ${target}`, 409);
     }
 
     await prisma.$transaction(async (tx) => {
       await transitionTicket(
         tx,
         ticket.id,
-        TicketStatus.PROCESSING,
+        target as TicketStatus,
         "RITOS",
-        "RITOS_PROCESSING_STARTED"
+        target === "HUMAN_REVIEW" ? "RITOS_HUMAN_REVIEW" : "RITOS_PROCESSING_STARTED"
       );
     });
 
-    return NextResponse.json({
-      ticket_id: ticket.id,
-      status: "PROCESSING",
-    });
+    return NextResponse.json({ ticket_id: ticket.id, status: target });
   } catch (err: any) {
     return errorResponse("INTERNAL", err.message, 500);
   }

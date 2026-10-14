@@ -1,7 +1,10 @@
 # Terminate any processes listening on RITOS & ShopFlow ports, including their child processes.
 # (uvicorn --reload serves from a child process that inherits the socket; killing only the parent leaves the port busy.)
 # Shells and the editor are never killed, even if they show up as a port owner.
-$ports = @(5173, 8000, 3000)
+# pnpm passes the configured ports (scripts/dev/ports.mjs) as one comma-separated argument
+param([string]$Ports = "5173,8000,3000")
+# (a new name: PowerShell variables ignore case, so $ports would overwrite the [string] parameter)
+$portList = $Ports -split "[,\s]+" | Where-Object { $_ } | ForEach-Object { [int]$_ }
 $protected = "powershell|pwsh|cmd|code|conhost|WindowsTerminal"
 
 function Stop-Tree([int]$procId) {
@@ -13,7 +16,7 @@ function Stop-Tree([int]$procId) {
     Stop-Process -Id $procId -Force -ErrorAction SilentlyContinue
 }
 
-foreach ($port in $ports) {
+foreach ($port in $portList) {
     try {
         $conns = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue
         if ($conns) {

@@ -1,3 +1,5 @@
+import { settleRefund } from "@/server/services/settlement.service";
+import { RefundTxStatus, TicketStatus } from "@prisma/client";
 import { config } from "@/server/config";
 import { NextResponse } from "next/server";
 import { prisma } from "@/server/db";
@@ -43,21 +45,11 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
         (rt) => rt.status === "PENDING" && rt.settleAt && rt.settleAt.getTime() <= Date.now()
       );
       if (pendingTx) {
-        const { settleTicketRefund } = await import("@/server/state-machine/ticket-state-machine");
-        const { RefundTxStatus, TicketStatus } = await import("@prisma/client");
         try {
-          await prisma.$transaction(async (tx) => {
-            await tx.refundTransaction.update({
-              where: { id: pendingTx.id },
-              data: { status: RefundTxStatus.SUCCESS },
-            });
-            await settleTicketRefund(tx, ticket.id, "SETTLEMENT_POLLER", {
-              refund_id: pendingTx.id,
-              amount_minor: pendingTx.amountMinor,
-            });
-          });
-          ticket.status = TicketStatus.REFUNDED;
-          pendingTx.status = RefundTxStatus.SUCCESS; // keep the returned copy in step with the database
+          if (await settleRefund(pendingTx.id)) {
+            ticket.status = TicketStatus.REFUNDED;
+            pendingTx.status = RefundTxStatus.SUCCESS; // keep the returned copy in step with the database
+          }
         } catch (err: any) {
           console.error(`[Settlement] ticket ${ticket.id} could not be settled: ${err?.message || err}`);
         }
@@ -78,6 +70,9 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
       if (ae.event === "TICKET_CREATED") {
         title = "Ticket Submitted";
         description = "Your refund request was received and submitted for review.";
+      } else if (ae.event === "RITOS_HUMAN_REVIEW") {
+        title = "With Our Review Team";
+        description = "A specialist is reviewing your request; we will update you here.";
       } else if (ae.event === "RITOS_PROCESSING_STARTED") {
         title = "Under Orchestration";
         description = "Automated policy and order verification is underway.";

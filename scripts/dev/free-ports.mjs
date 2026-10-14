@@ -2,13 +2,13 @@
 import { execSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { allPorts as ports } from "./ports.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const ports = [5173, 8000, 3000];
 
 try {
   if (process.platform === "win32") {
-    execSync(`powershell -NoProfile -ExecutionPolicy Bypass -File "${join(root, "scripts", "kill_ports.ps1")}"`, { stdio: "inherit" });
+    execSync(`powershell -NoProfile -ExecutionPolicy Bypass -File "${join(root, "scripts", "kill_ports.ps1")}" -Ports ${ports.join(",")}`, { stdio: "inherit" });
   } else {
     for (const port of ports) {
       execSync(`lsof -ti tcp:${port} | xargs -r kill -9`, { stdio: "ignore", shell: "/bin/sh" });

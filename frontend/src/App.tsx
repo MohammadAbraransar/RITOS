@@ -8,7 +8,7 @@ import {
   Shield, ShieldAlert, Sparkles, Ticket as TicketIcon, Users, WalletCards, X, Zap,
   Camera, Cpu, GitFork, UploadCloud, Trash2
 } from 'lucide-react'
-import { api, API_ROOT, getToken, setToken, type Ticket, type User } from './api'
+import { api, API_ROOT, getToken, setToken, type NextStep, type Ticket, type User } from './api'
 import { isClosedStatus, priorityRank } from './logic'
 
 export { isClosedStatus, priorityRank }
@@ -26,17 +26,7 @@ const roles = [
 // Local demo only: lets the role buttons sign in. Never set in production builds.
 const DEMO_PASSWORD: string = import.meta.env.VITE_DEMO_PASSWORD || ''
 
-const AGENT_CATALOG = [
-  { id: 'ledger_ground_truth', name: 'Agent 1 · Ledger Ground Truth', mode: 'Deterministic SQL / Double-Entry', purpose: 'Verifies transaction existence, customer identity, currency match, and refundable balance accounting for pending reservations and duplicates.', guardrail: 'Customer statements never establish payment proof; ledger is authoritative.' },
-  { id: 'logistics_verification', name: 'Agent 5 · Carrier & Logistics', mode: 'Carrier Adapter', purpose: 'Inspects delivery milestones and proof of delivery, explicitly distinguishing carrier data from merchant order facts.', guardrail: 'Reports NOT_CONFIGURED when live carrier API is absent; never invents tracking status.' },
-  { id: 'claim_analysis', name: 'Agent 3 · Claim Intent & Contradictions', mode: 'Controlled Taxonomy Rules', purpose: 'Maps claims to controlled operational categories and detects factual contradictions (e.g., signed delivery vs claimed non-receipt).', guardrail: 'Never invents confidence scores; treats customer statements as claims, not proof.' },
-  { id: 'evidence_verification', name: 'Agent 7 · Product Identity & Defect Evidence', mode: 'Pillow / OpenCLIP Semantic', purpose: 'Validates file signatures, runs image quality gates (blur, exposure, blankness), and verifies product identity (7A) and defect (7B).', guardrail: 'Uncalibrated scores; no synthetic certainty. Absences of EXIF never treated as tampering.' },
-  { id: 'policy_enforcement', name: 'Agent 2 · Return Policy', mode: 'Versioned Policy Rules', purpose: 'Enforces category return windows, final sale rules, and merchant defect exceptions against versioned policy records.', guardrail: 'Merchant defect exceptions strictly require a verified defect.' },
-  { id: 'risk_assessment', name: 'Agent 4 · Risk & Velocity', mode: 'Historical Velocity Engine', purpose: 'Calculates 30/90/365-day claim frequency, customer account tenure, and monetary thresholds as review signals.', guardrail: 'Risk indicators are review flags, not proof of fraud. Never auto-penalizes customers.' },
-  { id: 'decision_arbiter', name: 'Agent 6 · Decision & Routing Arbiter', mode: 'Deterministic Finite State Machine', purpose: 'Authoritative routing engine that routes cases to CS-1 (Auto-Approve), CS-2 (Human Review), or CS-3 (Denial).', guardrail: 'Sole routing authority. Models never authorize refunds or execute payouts.' },
-  { id: 'review_coordination', name: 'Agent 9 · Human Review Coordinator', mode: 'Least-Loaded SLA Assignment', purpose: 'Assigns least-loaded reviewers, computes SLA deadlines, and compiles evidence checklists and permitted actions.', guardrail: 'Enforces four-eyes separation of duties and reviewer independence.' },
-  { id: 'customer_communication', name: 'Agent 8 · Customer Communication', mode: 'Stage-Aware Templates', purpose: 'Drafts clear, transparent resolution messages reflecting the exact current stage of the adjudication process.', guardrail: 'Never promises a refund or states "refunded" before financial settlement is complete.' }
-]
+// The agent registry comes from the API (GET /automation/agents): one source of truth with the orchestrator.
 
 const navFor = (role: string) => {
   if (role === 'cs_1') {
@@ -85,21 +75,42 @@ const navFor = (role: string) => {
     ['💰 Finance Approvals Queue', 'finance_queue'],
     ['All Team Tickets Queue', 'tickets'],
     ['🛒 eCommerce Integration Hub', 'ecommerce'],
-    [`${AGENT_CATALOG.length} Specialist Agents Registry`, 'automation'],
+    ['Specialist Agents Registry', 'automation'],
     ['Settlement Register', 'refunds'],
     ['Security Audit Trail', 'audit']
   ]
 }
 
 const roleTitle = (r: string) => roles.find(x => x.role === r)?.label || r
-const money = (n: number, c: string = import.meta.env.VITE_DEFAULT_CURRENCY || 'INR') =>
-  new Intl.NumberFormat('en-IN', { style: 'currency', currency: c, maximumFractionDigits: 2 }).format(n || 0)
+// Display locale/currency come from configuration (frontend/.env); records carry their own currency.
+const LOCALE: string = import.meta.env.VITE_LOCALE || navigator.language
+const money = (n: number, c: string | undefined = import.meta.env.VITE_DEFAULT_CURRENCY) =>
+  c ? new Intl.NumberFormat(LOCALE, { style: 'currency', currency: c, maximumFractionDigits: 2 }).format(n || 0)
+    : new Intl.NumberFormat(LOCALE, { maximumFractionDigits: 2 }).format(n || 0)
+
+// Payout approval rights for a claim: claims RITOS routed for approval (AWAIT_APPROVAL) need a supervisory role.
+function proposalRoles(user: User | null, t: Ticket): string[] {
+  const supervised = (t as any).classification_evidence?.workflow?.next_action === 'AWAIT_APPROVAL'
+  return user?.permissions?.payout_roles[supervised ? 'propose_supervised' : 'propose'] || []
+}
+const canProposeFor = (user: User | null, t: Ticket) => !!user && proposalRoles(user, t).includes(user.role)
+
+// Who must act next on a refund, rendered from the server's policy (backend/app/permissions.py).
+const roleLabel = (r: string) => r.replace(/_/g, ' ')
+function waitingFor(step: NextStep, userId?: string): string {
+  if (!step) return ''
+  const who = step.roles.map(roleLabel).join(' or ')
+  const self = userId && step.excluded_user_ids.includes(userId) ? ' (a colleague: you already acted on this refund)' : ''
+  return `Waiting for ${step.action} by ${who}${self}`
+}
 const date = (d: string) => new Date(d).toLocaleString()
 
 function App() {
   const [user, setUser] = useState<User | null>(null)
   const [email, setEmail] = useState('cs1@ritos.local')
   const [password, setPassword] = useState('')
+  const [agentCatalog, setAgentCatalog] = useState<any[]>([])
+  const [awaitingPayout, setAwaitingPayout] = useState<Ticket[]>([])
   const [loginError, setLoginError] = useState('')
   const [busy, setBusy] = useState(false)
 
@@ -155,7 +166,7 @@ function App() {
     item_name: 'Fastrack Smartwatch Reflex',
     item_category: 'ELECTRONICS',
     claimed_amount: '1500',
-    currency: 'INR',
+    currency: import.meta.env.VITE_DEFAULT_CURRENCY || '',
     category: 'DEFECTIVE_PRODUCT',
     description: 'Product received with display defect and erratic touch response out of the box.',
     custom_photo_base64: '' as string,
@@ -223,19 +234,20 @@ function App() {
         return
       }
 
-      const [t, m, r, d, txs] = await Promise.all([
+      // Lists first (what people act on); dashboard figures fill in independently and can never block them.
+      const [t, r] = await Promise.all([
         api.tickets(params.toString() ? '?' + params.toString() : ''),
-        isCustomer ? Promise.resolve(null) : api.analytics(),
         api.refunds(),
-        isCustomer ? Promise.resolve(null) : api.desksSummary().catch(() => null),
-        isCustomer ? api.customerTransactions().catch(() => []) : Promise.resolve([])
       ])
       setTickets(t.items)
-      setMetrics(m)
       setRefunds(r)
-      if (d) setDesks(d)
-      if (txs) setCustomerTxs(txs)
       setApiStatus('connected')
+      if (!isCustomer) {
+        api.analytics().then(setMetrics).catch(() => {})
+        api.desksSummary().then(setDesks).catch(() => {})
+      } else {
+        api.customerTransactions().then(setCustomerTxs).catch(() => {})
+      }
 
       if (!isCustomer) {
         try {
@@ -282,6 +294,7 @@ function App() {
   useEffect(() => {
     if (user) {
       load(true)
+      api.automationAgents().then((r) => setAgentCatalog(r.agents || [])).catch(() => setAgentCatalog([]))
     }
   }, [user])
 
@@ -444,6 +457,12 @@ function App() {
   }
 
   // --- FINANCE PAYOUT AUTHORIZATION ---
+  function loadAwaitingPayout() {
+    if (!user || user.role === 'customer') return
+    api.payoutsAwaitingAuthorization().then(setAwaitingPayout).catch(() => setAwaitingPayout([]))
+  }
+  useEffect(() => { if (page === 'finance_queue') loadAwaitingPayout() }, [page, user])
+
   async function handleAuthorizePayout(t: Ticket) {
     setBusy(true)
     try {
@@ -457,6 +476,7 @@ function App() {
       }
       setSelected(res.ticket)
       await load()
+      loadAwaitingPayout()
     } catch (err) {
       setNotice(`Payout Execution Failed: ${(err as Error).message}`)
     } finally {
@@ -545,7 +565,7 @@ function App() {
     try {
       const res = await api.runAllAutomation()
       setAllAgentsResult(res)
-      setNotice(`Orchestrator: ${AGENT_CATALOG.length} specialist agents run on ${res.processed_count} active tickets.`)
+      setNotice(`Orchestrator: ${agentCatalog.length} specialist agents run on ${res.processed_count} active tickets.`)
       await load()
     } catch (err) {
       setNotice(`Multi-Agent Run Failed: ${(err as Error).message}`)
@@ -605,6 +625,8 @@ function App() {
 
   async function submitTicket(e: FormEvent) {
     e.preventDefault()
+    setBusy(true)
+    setNotice('Submitting your claim: the specialist agents are reviewing it…')
     try {
       const evidence = form.custom_photo_base64
         ? [form.custom_photo_base64]
@@ -613,18 +635,21 @@ function App() {
         transaction_id: form.transaction_id,
         order_id: form.order_id,
         claimed_amount: Number(form.claimed_amount),
-        currency: form.currency,
+        currency: form.currency || undefined, // empty: RITOS applies its configured default
         description: form.description,
         item_name: form.item_name,
         item_category: form.item_category,
         evidence_images: evidence
       })
+      // Confirm as soon as RITOS answers; refreshing the lists can take a few seconds on a remote database.
+      setNotice(`✓ Claim ${created.ticket_number} submitted and routed to ${created.assigned_desk || 'review'}.`)
       setShowNew(false)
       setPage('tickets')
       await load()
-      setNotice(`✓ Claim ${created.ticket_number} submitted and routed to ${created.assigned_desk || 'review'}.`)
     } catch (e) {
       setNotice((e as Error).message)
+    } finally {
+      setBusy(false)
     }
   }
 
@@ -1225,6 +1250,9 @@ function App() {
                             <span className="date-cell">{date(r.created_at)}</span>
                           </td>
                           <td>
+                            {!r.next_step?.can_act ? (
+                              <span className="hint">{waitingFor(r.next_step, user?.id)}</span>
+                            ) : (
                             <div className="row-actions">
                               <button
                                 className="primary compact"
@@ -1245,6 +1273,7 @@ function App() {
                                 <X size={14} /> Reject Request
                               </button>
                             </div>
+                            )}
                           </td>
                         </tr>
                       ))}
@@ -1322,7 +1351,10 @@ function App() {
                           </td>
                           <td>
                             <div className="row-actions">
-                              {r.status === 'APPROVED' && (
+                              {r.next_step && !r.next_step.can_act && (
+                                <span className="hint">{waitingFor(r.next_step, user?.id)}</span>
+                              )}
+                              {r.status === 'APPROVED' && r.next_step?.can_act && (
                                 <button
                                   className="primary compact"
                                   onClick={() => handleExecuteRefund(r)}
@@ -1333,7 +1365,7 @@ function App() {
                                   <Zap size={14} /> Execute Payout
                                 </button>
                               )}
-                              {r.status === 'RECONCILIATION_REQUIRED' && (
+                              {r.status === 'RECONCILIATION_REQUIRED' && r.next_step?.can_act && (
                                 <button
                                   className="secondary compact"
                                   onClick={() => handleReconcileRefund(r)}
@@ -1700,14 +1732,16 @@ function App() {
                             <div className="row-actions" onClick={e => e.stopPropagation()}>
                               {t.status !== 'RESOLVED' && (
                                 <>
-                                  <button
-                                    className="primary compact"
-                                    onClick={() => handleCS1DirectRefund(t)}
-                                    title="1-Click Direct Refund"
-                                    style={{ background: 'var(--emerald-700)', borderColor: 'var(--emerald-700)' }}
-                                  >
-                                    <Zap size={14} /> 1-Click Refund
-                                  </button>
+                                  {canProposeFor(user, t) && (
+                                    <button
+                                      className="primary compact"
+                                      onClick={() => handleCS1DirectRefund(t)}
+                                      title="1-Click Direct Refund"
+                                      style={{ background: 'var(--emerald-700)', borderColor: 'var(--emerald-700)' }}
+                                    >
+                                      <Zap size={14} /> 1-Click Refund
+                                    </button>
+                                  )}
                                   <button
                                     className="secondary compact"
                                     onClick={() => setSelected(t)}
@@ -2251,7 +2285,7 @@ function App() {
 
                     <div style={{ marginTop: '20px', display: 'flex', gap: '12px', alignItems: 'center' }}>
                       <button className="primary" type="submit" disabled={busy} style={{ flex: 1, padding: '12px 18px', fontSize: '13px' }}>
-                        <Send size={15} /> Submit Claim to the RITOS {AGENT_CATALOG.length}-Agent Orchestrator
+                        <Send size={15} /> Submit Claim to the RITOS {agentCatalog.length}-Agent Orchestrator
                       </button>
                       <button className="secondary" type="button" onClick={() => setPage(isCustomer ? 'dashboard' : 'tickets')}>
                         Cancel
@@ -2364,7 +2398,7 @@ function App() {
                         ShopFlow Storefront Connection
                       </h2>
                       <p style={{ margin: '6px 0 0', fontSize: '13px', color: '#94a3b8', lineHeight: 1.5 }}>
-                        ShopFlow acts as the System of Record (SoR). RITOS autonomously receives refund events, fetches rich claim context dossiers, runs the {AGENT_CATALOG.length} specialist agents, and submits payment execution callbacks.
+                        ShopFlow acts as the System of Record (SoR). RITOS autonomously receives refund events, fetches rich claim context dossiers, runs the {agentCatalog.length} specialist agents, and submits payment execution callbacks.
                       </p>
                     </div>
 
@@ -2538,71 +2572,92 @@ await fetch('http://YOUR_RITOS_URL/api/v1/integrations/ecommerce/ticket', {
                 <div>
                   <div className="eyebrow">FINANCE CLEARING HOUSE</div>
                   <h1>💰 Finance Approvals &amp; Payout Execution</h1>
-                  <p>Review policy-approved refunds and execute real-time payment gateway payouts.</p>
+                  <p>Authorize payouts for approved claims, then approve and execute them under the four-eyes rule.</p>
                 </div>
               </div>
 
-              <div className="panel table-panel">
-                <div className="table-wrap">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>TICKET #</th>
-                        <th>ORDER ID</th>
-                        <th>PRODUCT / ITEM</th>
-                        <th>AMOUNT</th>
-                        <th>DESK / STATUS</th>
-                        <th>LEDGER VERIFICATION</th>
-                        <th>PAYOUT STATUS</th>
-                        <th>FINANCE ACTION</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {tickets
-                        .filter(t => t.decision_bucket === 'GENUINE_REFUNDABLE' || t.assigned_desk === 'CS_1')
-                        .map(t => (
-                          <tr key={t.id} onClick={() => setSelected(t)} style={{ cursor: 'pointer' }}>
-                            <td><span className="mono bold">{t.ticket_number}</span></td>
-                            <td><span className="mono">{t.order_id || '—'}</span></td>
-                            <td><strong>{t.item_name || t.category}</strong></td>
-                            <td className="amount">{money(t.claimed_amount, t.currency)}</td>
+              {user.role !== 'customer' && (
+                <div className="panel table-panel" style={{ marginBottom: '18px' }}>
+                  <div className="section-title" style={{ padding: '12px 16px' }}>
+                    <h4>Awaiting payout authorization ({awaitingPayout.length})</h4>
+                    <span>CS-1 claims whose refund nobody has authorized yet</span>
+                  </div>
+                  <div className="table-wrap">
+                    <table>
+                      <thead>
+                        <tr><th>Ticket</th><th>Customer</th><th>Amount</th><th>Why it is here</th><th>Action</th></tr>
+                      </thead>
+                      <tbody>
+                        {awaitingPayout.map(t => (
+                          <tr key={t.id}>
+                            <td><strong className="mono">{t.ticket_number}</strong></td>
+                            <td>{t.customer_name || t.customer_id}</td>
+                            <td><strong className="amount">{money(t.claimed_amount, t.currency)}</strong></td>
+                            <td style={{ maxWidth: '320px', fontSize: '12px' }}>{t.policy_evaluation_reason}</td>
                             <td>
-                              <span className="pill green"><i />{t.assigned_desk} ({t.status})</span>
-                            </td>
-                            <td>
-                              <span className={`pill ${t.payment_verification === 'VERIFIED' ? 'green' : 'amber'}`}>
-                                <i />{t.payment_verification}
-                              </span>
-                            </td>
-                            <td>
-                              {t.refund_status === 'REFUNDED' ? (
-                                <span className="pill green"><i />SETTLED</span>
-                              ) : (
-                                <span className="pill amber"><i />AWAITING PAYOUT</span>
-                              )}
-                            </td>
-                            <td onClick={e => e.stopPropagation()}>
-                              {t.refund_status === 'REFUNDED' ? (
-                                <span style={{ color: 'var(--emerald-700)', fontWeight: 700, fontSize: '11px' }}>
-                                  ✓ Payout Executed
-                                </span>
-                              ) : (
-                                <button
-                                  className="primary compact"
-                                  onClick={() => handleAuthorizePayout(t)}
-                                  disabled={busy}
-                                  style={{ background: 'var(--emerald-600)', borderColor: 'var(--emerald-600)', fontSize: '11px' }}
-                                >
-                                  ⚡ Authorize Payout ({money(t.claimed_amount, t.currency)})
+                              {(t as any).can_authorize ? (
+                                <button className="primary compact" disabled={busy} onClick={() => handleAuthorizePayout(t)}>
+                                  <Zap size={14} /> Authorize Payout
                                 </button>
+                              ) : (
+                                <span className="hint">By {((t as any).authorize_roles || []).map(roleLabel).join(' or ')}</span>
                               )}
                             </td>
                           </tr>
                         ))}
-                      {!tickets.filter(t => t.decision_bucket === 'GENUINE_REFUNDABLE' || t.assigned_desk === 'CS_1').length && (
-                        <tr>
-                          <td colSpan={8}><Empty text="No tickets currently awaiting finance payout authorization." /></td>
+                        {!awaitingPayout.length && (
+                          <tr><td colSpan={5} className="hint">Nothing waiting for authorization.</td></tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {/* Every refund still moving through the four-eyes steps; actions follow the server's policy (next_step) */}
+              <div className="panel table-panel">
+                <div className="section-title" style={{ padding: '12px 16px' }}>
+                  <h4>Refunds in progress ({refunds.filter((r: any) => r.next_step).length})</h4>
+                  <span>Propose, approve and execute must be done by three different people</span>
+                </div>
+                <div className="table-wrap">
+                  <table>
+                    <thead>
+                      <tr><th>Refund</th><th>Amount</th><th>Status</th><th>Next step</th><th>Action</th></tr>
+                    </thead>
+                    <tbody>
+                      {refunds.filter((r: any) => r.next_step).map((r: any) => (
+                        <tr key={r.id}>
+                          <td><span className="mono bold">#{r.id.slice(0, 8).toUpperCase()}</span><br /><span className="hint">{r.reason}</span></td>
+                          <td className="amount">{money(r.amount, r.currency)}</td>
+                          <td><StatusPill value={r.status} /></td>
+                          <td style={{ fontSize: '12px', maxWidth: '280px' }}>{waitingFor(r.next_step, user.id)}</td>
+                          <td>
+                            {!r.next_step.can_act ? (
+                              <span className="hint">Not your step</span>
+                            ) : r.next_step.action === 'approve' ? (
+                              <div className="row-actions">
+                                <button className="primary compact" disabled={busy} onClick={() => handleApproveRefund(r)}>
+                                  <Check size={14} /> Approve Payout
+                                </button>
+                                <button className="secondary compact" disabled={busy} onClick={() => handleRejectRefund(r)}>
+                                  <X size={14} /> Reject
+                                </button>
+                              </div>
+                            ) : r.next_step.action === 'execute' ? (
+                              <button className="primary compact" disabled={busy} onClick={() => handleExecuteRefund(r)}>
+                                <Zap size={14} /> Execute Payout
+                              </button>
+                            ) : (
+                              <button className="secondary compact" disabled={busy} onClick={() => handleReconcileRefund(r)}>
+                                <RefreshCw size={14} /> Reconcile Gateway
+                              </button>
+                            )}
+                          </td>
                         </tr>
+                      ))}
+                      {!refunds.filter((r: any) => r.next_step).length && (
+                        <tr><td colSpan={5}><Empty text="No refunds waiting for approval or execution." /></td></tr>
                       )}
                     </tbody>
                   </table>
@@ -2793,7 +2848,7 @@ await fetch('http://YOUR_RITOS_URL/api/v1/integrations/ecommerce/ticket', {
                 <ShieldAlert size={44} color="var(--rose-600)" style={{ margin: '0 auto 16px' }} />
                 <h2 style={{ fontSize: '20px', fontWeight: 800, color: 'var(--navy-900)' }}>Internal Operations Access Required</h2>
                 <p style={{ color: 'var(--navy-600)', margin: '10px 0 24px', lineHeight: 1.6, fontSize: '14px' }}>
-                  The {AGENT_CATALOG.length} Specialist Agents Registry and pipeline control plane are restricted to operational staff and administrators.
+                  The {agentCatalog.length} Specialist Agents Registry and pipeline control plane are restricted to operational staff and administrators.
                 </p>
                 <button
                   className="primary"
@@ -2807,7 +2862,7 @@ await fetch('http://YOUR_RITOS_URL/api/v1/integrations/ecommerce/ticket', {
                 <div className="page-heading">
                   <div>
                     <div className="eyebrow">AUTOMATION CONTROL PLANE</div>
-                    <h1>{AGENT_CATALOG.length} Specialist Agents Registry</h1>
+                    <h1>{agentCatalog.length} Specialist Agents Registry</h1>
                     <p>Autonomous verification and classification agents coordinated by the Central Workflow Orchestrator.</p>
                   </div>
                   <div className="heading-actions">
@@ -2818,7 +2873,7 @@ await fetch('http://YOUR_RITOS_URL/api/v1/integrations/ecommerce/ticket', {
                       style={{ background: '#2563eb', borderColor: '#3b82f6', display: 'flex', alignItems: 'center', gap: '8px' }}
                     >
                       {runningAllAgents ? <RefreshCw size={15} className="spin" /> : <Play size={15} />}
-                      <span>{runningAllAgents ? `Executing ${AGENT_CATALOG.length} Agents...` : `▶ Run All ${AGENT_CATALOG.length} Agents Across Active Tickets`}</span>
+                      <span>{runningAllAgents ? `Executing ${agentCatalog.length} Agents...` : `▶ Run All ${agentCatalog.length} Agents Across Active Tickets`}</span>
                     </button>
                   </div>
                 </div>
@@ -2845,7 +2900,7 @@ await fetch('http://YOUR_RITOS_URL/api/v1/integrations/ecommerce/ticket', {
                       style={{ background: '#2563eb', borderColor: '#3b82f6', padding: '12px 22px', fontSize: '13px', fontWeight: 700, borderRadius: 'var(--radius-md)', display: 'inline-flex', alignItems: 'center', gap: '8px', boxShadow: '0 4px 14px rgba(37,99,235,0.4)' }}
                     >
                       {runningAllAgents ? <RefreshCw size={16} className="spin" /> : <Play size={16} />}
-                      <span>{runningAllAgents ? `Executing ${AGENT_CATALOG.length} Agents Pipeline...` : `▶ Run All ${AGENT_CATALOG.length} Agents Now`}</span>
+                      <span>{runningAllAgents ? `Executing ${agentCatalog.length} Agents Pipeline...` : `▶ Run All ${agentCatalog.length} Agents Now`}</span>
                     </button>
                   </div>
 
@@ -2867,7 +2922,7 @@ await fetch('http://YOUR_RITOS_URL/api/v1/integrations/ecommerce/ticket', {
                 </div>
 
                 <div className="metric-grid" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
-                  {AGENT_CATALOG.map((agent, i) => (
+                  {agentCatalog.map((agent, i) => (
                     <div key={agent.id} className="metric-card click-row" onClick={() => setActiveAgentModal(agent)}>
                       <div className="metric-top">
                         <span className="metric-icon blue"><BrainCircuit size={18} /></span>
@@ -2942,7 +2997,7 @@ await fetch('http://YOUR_RITOS_URL/api/v1/integrations/ecommerce/ticket', {
 
         <footer className="footer">
           <span>© 2026 RITOS · Automated eCommerce Refund Layer</span>
-          <span><Shield size={14} /> Production Grade · Local Active</span>
+          <span><Shield size={14} /> {import.meta.env.MODE}</span>
         </footer>
       </main>
 
@@ -3084,14 +3139,18 @@ await fetch('http://YOUR_RITOS_URL/api/v1/integrations/ecommerce/ticket', {
                   {selected.status !== 'RESOLVED' ? (
                     <div>
                       <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
-                        <button
-                          className="primary"
-                          onClick={() => handleCS1DirectRefund(selected)}
-                          disabled={busy}
-                          style={{ background: 'var(--emerald-700)', borderColor: 'var(--emerald-700)' }}
-                        >
-                          <Zap size={15} /> 1-Click Direct Refund ({money(selected.claimed_amount, selected.currency)})
-                        </button>
+                        {canProposeFor(user, selected) ? (
+                          <button
+                            className="primary"
+                            onClick={() => handleCS1DirectRefund(selected)}
+                            disabled={busy}
+                            style={{ background: 'var(--emerald-700)', borderColor: 'var(--emerald-700)' }}
+                          >
+                            <Zap size={15} /> 1-Click Direct Refund ({money(selected.claimed_amount, selected.currency)})
+                          </button>
+                        ) : (
+                          <span className="hint">Payout is approved by {proposalRoles(user, selected).map(roleLabel).join(' or ')}.</span>
+                        )}
 
                         <button
                           className="secondary"
@@ -3375,7 +3434,7 @@ await fetch('http://YOUR_RITOS_URL/api/v1/integrations/ecommerce/ticket', {
                 <div style={{ marginTop: '16px', marginBottom: '18px', padding: '16px', background: 'var(--bg-card)', border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-lg)' }}>
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
                     <strong style={{ fontSize: '13px', display: 'flex', alignItems: 'center', gap: '6px', color: 'var(--navy-900)' }}>
-                      <Cpu size={16} color="var(--indigo-600)" /> RITOS {AGENT_CATALOG.length} Specialist Agents Execution Trace
+                      <Cpu size={16} color="var(--indigo-600)" /> RITOS {agentCatalog.length} Specialist Agents Execution Trace
                     </strong>
                     <span className={`pill ${selected.classification_evidence?.workflow?.status === 'WAITING_HUMAN' ? 'amber' : 'green'}`}>
                       <i />
@@ -3390,6 +3449,25 @@ await fetch('http://YOUR_RITOS_URL/api/v1/integrations/ecommerce/ticket', {
                     </div>
                   )}
 
+                  {(() => {
+                    const briefing = selected.classification_evidence.agents.find((ag: any) => ag.agent_id === 'review_coordination')?.briefing
+                    if (!briefing) return null
+                    return (
+                      <div style={{ padding: '10px 12px', marginBottom: '10px', background: 'var(--indigo-50)', border: '1px solid var(--indigo-100)', borderRadius: 'var(--radius-md)', fontSize: '12px' }}>
+                        <strong>Reviewer briefing</strong>
+                        <span style={{ fontSize: '10px', color: 'var(--navy-500)', marginLeft: '6px' }}>
+                          {briefing.source === 'llm' ? `AI-generated (${briefing.llm?.provider}/${briefing.llm?.model}); advisory only` : 'From routing rules'}
+                        </span>
+                        <p style={{ margin: '4px 0' }}>{briefing.summary}</p>
+                        {briefing.check_first?.length > 0 && (
+                          <ul style={{ margin: 0, paddingLeft: '18px' }}>
+                            {briefing.check_first.map((c: string, i: number) => <li key={i}>{c}</li>)}
+                          </ul>
+                        )}
+                      </div>
+                    )
+                  })()}
+
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '8px' }}>
                     {selected.classification_evidence.agents.map((ag: any, idx: number) => (
                       <div key={idx} style={{ padding: '10px 12px', background: 'var(--bg-page)', border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-md)', fontSize: '11px' }}>
@@ -3401,6 +3479,11 @@ await fetch('http://YOUR_RITOS_URL/api/v1/integrations/ecommerce/ticket', {
                         </div>
                         <p style={{ margin: 0, color: 'var(--navy-600)', lineHeight: '1.4' }}>
                           {ag.findings}
+                          {ag.llm_assist?.used && (
+                            <span style={{ display: 'block', marginTop: '4px', fontSize: '10px', color: 'var(--indigo-700)' }}>
+                              AI assist: {ag.llm_assist.provider}/{ag.llm_assist.model} · {ag.llm_assist.latency_ms} ms{ag.llm_assist.outcome ? ` · ${ag.llm_assist.outcome}` : ''}
+                            </span>
+                          )}
                         </p>
                       </div>
                     ))}
@@ -3421,14 +3504,20 @@ await fetch('http://YOUR_RITOS_URL/api/v1/integrations/ecommerce/ticket', {
                         : `Needs approval: ${selected.policy_evaluation_reason || 'see decision trace'}`}
                     </div>
                   </div>
-                  <button
-                    className="primary compact"
-                    onClick={() => handleAuthorizePayout(selected)}
-                    disabled={busy}
-                    style={{ background: 'var(--indigo-700)', borderColor: 'var(--indigo-700)' }}
-                  >
-                    <Zap size={14} /> Authorize Payout ({money(selected.claimed_amount, selected.currency)})
-                  </button>
+                  {canProposeFor(user, selected) ? (
+                    <button
+                      className="primary compact"
+                      onClick={() => handleAuthorizePayout(selected)}
+                      disabled={busy}
+                      style={{ background: 'var(--indigo-700)', borderColor: 'var(--indigo-700)' }}
+                    >
+                      <Zap size={14} /> Authorize Payout ({money(selected.claimed_amount, selected.currency)})
+                    </button>
+                  ) : (
+                    <span className="hint" style={{ maxWidth: '260px' }}>
+                      Payout is authorized by {proposalRoles(user, selected).map(roleLabel).join(' or ')}.
+                    </span>
+                  )}
                 </div>
               )}
 

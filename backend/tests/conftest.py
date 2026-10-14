@@ -12,3 +12,6 @@ os.environ["SEED_PASSWORD"] = "ChangeMe123!"
 os.environ["AUTO_APPROVE_MAX_INR"] = "5000"
 # The storefront demo-claim path is exercised by tests, so it is enabled explicitly here.
 os.environ["DEMO_CLAIMS_ENABLED"] = "true"
+# Tests never call a real LLM provider; LLM behaviour is tested with a stubbed client.
+os.environ["LLM_PROVIDER"] = "none"
+os.environ["LLM_FALLBACK_PROVIDER"] = "none"

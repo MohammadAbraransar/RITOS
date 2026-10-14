@@ -338,9 +338,9 @@ def queue_decision(db: Session, t: Ticket, decision: str, reason: str, processed
 
 
 def queue_review_hold(db: Session, t: Ticket, next_action: str) -> list:
-    """Tell the store RITOS is still working (PROCESSING) and notify the shopper of what is needed."""
+    """Tell the store a person on the RITOS desk must decide (HUMAN_REVIEW) and notify the shopper of what is needed."""
     out = [{"kind": "STATUS", "outbox_id": enqueue(db, t.id, "STATUS", f"/api/ritos/refund-tickets/{t.ticket_number}/status",
-                                                     {"status": "PROCESSING"}, f"ritos-status-{t.id}").id}]
+                                                     {"status": "HUMAN_REVIEW"}, f"ritos-status-{t.id}").id}]
     if next_action == AWAIT_PROOF:
         title, body = "Photo proof needed", (t.customer_message_draft or "Please upload photos of the item and packaging.")
     elif next_action == AWAIT_APPROVAL:

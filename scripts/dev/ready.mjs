@@ -5,13 +5,14 @@ import net from "node:net";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { ports } from "./ports.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const watch = process.argv.includes("--watch");
 const services = [
-  { name: "RITOS Desk Portal", url: "http://localhost:5173", port: 5173 },
-  { name: "RITOS API (Swagger)", url: "http://localhost:8000/docs", port: 8000 },
-  { name: "ShopFlow Store", url: "http://localhost:3000", port: 3000 },
+  { name: "RITOS Desk Portal", url: `http://localhost:${ports.desk}`, port: ports.desk },
+  { name: "RITOS API (Swagger)", url: `http://localhost:${ports.api}/docs`, port: ports.api },
+  { name: "ShopFlow Store", url: `http://localhost:${ports.shop}`, port: ports.shop },
 ];
 
 const c = { green: "\x1b[32m", red: "\x1b[31m", yellow: "\x1b[33m", cyan: "\x1b[36m", dim: "\x1b[2m", bold: "\x1b[1m", reset: "\x1b[0m" };

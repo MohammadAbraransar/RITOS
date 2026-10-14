@@ -3,7 +3,11 @@ if (!API) throw new Error('VITE_API_URL is not set (see frontend/.env.example)')
 // API host without the /api/v1 prefix (webhook and integration URLs shown in the desk)
 export const API_ROOT = API.replace(/\/api\/v1\/?$/, '')
 
-export type User = { id:string; email:string; full_name:string; role:string }
+export type PayoutAction = 'propose' | 'propose_supervised' | 'approve' | 'execute' | 'reconcile'
+// Server-side policy (backend/app/permissions.py): what this user may do and which roles may do each step
+export type Permissions = { payout: Record<PayoutAction, boolean>; payout_roles: Record<PayoutAction, string[]> }
+export type User = { id:string; email:string; full_name:string; role:string; permissions?: Permissions }
+export type NextStep = { action: PayoutAction; roles: string[]; excluded_user_ids: string[]; can_act: boolean } | null
 
 export type Ticket = {
   id: string
@@ -137,6 +141,7 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ action, note })
     }),
+  payoutsAwaitingAuthorization: () => request<Ticket[]>('/payouts/awaiting-authorization'),
   authorizePayout: (ticketId: string) =>
     request<any>(`/tickets/${ticketId}/authorize-payout`, {
       method: 'POST'

@@ -49,6 +49,8 @@ The left list holds the services and the right pane shows the selected one's liv
 | `pnpm db:seed` | **Reset both demo databases**: ShopFlow store data and RITOS ticket history (RITOS user accounts are kept) |
 | `pnpm stop` | Free ports 5173, 8000, 3000 if anything was left behind |
 
+> Ports come from `scripts/dev/ports.mjs` (override with `DESK_PORT`, `API_PORT`, `SHOP_PORT`). The API runs without auto-reload by default for stability; set `API_RELOAD=true` to restart it on code changes.
+
 ---
 
 ## 🏗️ Architecture & Port Map

@@ -72,7 +72,8 @@ export async function POST(req: Request) {
     }
 
     // Must be PENDING_RITOS or PROCESSING
-    if (!["PENDING_RITOS", "PROCESSING"].includes(ticket.status)) {
+    // HUMAN_REVIEW: a reviewer on the RITOS desk has now decided.
+    if (!["PENDING_RITOS", "PROCESSING", "HUMAN_REVIEW"].includes(ticket.status)) {
       return errorResponse(
         "ILLEGAL_TRANSITION",
         `Cannot record decision for ticket in status ${ticket.status}. Must be PENDING_RITOS or PROCESSING.`,

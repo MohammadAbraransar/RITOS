@@ -34,6 +34,13 @@ class Settings(BaseSettings):
     ritos_api_key: str = "ritos_dev_key_secret_2026"
     # Orchestrator guardrails: CS-1 claims above this amount (or with any risk signal) wait for a human.
     auto_approve_max_inr: float = 5000.0
+    # Payout authorization (four-eyes: proposer != approver != executor). Comma-separated role names.
+    payout_proposer_roles: str = "cs_1,finance_approver,refund_operations,administrator"
+    # Claims RITOS routed for approval (above the automatic limit or risk-flagged) need one of these roles
+    payout_supervisory_roles: str = "supervisor,finance_approver,administrator"
+    payout_approver_roles: str = "finance_approver,administrator"
+    payout_executor_roles: str = "finance_approver,refund_operations,administrator"
+    payout_reconciler_roles: str = "finance_approver,administrator,auditor"
     # Background outbox delivery (decision callbacks, status updates, notifications to the store)
     run_background_workers: bool = True
     outbox_poll_seconds: float = 8.0
@@ -52,6 +59,22 @@ class Settings(BaseSettings):
     risk_refund_ratio_min_orders: int = 3
     risk_tier_high_score: int = 60
     risk_tier_medium_score: int = 30
+    # --- LLM assist layer (advises only; rules decide). Providers: none | groq | gemini ---
+    llm_provider: str = "none"
+    llm_fallback_provider: str = "none"
+    groq_api_key: str = ""
+    groq_base_url: str = "https://api.groq.com/openai/v1"
+    groq_model: str = "qwen/qwen3.8-27b"
+    gemini_api_key: str = ""
+    gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta/openai"
+    gemini_model: str = "gemini-flash-lite-latest"
+    llm_timeout_seconds: float = 8.0
+    llm_max_output_tokens: int = 400
+    llm_temperature: float = 0.0
+    # Remove names, emails, phone and card numbers before any text is sent to a provider
+    llm_redact_pii: bool = True
+    # Customer messages longer than this are rejected and the template is used instead
+    llm_message_max_chars: int = 900
     # --- Visual evidence ---
     # Semantic vision provider for product identity and defect assessment: "none" or "clip" (local, free).
     # With "none", photo claims are never auto-verified: they are reported inconclusive and go to CS-2.

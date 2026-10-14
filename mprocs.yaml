@@ -19,10 +19,8 @@ procs:
     cmd: ["node", "scripts/dev/run-api.mjs"]
     stop: hard-kill
   desk:
-    cwd: <CONFIG_DIR>/frontend
-    cmd: ["node", "node_modules/vite/bin/vite.js", "--host", "0.0.0.0"]
+    cmd: ["node", "scripts/dev/run-web.mjs", "desk"]
     stop: hard-kill
   shop:
-    cwd: <CONFIG_DIR>/shopflow
-    cmd: ["node", "node_modules/next/dist/bin/next", "dev", "-p", "3000"]
+    cmd: ["node", "scripts/dev/run-web.mjs", "shop"]
     stop: hard-kill

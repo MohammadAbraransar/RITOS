@@ -1,3 +1,4 @@
+import { settleRefund } from "@/server/services/settlement.service";
 import { NextResponse } from "next/server";
 import { prisma } from "@/server/db";
 import { requireRitosAuth, errorResponse } from "@/server/auth/ritos-guard";
@@ -27,23 +28,10 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
     let updatedAt = refund.createdAt;
 
     if (currentStatus === "PENDING" && refund.settleAt && refund.settleAt.getTime() <= Date.now()) {
-      await prisma.$transaction(async (tx) => {
-        await tx.refundTransaction.update({
-          where: { id: refund.id },
-          data: { status: RefundTxStatus.SUCCESS },
-        });
-
-        // Advance ticket state to REFUNDED
-        if (refund.ticket && refund.ticket.status !== "REFUNDED") {
-          await settleTicketRefund(tx, refund.ticketId, "SETTLEMENT_POLLER", {
-            refund_id: refund.id,
-            amount_minor: refund.amountMinor,
-          });
-        }
-      });
-
-      currentStatus = RefundTxStatus.SUCCESS;
-      updatedAt = new Date();
+      if (await settleRefund(refund.id)) {
+        currentStatus = RefundTxStatus.SUCCESS;
+        updatedAt = new Date();
+      }
     }
 
     return NextResponse.json({
