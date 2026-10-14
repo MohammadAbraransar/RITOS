@@ -21,7 +21,8 @@ class Settings(BaseSettings):
     default_currency: str = "INR"
     # Storefront demo claims that do not exist in the store DB (RITOS invents their order/transaction). Never in production.
     demo_claims_enabled: bool = False
-    cors_origins: str = "http://localhost:5173"
+    # Desk portal origins allowed to call the API (localhost and 127.0.0.1 are different origins to a browser)
+    cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
     access_token_minutes: int = 45
     redis_url: str = "redis://localhost:6379/0"
     ecommerce_webhook_secret: str = ""

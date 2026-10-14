@@ -57,7 +57,7 @@ function LoginForm() {
         </Link>
         <h2 className="text-xl font-bold text-slate-900">Sign in to your account</h2>
         <p className="text-xs text-slate-500">
-          Default credentials prefilled for testing.
+          Sign in with your ShopFlow account.
         </p>
       </div>
 

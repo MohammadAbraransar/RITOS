@@ -158,7 +158,19 @@ export default function ShopFlowStorePage() {
     }
   };
 
-  const openClaimModal = (order: OrderItem) => {
+  const openClaimModal = async (order: OrderItem) => {
+    // A claim is always raised by a signed-in customer. The background sign-in check may not have finished
+    // yet (e.g. a click right after returning from sign-in), so confirm it now before deciding.
+    let user = me;
+    if (!user) {
+      const res = await fetch("/api/me").catch(() => null);
+      user = res && res.ok ? await res.json() : null;
+      if (user) setMe(user);
+    }
+    if (!user) {
+      window.location.href = "/login?redirect=/";
+      return;
+    }
     setSelectedOrder(order);
     setClaimCategory(order.defaultReason);
     setClaimDesc(order.defaultDesc);
@@ -215,9 +227,13 @@ export default function ShopFlowStorePage() {
         })
       });
 
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
+      if (res.status === 401) {
+        throw new Error("Please sign in to raise a refund request.");
+      }
       if (!res.ok && !data.success) {
-        throw new Error(data.error || "RITOS ingestion failed");
+        // Errors arrive as a string or as { code, message }
+        throw new Error(data.error?.message || (typeof data.error === "string" ? data.error : "") || `Request failed (HTTP ${res.status})`);
       }
 
       setTicketResult(data);
