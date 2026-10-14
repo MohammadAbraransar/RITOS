@@ -142,6 +142,7 @@ export const api = {
       body: JSON.stringify({ action, note })
     }),
   payoutsAwaitingAuthorization: () => request<Ticket[]>('/payouts/awaiting-authorization'),
+  ticketTimeline: (id: string) => request<{ history: any[] }>(`/tickets/${id}/timeline`),
   authorizePayout: (ticketId: string) =>
     request<any>(`/tickets/${ticketId}/authorize-payout`, {
       method: 'POST'

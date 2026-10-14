@@ -6,18 +6,19 @@ from .security import hash_password
 from .config import settings
 from .agents import run_ticket_pipeline
 
+# (email, person's name, role): the desk shows the role beside the name, so names carry no role text
 USERS = [
-    ("customer@ritos.local", "Riya Customer", "customer"),
-    ("agent@ritos.local", "Aarav Support", "support_agent"),
-    ("cs1@ritos.local", "Aarav (CS-1 Fast-Track)", "cs_1"),
-    ("cs2@ritos.local", "Pooja (CS-2 Exceptions)", "cs_2"),
-    ("cs3@ritos.local", "Rohan (CS-3 Denials)", "cs_3"),
-    ("refunds@ritos.local", "Mira Refund Operations", "refund_operations"),
-    ("risk@ritos.local", "Kabir Risk Analyst", "risk_analyst"),
-    ("lead@ritos.local", "Anaya Team Lead", "supervisor"),
-    ("finance@ritos.local", "Dev Finance Approver", "finance_approver"),
-    ("admin@ritos.local", "System Administrator", "administrator"),
-    ("audit@ritos.local", "Ishita Auditor", "auditor"),
+    ("customer@ritos.local", "Riya Kapoor", "customer"),
+    ("agent@ritos.local", "Aarav Mehta", "support_agent"),
+    ("cs1@ritos.local", "Arjun Rao", "cs_1"),
+    ("cs2@ritos.local", "Pooja Nair", "cs_2"),
+    ("cs3@ritos.local", "Rohan Das", "cs_3"),
+    ("refunds@ritos.local", "Mira Shah", "refund_operations"),
+    ("risk@ritos.local", "Kabir Singh", "risk_analyst"),
+    ("lead@ritos.local", "Anaya Iyer", "supervisor"),
+    ("finance@ritos.local", "Dev Malhotra", "finance_approver"),
+    ("admin@ritos.local", "Sam Admin", "administrator"),
+    ("audit@ritos.local", "Ishita Bose", "auditor"),
 ]
 
 def main():
@@ -31,6 +32,8 @@ def main():
                 u = User(email=email, full_name=name, role=role, password_hash=hash_password(settings.seed_password))
                 db.add(u)
                 db.flush()
+            elif u.full_name != name:
+                u.full_name = name  # names are people's names; the desk shows the role next to them
             users[role] = u
 
         customer = users["customer"]

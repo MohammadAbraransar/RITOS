@@ -104,6 +104,10 @@ class Settings(BaseSettings):
     review_sla_hours_p1: int = 4
     review_sla_hours_p2: int = 12
     review_sla_hours_default: int = 24
+    # --- Reviewer assignment: roles that receive work in each queue (least-loaded person is assigned) ---
+    review_queue_cs2_roles: str = "cs_2"
+    review_queue_cs3_roles: str = "cs_3"
+    review_queue_supervisor_roles: str = "supervisor"
     # --- Settlement ---
     # Business days quoted to customers for bank settlement; leave empty to quote no timeline
     refund_settlement_days: int | None = None

@@ -188,9 +188,6 @@ def fetch_store_evidence(url: Optional[str]) -> Optional[bytes]:
         return None
 
 
-def _system_user_id(db: Session) -> Optional[str]:
-    u = db.scalar(select(User).where(User.role == Role.ADMIN.value))
-    return u.id if u else None
 
 
 def is_store_linked(t: Ticket) -> bool:
@@ -271,7 +268,8 @@ def intake(db: Session, ext_id: str, payload: Dict[str, Any], event_id: Optional
     for raw, filename in store["photos"]:
         evidence_store.save_evidence(db, t, raw, filename, source="STORE")
 
-    system_user_id = _system_user_id(db)
+    # Automatic work is recorded with no person as actor (shown as "RITOS (automatic)"), never as a user account.
+    system_user_id = None
     result = run_workflow(db, t, trigger=trigger, actor_id=system_user_id)
     callbacks = apply_next_action(db, t, result)
     record_event(db, t.id, system_user_id, "SHOPFLOW_TICKET_PROCESSED",

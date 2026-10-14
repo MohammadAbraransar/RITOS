@@ -209,3 +209,20 @@ def test_supervised_claim_payout_is_refused_for_cs1_and_me_reports_roles():
     assert auto["next_action"] == "AWAIT_APPROVAL"
     r = client.post(f"/api/v1/tickets/{auto['ticket_id']}/authorize-payout", headers={"Authorization": f"Bearer {data['access_token']}"})
     assert r.status_code == 403 and "supervisor" in r.json()["detail"]
+
+
+def test_history_shows_automatic_steps_as_ritos_and_closed_tickets_cannot_rerun():
+    txid = _old_transaction(days_ago=2)
+    auto = _claim(txid, description="The screen arrived cracked and the product is damaged.")["automation"]
+    staff = client.post("/api/v1/auth/login", json={"email": "admin@ritos.local", "password": "ChangeMe123!"}).json()["access_token"]
+    H = {"Authorization": f"Bearer {staff}"}
+    hist = client.get(f"/api/v1/tickets/{auto['ticket_id']}/timeline", headers=H).json()["history"]
+    assert hist[0]["actor"] is None                       # automatic run: no person recorded
+    assert hist[0]["waiting_for"] == "AWAIT_PROOF"
+    assert hist[0]["assigned_to"]["role"] == "cs_2"       # REVIEW_QUEUE_CS2_ROLES default
+    with SessionLocal() as db:
+        from app.models import Ticket
+        db.query(Ticket).filter(Ticket.id == auto["ticket_id"]).update({"status": "RESOLVED"})
+        db.commit()
+    r = client.post(f"/api/v1/automation/tickets/{auto['ticket_id']}/run", headers=H)
+    assert r.status_code == 409

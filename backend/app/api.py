@@ -89,7 +89,15 @@ def store_decision(db: Session, ticket: Ticket, user: User, decision: str, reaso
     db.refresh(ticket)
     return {"status": "DECISION_QUEUED_FOR_STORE", "decision": decision, **result, "ticket": ticket_view(ticket)}
 
+CLOSED_STATUSES = {TicketStatus.RESOLVED.value, TicketStatus.REJECTED.value}
+
+def is_closed(ticket: Ticket) -> bool:
+    """Decided or paid tickets are final: re-running automation must not reopen them."""
+    return ticket.status in CLOSED_STATUSES or ticket.refund_status in {"APPROVED", "REJECTED", "REFUNDED"}
+
 def rerun_workflow(db: Session, ticket: Ticket, user: User, trigger: str = "MANUAL_RERUN") -> dict:
+    if is_closed(ticket):
+        raise HTTPException(409, "This ticket is already decided; automation cannot be re-run on it.")
     result = run_workflow(db, ticket, trigger=trigger, actor_id=user.id)
     if is_store_linked(ticket) and ticket.refund_status not in {"APPROVED", "REJECTED", "REFUNDED"}:
         result["callbacks"] = apply_next_action(db, ticket, result)
@@ -738,7 +746,7 @@ def run_ticket_automation(ticket_id:str,db:Session=Depends(get_db),
 @router.post("/automation/run-all")
 def run_all_automation(db:Session=Depends(get_db),
                        user:User=Depends(require_roles(Role.SUPPORT.value,Role.SUPERVISOR.value,Role.ADMIN.value,Role.REFUNDS.value,Role.RISK.value,Role.FINANCE.value,Role.CS_1.value,Role.CS_2.value,Role.CS_3.value))):
-    tickets = db.scalars(select(Ticket).where(Ticket.status.notin_([TicketStatus.RESOLVED.value, TicketStatus.REJECTED.value]))).all()
+    tickets = [t for t in db.scalars(select(Ticket).where(Ticket.status.notin_(list(CLOSED_STATUSES)))).all() if not is_closed(t)]
     results = []
     for t in tickets:
         rerun_workflow(db, t, user)
@@ -1215,6 +1223,26 @@ def ticket_workflow(ticket_id: str, db: Session = Depends(get_db), user: User = 
     return {"ticket_id": t.id, "ticket_number": t.ticket_number, "store_linked": is_store_linked(t),
             "current": (t.classification_evidence or {}).get("workflow"),
             "runs": [workflow_view(r) for r in runs], "outbox": [outbox_view(m) for m in messages]}
+
+@router.get("/tickets/{ticket_id}/timeline")
+def ticket_timeline(ticket_id: str, db: Session = Depends(get_db), user: User = Depends(require_roles(*STAFF_ROLES, Role.AUDITOR.value))):
+    """Every run on the ticket in order: who acted (None = RITOS automatically), what it is now waiting for, and
+    who it was assigned to. Structured data; the desk words it."""
+    t = db.get(Ticket, ticket_id)
+    if not t: raise HTTPException(404, "Ticket not found")
+    runs = db.scalars(select(WorkflowRun).where(WorkflowRun.ticket_id == t.id).order_by(WorkflowRun.started_at)).all()
+    actors = {u.id: u for u in db.scalars(select(User).where(User.id.in_([r.actor_id for r in runs if r.actor_id])))}
+    out = []
+    for r in runs:
+        review = next(((s.output or {}) for s in r.steps if s.step_id == "review_coordination"), {})
+        human = next(((s.output or {}) for s in r.steps if s.step_id == "human_review"), {})
+        actor = actors.get(r.actor_id) if r.actor_id else None
+        out.append({"at": r.started_at.isoformat() if r.started_at else None, "trigger": r.trigger, "run_status": r.status,
+                    "actor": {"name": actor.full_name, "role": actor.role} if actor else None,
+                    "decision": r.decision, "waiting_for": r.next_action, "note": human.get("reason"),
+                    "assigned_to": {"name": review.get("assigned_reviewer_name"), "role": review.get("assigned_reviewer_role"),
+                                    "queue": review.get("queue")} if review.get("review_required") else None})
+    return {"ticket_number": t.ticket_number, "history": out}
 
 @router.get("/workflow/runs")
 def workflow_runs(status: str | None = None, limit: int = Query(50, ge=1, le=200), db: Session = Depends(get_db),

@@ -9,6 +9,8 @@ import {
   Camera, Cpu, GitFork, UploadCloud, Trash2
 } from 'lucide-react'
 import { api, API_ROOT, getToken, setToken, type NextStep, type Ticket, type User } from './api'
+import { label, anyStatus, roleName, reasonText, humanize, DESK, BUCKET, NEXT_ACTION, LEDGER_STATUS, PROOF_STATUS,
+         PAYOUT_ACTION, RUN_TRIGGER, HUMAN_DECISION, REFUND_STATUS } from './labels'
 import { isClosedStatus, priorityRank } from './logic'
 
 export { isClosedStatus, priorityRank }
@@ -81,7 +83,7 @@ const navFor = (role: string) => {
   ]
 }
 
-const roleTitle = (r: string) => roles.find(x => x.role === r)?.label || r
+const roleTitle = (r: string) => roleName(r)
 // Display locale/currency come from configuration (frontend/.env); records carry their own currency.
 const LOCALE: string = import.meta.env.VITE_LOCALE || navigator.language
 const money = (n: number, c: string | undefined = import.meta.env.VITE_DEFAULT_CURRENCY) =>
@@ -95,13 +97,36 @@ function proposalRoles(user: User | null, t: Ticket): string[] {
 }
 const canProposeFor = (user: User | null, t: Ticket) => !!user && proposalRoles(user, t).includes(user.role)
 
+// One sentence telling staff where the claim stands and who acts next.
+function nextStepText(t: Ticket, user: User | null, refunds: any[]): string {
+  const ev = (t as any).classification_evidence || {}
+  const waiting = ev.workflow?.next_action
+  const review = (ev.agents || []).find((a: any) => a.agent_id === 'review_coordination') || {}
+  const assignee = review.assigned_reviewer_name ? `${review.assigned_reviewer_name} (${roleName(review.assigned_reviewer_role)})` : 'the review team'
+  const refund = refunds.find((r: any) => r.ticket_id === t.id && r.status !== 'REJECTED')
+  if (t.refund_status === 'REFUNDED' || refund?.status === 'REFUNDED') return 'Refunded. Nothing left to do.'
+  if (t.status === 'RESOLVED' || t.status === 'REJECTED' || t.decision_bucket === 'NON_REFUNDABLE')
+    return `Closed: ${t.policy_evaluation_reason || 'not eligible for a refund'}.`
+  if (t.refund_status === 'APPROVED') return 'Approved and sent to the store, which is paying the customer.'
+  if (refund?.next_step) return waitingFor(refund.next_step, user?.id) + (refund.next_step.can_act ? ' You can do this step in the Finance Approvals queue.' : '')
+  if (waiting === 'AWAIT_PROOF') return `Waiting for the customer to send evidence${t.proof_required ? `: ${t.proof_required}` : ''}. Assigned to ${assignee}.`
+  if (waiting === 'MANUAL_REVIEW') return `A reviewer must decide (assigned to ${assignee}). Use the review actions below.`
+  if (waiting === 'AWAIT_APPROVAL' || waiting === 'AUTO_APPROVE' || t.decision_bucket === 'GENUINE_REFUNDABLE') {
+    const who = proposalRoles(user, t).map(roleLabel).join(' or ')
+    return canProposeFor(user, t)
+      ? 'Eligible for refund. You can approve the payout below.'
+      : `Eligible for refund. Waiting for ${who} to approve the payout${waiting === 'AWAIT_APPROVAL' ? ` (assigned to ${assignee})` : ''}.`
+  }
+  return label(NEXT_ACTION, waiting).text
+}
+
 // Who must act next on a refund, rendered from the server's policy (backend/app/permissions.py).
-const roleLabel = (r: string) => r.replace(/_/g, ' ')
+const roleLabel = (r: string) => roleName(r)
 function waitingFor(step: NextStep, userId?: string): string {
   if (!step) return ''
   const who = step.roles.map(roleLabel).join(' or ')
   const self = userId && step.excluded_user_ids.includes(userId) ? ' (a colleague: you already acted on this refund)' : ''
-  return `Waiting for ${step.action} by ${who}${self}`
+  return `Waiting for ${who} to ${PAYOUT_ACTION[step.action] || step.action}${self}`
 }
 const date = (d: string) => new Date(d).toLocaleString()
 
@@ -111,6 +136,7 @@ function App() {
   const [password, setPassword] = useState('')
   const [agentCatalog, setAgentCatalog] = useState<any[]>([])
   const [awaitingPayout, setAwaitingPayout] = useState<Ticket[]>([])
+  const [timeline, setTimeline] = useState<any[]>([])
   const [loginError, setLoginError] = useState('')
   const [busy, setBusy] = useState(false)
 
@@ -283,6 +309,13 @@ function App() {
   }, [])
 
   useEffect(() => {
+    setTimeline([])
+    if (selected && user && user.role !== 'customer') {
+      api.ticketTimeline(selected.id).then((r) => setTimeline(r.history || [])).catch(() => setTimeline([]))
+    }
+  }, [selected?.id, selected?.updated_at])
+
+  useEffect(() => {
     if (selected) {
       setRefundAmount(selected.claimed_amount ? String(selected.claimed_amount) : '')
       setDraftMessage(selected.customer_message_draft || '')
@@ -360,11 +393,11 @@ function App() {
     try {
       const res = await api.cs1DirectRefund(t.id)
       if (res.status === 'REFUND_PROPOSED') {
-        setNotice(`✅ CS-1 Fast-Track Approved & Proposed! Refund #${res.refund?.id?.slice(0, 8) || ''} queued for Finance dual-custody authorization.`)
+        setNotice(`Refund proposed (#${res.refund?.id?.slice(0, 8) || ''}). Waiting for a second person to approve the payout.`)
       } else if (res.status === 'DECISION_QUEUED_FOR_STORE') {
-        setNotice(`✅ Store Refund Decision Queued for Delivery!`)
+        setNotice('Refund approved and queued for delivery to the store, which pays the customer.')
       } else {
-        setNotice(`✅ CS-1 Direct Refund Processed! Provider Reference: ${res.provider_reference || res.status}`)
+        setNotice(`Refund paid. Provider reference: ${res.provider_reference || label(REFUND_STATUS, res.status).text}`)
       }
       setSelected(res.ticket)
       await load()
@@ -386,14 +419,14 @@ function App() {
       const res = await api.cs1ManualDecide(t.id, decision, reason)
       if (decision === 'APPROVE') {
         if (res.status === 'REFUND_PROPOSED') {
-          setNotice(`✅ CS-1 Verified & Proposed! Refund #${res.refund?.id?.slice(0, 8) || ''} queued for Finance approval.`)
+          setNotice(`Refund proposed (#${res.refund?.id?.slice(0, 8) || ''}). Waiting for a second person to approve the payout.`)
         } else if (res.status === 'DECISION_QUEUED_FOR_STORE') {
-          setNotice(`✅ Store Refund Decision Queued for Delivery!`)
+          setNotice('Refund approved and queued for delivery to the store, which pays the customer.')
         } else {
-          setNotice(`✅ Refund Approved by CS-1!`)
+          setNotice('Refund approved.')
         }
       } else {
-        setNotice('❌ Refund Cancelled/Denied by CS-1.')
+        setNotice('Refund cancelled.')
       }
       setSelected(res.ticket)
       setShowCancelPrompt(false)
@@ -410,7 +443,7 @@ function App() {
     setBusy(true)
     try {
       const res = await api.cs2SendProofRequest(t.id, draftMessage || t.customer_message_draft || '', t.proof_required || undefined)
-      setNotice(`📲 Proof Request Dispatched to ${res.destination}! Ticket moved to Awaiting Information.`)
+      setNotice(`Evidence request sent to ${res.destination}. Waiting for the customer.`)
       setSelected(res.ticket)
       await load()
     } catch (err) {
@@ -425,7 +458,7 @@ function App() {
     setBusy(true)
     try {
       const res = await api.cs3SendRejectionNotice(t.id, draftMessage || t.customer_message_draft || '', t.policy_evaluation_reason || undefined)
-      setNotice(`📩 Policy Rejection Notice Dispatched to ${res.destination}! Ticket marked Rejected.`)
+      setNotice(`Rejection notice sent to ${res.destination}. The claim is closed as rejected.`)
       setSelected(res.ticket)
       await load()
     } catch (err) {
@@ -442,10 +475,10 @@ function App() {
       const res = await api.proofAction(t.id, action, note)
       setNotice(
         action === 'APPROVE_PROOF'
-          ? '✅ Photo Proof Approved! Ticket promoted to CS-1 for payout.'
+          ? 'Proof approved. The claim moves to CS-1 for payout.'
           : action === 'REQUEST_PROOF'
-          ? '📩 Additional proof requested from customer.'
-          : '❌ Claim denied based on photo proof inspection.'
+          ? 'Asked the customer for more evidence.'
+          : 'Claim rejected after reviewing the evidence.'
       )
       setSelected(res.ticket)
       await load()
@@ -461,18 +494,18 @@ function App() {
     if (!user || user.role === 'customer') return
     api.payoutsAwaitingAuthorization().then(setAwaitingPayout).catch(() => setAwaitingPayout([]))
   }
-  useEffect(() => { if (page === 'finance_queue') loadAwaitingPayout() }, [page, user])
+  useEffect(() => { if (page === 'finance_queue' || page === 'dashboard') loadAwaitingPayout() }, [page, user])
 
   async function handleAuthorizePayout(t: Ticket) {
     setBusy(true)
     try {
       const res = await api.authorizePayout(t.id)
       if (res.status === 'REFUND_PROPOSED') {
-        setNotice(`📋 Refund Proposed (#${res.refund?.id?.slice(0, 8) || ''})! Awaiting Finance Approval & Dual-Custody Execution.`)
+        setNotice(`Refund proposed (#${res.refund?.id?.slice(0, 8) || ''}). Waiting for a second person to approve the payout.`)
       } else if (res.status === 'DECISION_QUEUED_FOR_STORE') {
-        setNotice(`✅ Store Refund Decision Queued for Delivery!`)
+        setNotice('Refund approved and queued for delivery to the store, which pays the customer.')
       } else {
-        setNotice(`💰 Payout Status: ${res.status || 'Success'}`)
+        setNotice(`Payout status: ${label(REFUND_STATUS, res.status).text}`)
       }
       setSelected(res.ticket)
       await load()
@@ -494,7 +527,7 @@ function App() {
       }
       const res = await api.ecommerceTicketIntake(payload)
       setEcomSimResult(res)
-      setNotice(`🚀 eCommerce Ticket Ingested! Ticket #${res.ticket_number} triaged to ${res.assigned_desk} (${res.decision_bucket}).`)
+      setNotice(`Ticket ${res.ticket_number} received and routed to ${label(DESK, res.assigned_desk).text} (${label(BUCKET, res.decision_bucket).text}).`)
       await load()
     } catch (err) {
       setNotice(`eCommerce Simulation Failed: ${(err as Error).message}`)
@@ -508,7 +541,7 @@ function App() {
     setBusy(true)
     try {
       await api.approveRefund(r.id, 'Dual-custody verification approved by Finance.')
-      setNotice(`✅ Refund #${r.id.slice(0, 8).toUpperCase()} Approved by Finance Approver!`)
+      setNotice(`Refund #${r.id.slice(0, 8).toUpperCase()} approved by ${user?.full_name} (${roleName(user?.role)}).`)
       await load()
     } catch (err) {
       setNotice(`Approval Failed: ${(err as Error).message}`)
@@ -521,7 +554,7 @@ function App() {
     setBusy(true)
     try {
       await api.rejectRefund(r.id, 'Disapproved by Finance Approver audit check.')
-      setNotice(`❌ Refund #${r.id.slice(0, 8).toUpperCase()} Rejected by Finance Approver.`)
+      setNotice(`Refund #${r.id.slice(0, 8).toUpperCase()} rejected by ${user?.full_name} (${roleName(user?.role)}).`)
       await load()
     } catch (err) {
       setNotice(`Rejection Failed: ${(err as Error).message}`)
@@ -536,8 +569,8 @@ function App() {
       const res = await api.executeRefund(r.id, `exec-${r.id}`)
       // Only a REFUNDED status is a completed payout; anything else (e.g. RECONCILIATION_REQUIRED) is reported as is.
       setNotice(res.status === 'REFUNDED'
-        ? `✅ Payout completed via ${res.provider} (ref ${res.provider_reference})`
-        : `Payout status: ${res.status}${res.provider_reference ? ` (ref ${res.provider_reference})` : ''}. ${res.error || 'Check the settlement register.'}`)
+        ? `Payout completed via ${res.provider} (ref ${res.provider_reference})`
+        : `Payout status: ${label(REFUND_STATUS, res.status).text}${res.provider_reference ? ` (ref ${res.provider_reference})` : ''}. ${res.error || 'Check the settlement register.'}`)
       await load()
     } catch (err) {
       setNotice(`Execution Failed: ${(err as Error).message}`)
@@ -550,7 +583,7 @@ function App() {
     setBusy(true)
     try {
       const res = await api.reconcileRefund(r.id)
-      setNotice(`🔄 Gateway Reconciled: ${res.status || 'Updated'}`)
+      setNotice(`Payment outcome confirmed: ${label(REFUND_STATUS, res.status).text}`)
       await load()
     } catch (err) {
       setNotice(`Reconciliation Failed: ${(err as Error).message}`)
@@ -592,9 +625,9 @@ function App() {
     try {
       const res = await api.shopflowSync()
       if (res.status === 'DISCONNECTED') {
-        setNotice(`⚠️ ShopFlow Status: ${res.message}`)
+        setNotice(`ShopFlow: ${res.message}`)
       } else {
-        setNotice(`🔄 ShopFlow Sync Completed: Processed ${res.synced_count} pending claim(s).`)
+        setNotice(`ShopFlow sync finished: ${res.synced_count} pending claim(s) processed.`)
       }
       await load()
     } catch (err) {
@@ -614,7 +647,7 @@ function App() {
         status: 'PENDING_RITOS'
       }
       const res = await api.shopflowWebhook(samplePayload)
-      setNotice(`🚀 ShopFlow Webhook Ingested! Adjudicated ${res.data?.ticket_id} to ${res.data?.assigned_desk} (${res.data?.decision}).`)
+      setNotice(`Store claim ${res.data?.ticket_id} received and routed to ${label(DESK, res.data?.assigned_desk).text} (${anyStatus(res.data?.decision).text}).`)
       await load()
     } catch (err) {
       setNotice(`ShopFlow Webhook Simulation Note: ${(err as Error).message}`)
@@ -642,7 +675,7 @@ function App() {
         evidence_images: evidence
       })
       // Confirm as soon as RITOS answers; refreshing the lists can take a few seconds on a remote database.
-      setNotice(`✓ Claim ${created.ticket_number} submitted and routed to ${created.assigned_desk || 'review'}.`)
+      setNotice(`Claim ${created.ticket_number} submitted and routed to ${created.assigned_desk ? label(DESK, created.assigned_desk).text : 'review'}.`)
       setShowNew(false)
       setPage('tickets')
       await load()
@@ -661,7 +694,7 @@ function App() {
       const refreshed = await api.ticket(t.id)
       setSelected(refreshed)
       await load()
-      setNotice(`Pipeline completed: Routed to ${result.assigned_desk} (${result.decision_bucket}).`)
+      setNotice(`Checks finished: routed to ${label(DESK, result.assigned_desk).text} (${label(BUCKET, result.decision_bucket).text}).`)
     } catch (e) {
       setNotice(`Automation run failed: ${(e as Error).message}`)
     } finally {
@@ -970,6 +1003,28 @@ function App() {
           )}
 
           {/* DASHBOARD - STRICTLY ROLE SEGREGATED */}
+          {page === 'dashboard' && user.role !== 'customer' && (() => {
+            // What is waiting for this person right now (assignment by Agent 9; payout steps by the server policy)
+            const open = (t: Ticket) => !['RESOLVED', 'REJECTED'].includes(t.status) && !['REFUNDED', 'APPROVED', 'REJECTED'].includes((t as any).refund_status)
+            const myReviews = tickets.filter(t => open(t) && ((t as any).classification_evidence?.agents || [])
+              .some((a: any) => a.agent_id === 'review_coordination' && a.assigned_reviewer === user.email))
+            const myPayouts = awaitingPayout.filter((t: any) => t.can_authorize)
+            const mySteps = refunds.filter((r: any) => r.next_step?.can_act)
+            return (
+              <div className="metric-grid" style={{ marginBottom: '18px' }}>
+                <div className="click-row" onClick={() => setPage('tickets')}>
+                  <Metric icon={<Users />} label="Reviews assigned to me" value={myReviews.length} note="Claims RITOS routed to you" tone="amber" />
+                </div>
+                <div className="click-row" onClick={() => setPage('finance_queue')}>
+                  <Metric icon={<CheckCircle2 />} label="Payouts I can approve" value={myPayouts.length} note="Eligible claims waiting for approval" tone="green" />
+                </div>
+                <div className="click-row" onClick={() => setPage('finance_queue')}>
+                  <Metric icon={<CircleDollarSign />} label="Refund steps for me" value={mySteps.length} note="Second approval, payment or reconciliation" tone="blue" />
+                </div>
+              </div>
+            )
+          })()}
+
           {page === 'dashboard' && user.role === 'cs_1' && (
             <>
               <div className="page-heading">
@@ -1536,7 +1591,7 @@ function App() {
                             </div>
                           </td>
                           <td>
-                            <strong>{t.item_name || t.category.replace(/_/g, ' ')}</strong>
+                            <strong>{t.item_name || humanize(t.category)}</strong>
                             <small className="subline">{t.item_category} · {t.description.slice(0, 40)}...</small>
                           </td>
                           <td>
@@ -1722,7 +1777,7 @@ function App() {
                           </td>
                           <td className="amount">{money(t.claimed_amount, t.currency)}</td>
                           <td>
-                            <span className="pill green"><i />{t.payment_verification}</span>
+                            <span className="pill green"><i />{label(LEDGER_STATUS, t.payment_verification).text}</span>
                             <small className="subline" style={{ maxWidth: '240px', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                               {t.policy_evaluation_reason || '—'}
                             </small>
@@ -3009,7 +3064,7 @@ await fetch('http://YOUR_RITOS_URL/api/v1/integrations/ecommerce/ticket', {
               <div>
                 <div className="eyebrow">
                   ASSIGNED DESK: <strong style={{ color: selected.assigned_desk === 'CS_1' ? 'var(--emerald-700)' : selected.assigned_desk === 'CS_2' ? 'var(--amber-700)' : 'var(--rose-700)' }}>
-                    {selected.assigned_desk} ({selected.decision_bucket?.replace(/_/g, ' ')})
+                    {label(DESK, selected.assigned_desk).text} · {label(BUCKET, selected.decision_bucket).text}
                   </strong>
                 </div>
                 <h2>{selected.ticket_number}</h2>
@@ -3026,8 +3081,33 @@ await fetch('http://YOUR_RITOS_URL/api/v1/integrations/ecommerce/ticket', {
                 <span className="pill blue"><i />{selected.item_category}</span>
               </div>
 
-              <h3>{selected.item_name || selected.category.replace(/_/g, ' ')}</h3>
+              <h3>{selected.item_name || humanize(selected.category)}</h3>
               <p className="ticket-description">{selected.description}</p>
+
+              {user.role !== 'customer' && (
+                <div style={{ padding: '12px 14px', margin: '10px 0 14px', background: 'var(--indigo-50)', border: '1px solid var(--indigo-100)', borderRadius: 'var(--radius-md)', fontSize: '13px' }}>
+                  <strong>What to do next</strong>
+                  <p style={{ margin: '4px 0 0' }}>{nextStepText(selected, user, refunds)}</p>
+                </div>
+              )}
+
+              {user.role !== 'customer' && timeline.length > 0 && (
+                <div className="drawer-section">
+                  <div className="section-title"><h4>History</h4><span>{timeline.length} step(s)</span></div>
+                  <ol style={{ margin: 0, paddingLeft: '18px', fontSize: '12px', lineHeight: 1.6 }}>
+                    {timeline.map((h: any, i: number) => (
+                      <li key={i}>
+                        <span className="hint">{h.at ? new Date(h.at).toLocaleString(LOCALE) : ''}</span>{' '}
+                        <strong>{h.actor ? `${h.actor.name} (${roleName(h.actor.role)})` : 'RITOS (automatic)'}</strong>{' '}
+                        {h.trigger === 'HUMAN_DECISION' ? (HUMAN_DECISION[h.decision] || 'made a decision') : (RUN_TRIGGER[h.trigger] || 'ran the checks')}
+                        {h.waiting_for ? <> → {label(NEXT_ACTION, h.waiting_for).text}</> : null}
+                        {h.assigned_to?.name ? <> · assigned to {h.assigned_to.name} ({roleName(h.assigned_to.role)})</> : null}
+                        {h.note ? <span className="hint"> · “{h.note}”</span> : null}
+                      </li>
+                    ))}
+                  </ol>
+                </div>
+              )}
 
               {/* 3-STEP DECISION FLOWCHART (ARCHITECTURAL ROUTING TREE) */}
               <div style={{
@@ -3224,7 +3304,7 @@ await fetch('http://YOUR_RITOS_URL/api/v1/integrations/ecommerce/ticket', {
                           Customer Photo Proof (Agent 7 Computer Vision Engine)
                         </span>
                         <span className={`pill ${selected.proof_status === 'PROOF_VERIFIED' ? 'green' : 'amber'}`}>
-                          <i />{selected.proof_status}
+                          <i />{label(PROOF_STATUS, selected.proof_status).text}
                         </span>
                       </div>
 
@@ -3306,7 +3386,7 @@ await fetch('http://YOUR_RITOS_URL/api/v1/integrations/ecommerce/ticket', {
                           Decision Arbiter Trace (Rule Version: {selected.classification_evidence?.decision?.rule_version || 'not recorded'})
                         </span>
                         <span className="pill blue" style={{ fontSize: '10px' }}>
-                          {selected.classification_evidence?.decision?.next_action || selected.status}
+                          {anyStatus(selected.classification_evidence?.decision?.next_action || selected.status).text}
                         </span>
                       </div>
 
@@ -3316,7 +3396,7 @@ await fetch('http://YOUR_RITOS_URL/api/v1/integrations/ecommerce/ticket', {
                           <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginTop: '4px' }}>
                             {selected.classification_evidence.decision.reason_codes.map((code: string, idx: number) => (
                               <span key={idx} className="pill blue" style={{ fontSize: '10px', fontFamily: 'monospace' }}>
-                                {code}
+                                {reasonText(code)}
                               </span>
                             ))}
                           </div>
@@ -3405,10 +3485,13 @@ await fetch('http://YOUR_RITOS_URL/api/v1/integrations/ecommerce/ticket', {
                 <Detail label="Order Reference" value={selected.order_id || '—'} />
                 <Detail label="Transaction Reference" value={selected.transaction_id} />
                 <Detail label="Customer Contact" value={selected.customer_phone || selected.customer_email || '—'} />
-                <Detail label="Product Category" value={selected.item_category || 'GENERAL'} />
-                <Detail label="Ledger Check" value={selected.payment_verification} />
+                <Detail label="Product category" value={humanize(selected.item_category || 'GENERAL')} />
+                <Detail label="Payment check" value={label(LEDGER_STATUS, selected.payment_verification).text} />
               </div>
 
+              {user.role !== 'customer' && (
+              <details style={{ margin: '12px 0' }}>
+                <summary style={{ cursor: 'pointer', fontWeight: 700, fontSize: '13px' }}>Audit details: agent trace, decision codes and re-run</summary>
               {/* Multi-Agent Re-evaluation */}
               <div className="pipeline-box">
                 <div className="pipeline-header">
@@ -3423,8 +3506,8 @@ await fetch('http://YOUR_RITOS_URL/api/v1/integrations/ecommerce/ticket', {
                   </button>
                 </div>
                 <div style={{ fontSize: '12px', color: 'var(--navy-700)' }}>
-                  <div><strong>Decision Bucket:</strong> {selected.decision_bucket}</div>
-                  <div><strong>Assigned Desk:</strong> {selected.assigned_desk}</div>
+                  <div><strong>Verdict:</strong> {label(BUCKET, selected.decision_bucket).text}</div>
+                  <div><strong>Desk:</strong> {label(DESK, selected.assigned_desk).text}</div>
                   <div><strong>Policy Reasoning:</strong> {selected.policy_evaluation_reason}</div>
                 </div>
               </div>
@@ -3444,7 +3527,7 @@ await fetch('http://YOUR_RITOS_URL/api/v1/integrations/ecommerce/ticket', {
                   </div>
                   {selected.classification_evidence?.workflow?.next_action && (
                     <div style={{ fontSize: '12px', marginBottom: '10px', color: 'var(--navy-700)' }}>
-                      <strong>Orchestrator next action:</strong> {selected.classification_evidence.workflow.next_action.replace(/_/g, ' ')}
+                      <strong>Waiting for:</strong> {label(NEXT_ACTION, selected.classification_evidence.workflow.next_action).text}
                       {selected.classification_evidence.workflow.gate_reason ? ` — ${selected.classification_evidence.workflow.gate_reason}` : ''}
                     </div>
                   )}
@@ -3489,6 +3572,9 @@ await fetch('http://YOUR_RITOS_URL/api/v1/integrations/ecommerce/ticket', {
                     ))}
                   </div>
                 </div>
+              )}
+
+              </details>
               )}
 
               {/* FINANCE PAYOUT EXECUTION BOX */}
@@ -3678,19 +3764,10 @@ function SectionTitle({ title, action, onAction }: any) {
 }
 
 function StatusPill({ value }: any) {
-  const v = String(value || 'UNKNOWN')
-  const cls =
-    v.includes('REFUND') || v === 'ACTIVE' || v === 'RESOLVED' || v === 'APPROVED'
-      ? 'green'
-      : v.includes('REJECT') || v === 'FAILED' || v === 'CANCELLED'
-      ? 'red'
-      : v.includes('PENDING') || v.includes('AWAITING') || v === 'ESCALATED'
-      ? 'amber'
-      : 'blue'
-
+  const l = anyStatus(value)
   return (
-    <span className={`pill ${cls}`}>
-      <i />{v.replace(/_/g, ' ')}
+    <span className={`pill ${l.tone === 'grey' ? 'blue' : l.tone}`} title={String(value || '')}>
+      <i />{l.text}
     </span>
   )
 }
@@ -3734,7 +3811,7 @@ function TicketTable({ tickets, onSelect }: { tickets: Ticket[]; onSelect: (t: T
                 </td>
                 <td>
                   <div className="issue-cell">
-                    <strong>{t.item_name || t.category.replace(/_/g, ' ')}</strong>
+                    <strong>{t.item_name || humanize(t.category)}</strong>
                     <small>{t.description}</small>
                   </div>
                 </td>
@@ -3743,7 +3820,7 @@ function TicketTable({ tickets, onSelect }: { tickets: Ticket[]; onSelect: (t: T
                 </td>
                 <td>
                   <span className={`pill ${t.assigned_desk === 'CS_1' ? 'green' : t.assigned_desk === 'CS_2' ? 'amber' : 'red'}`}>
-                    <i />{t.assigned_desk || 'Not routed'}{t.decision_bucket ? ` (${t.decision_bucket.replace(/_/g, ' ')})` : ''}
+                    <i />{t.assigned_desk ? label(DESK, t.assigned_desk).text : 'Not routed'}{t.decision_bucket ? ` · ${label(BUCKET, t.decision_bucket).text}` : ''}
                   </span>
                 </td>
                 <td><StatusPill value={t.status} /></td>

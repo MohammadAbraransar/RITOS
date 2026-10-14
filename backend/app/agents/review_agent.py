@@ -14,10 +14,15 @@ from sqlalchemy.orm import Session
 from ..config import settings
 from ..models import Ticket, TicketStatus, User, Role
 
+def _roles(raw: str) -> list:
+    return [r.strip() for r in raw.split(",") if r.strip()]
+
+
+# Which roles may be assigned work in each review queue (REVIEW_QUEUE_*_ROLES settings)
 QUEUE_ROLES = {
-    "CS_2": [Role.CS_2.value, Role.SUPPORT.value],
-    "CS_3": [Role.CS_3.value, Role.SUPPORT.value],
-    "SUPERVISOR": [Role.SUPERVISOR.value],
+    "CS_2": _roles(settings.review_queue_cs2_roles),
+    "CS_3": _roles(settings.review_queue_cs3_roles),
+    "SUPERVISOR": _roles(settings.review_queue_supervisor_roles),
 }
 OPEN_STATUSES = [TicketStatus.NEW.value, TicketStatus.TRIAGED.value, TicketStatus.IN_REVIEW.value,
                  TicketStatus.AWAITING_INFORMATION.value, TicketStatus.ESCALATED.value, TicketStatus.REOPENED.value]
@@ -36,7 +41,7 @@ def coordinate_review(db: Session, ticket: Ticket, decision: Dict[str, Any]) -> 
         return {"review_required": False, "findings": "No human review needed for this outcome."}
 
     queue = "SUPERVISOR" if decision["next_action"] == "AWAIT_APPROVAL" else decision["assigned_desk"]
-    reviewer = _least_loaded(db, QUEUE_ROLES.get(queue, [Role.SUPPORT.value]))
+    reviewer = _least_loaded(db, QUEUE_ROLES.get(queue, []))
     sla_hours = {"P1": settings.review_sla_hours_p1, "P2": settings.review_sla_hours_p2}.get(ticket.priority, settings.review_sla_hours_default)
     due = datetime.now(timezone.utc) + timedelta(hours=sla_hours)
     if reviewer:
@@ -46,6 +51,10 @@ def coordinate_review(db: Session, ticket: Ticket, decision: Dict[str, Any]) -> 
         "queue": queue,
         "assigned_reviewer_id": reviewer.id if reviewer else None,
         "assigned_reviewer": reviewer.email if reviewer else None,
+        "assigned_reviewer_name": reviewer.full_name if reviewer else None,
+        "assigned_reviewer_role": reviewer.role if reviewer else None,
+        # Why it went to this queue: what the ticket is waiting for (the desk turns this into plain words)
+        "waiting_for": decision["next_action"],
         "sla_hours": sla_hours,
         "due_at": due.isoformat(),
         "required_evidence": decision.get("required_evidence", []),
