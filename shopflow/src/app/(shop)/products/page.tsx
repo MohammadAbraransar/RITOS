@@ -56,7 +56,7 @@ export default function ProductsPage() {
       </div>
 
       {/* Filter and Search Bar */}
-      <div className="flex flex-col md:flex-row gap-4 justify-between items-center bg-white p-4 rounded-xl border border-slate-200">
+      <div className="flex flex-col md:flex-row gap-3 md:gap-4 justify-between items-stretch md:items-center bg-white p-4 rounded-xl border border-slate-200">
         <div className="relative w-full md:w-80">
           <Search className="absolute left-3 top-2.5 w-4 h-4 text-slate-400" />
           <input
@@ -88,7 +88,7 @@ export default function ProductsPage() {
           <button
             key={cat}
             onClick={() => setSelectedCategory(cat)}
-            className={`px-3.5 py-1.5 rounded-full text-xs font-medium whitespace-nowrap transition ${
+            className={`px-3.5 py-2 rounded-full text-xs font-medium whitespace-nowrap transition ${
               selectedCategory === cat
                 ? "bg-indigo-600 text-white shadow-xs"
                 : "bg-white text-slate-600 border border-slate-200 hover:bg-slate-50"

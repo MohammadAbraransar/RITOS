@@ -105,7 +105,7 @@ def rerun_workflow(db: Session, ticket: Ticket, user: User, trigger: str = "MANU
 
 def require_cs1_bucket(ticket: Ticket):
     if ticket.decision_bucket != "GENUINE_REFUNDABLE":
-        raise HTTPException(409, f"Only CS-1 (GENUINE_REFUNDABLE) tickets can be refunded; this ticket is {ticket.decision_bucket}")
+        raise HTTPException(409, f"Only Approval Desk tickets (eligible for refund) can be refunded; this ticket is {ticket.decision_bucket}")
 
 def visible_ticket_query(db, user):
     q = select(Ticket)
@@ -800,7 +800,7 @@ def desks_summary(db:Session=Depends(get_db),user:User=Depends(get_current_user)
 
 @router.post("/cs1/tickets/{ticket_id}/direct-refund")
 def cs1_direct_refund(ticket_id:str, db:Session=Depends(get_db), user:User=Depends(get_current_user)):
-    """CS-1 fast track: approve the claim. Store orders are refunded by the store; RITOS-ledger orders get a
+    """Approval Desk: approve the claim. Store orders are refunded by the store; RITOS-ledger orders get a
     refund proposal that a different finance approver must approve and a third person must execute."""
     ticket = db.get(Ticket, ticket_id)
     if not ticket: raise HTTPException(404, "Ticket not found")
@@ -808,10 +808,10 @@ def cs1_direct_refund(ticket_id:str, db:Session=Depends(get_db), user:User=Depen
     require_cs1_bucket(ticket)
     if ticket.payment_verification != "VERIFIED":
         raise HTTPException(409, f"Cannot issue refund: Ledger status is {ticket.payment_verification}")
-    sent = store_decision(db, ticket, user, "APPROVED", "CS-1 fast-track approval")
+    sent = store_decision(db, ticket, user, "APPROVED", "Approved by the Approval Desk")
     if sent: return sent
-    record_human_decision(db, ticket, "APPROVED", user.id, "CS-1 fast-track approval")
-    proposal = propose_refund(db, ticket, user, Decimal(str(ticket.claimed_amount)), "CS-1 fast-track approval")
+    record_human_decision(db, ticket, "APPROVED", user.id, "Approved by the Approval Desk")
+    proposal = propose_refund(db, ticket, user, Decimal(str(ticket.claimed_amount)), "Approved by the Approval Desk")
     db.refresh(ticket)
     return {"status": "REFUND_PROPOSED", "refund": proposal, "ticket": ticket_view(ticket)}
 
@@ -827,19 +827,19 @@ def cs1_manual_decide(ticket_id:str, payload:CS1DecisionIn, db:Session=Depends(g
         require_cs1_bucket(ticket)
         if ticket.payment_verification != "VERIFIED":
             raise HTTPException(409, f"Cannot approve refund: Ledger status is {ticket.payment_verification}")
-    sent = store_decision(db, ticket, user, "APPROVED" if decision == "APPROVE" else "REJECTED", f"CS-1 manual review: {payload.reason}")
+    sent = store_decision(db, ticket, user, "APPROVED" if decision == "APPROVE" else "REJECTED", f"Approval Desk manual review: {payload.reason}")
     if sent: return sent
     record_human_decision(db, ticket, "APPROVED" if decision == "APPROVE" else "REJECTED", user.id, payload.reason)
     if decision == "APPROVE":
-        proposal = propose_refund(db, ticket, user, Decimal(str(ticket.claimed_amount)), f"CS-1 manual review: {payload.reason}")
+        proposal = propose_refund(db, ticket, user, Decimal(str(ticket.claimed_amount)), f"Approval Desk manual review: {payload.reason}")
         db.refresh(ticket)
         return {"status": "REFUND_PROPOSED", "refund": proposal, "ticket": ticket_view(ticket)}
     ticket.status = TicketStatus.REJECTED.value
     ticket.refund_status = "CANCELLED"
-    ticket.policy_evaluation_reason = f"CS-1 manual review cancelled: {payload.reason}"
+    ticket.policy_evaluation_reason = f"Approval Desk manual review cancelled: {payload.reason}"
     ticket.refund_decided_at = datetime.now(timezone.utc)
     ticket.refund_decided_by_id = user.id
-    db.add(TicketComment(ticket_id=ticket.id, author_id=user.id, body=f"CS-1 cancelled the refund: {payload.reason}", internal=False))
+    db.add(TicketComment(ticket_id=ticket.id, author_id=user.id, body=f"The Approval Desk cancelled the refund: {payload.reason}", internal=False))
     record_event(db, ticket.id, user.id, "CS1_REFUND_CANCELLED", {"reason": payload.reason})
     audit(db, user.id, "CS1_REFUND_CANCELLED", "ticket", ticket.id, {"reason": payload.reason})
     db.commit(); db.refresh(ticket)
@@ -866,7 +866,7 @@ def cs2_send_proof_request(ticket_id:str, payload:ProofRequestIn, db:Session=Dep
     db.add(TicketComment(
         ticket_id=ticket.id,
         author_id=user.id,
-        body=f"📲 [CS-2 proof request, posted to the customer's ticket]:\n{payload.message}",
+        body=f"[Review Desk proof request, posted to the customer's ticket]:\n{payload.message}",
         internal=False
     ))
     record_event(db, ticket.id, user.id, "CS2_PROOF_REQUEST_DISPATCHED", {"destination": dest, "message": payload.message, "proof_type": payload.proof_type})
@@ -883,7 +883,7 @@ def cs3_send_rejection_notice(ticket_id:str, payload:RejectionNoticeIn, db:Sessi
     if is_store_linked(ticket) and ticket.refund_status != "REJECTED":
         store_decision(db, ticket, user, "REJECTED", payload.reason or ticket.policy_evaluation_reason or "Rejected under store policy")
     elif not is_store_linked(ticket):
-        record_human_decision(db, ticket, "REJECTED", user.id, payload.reason or "CS-3 rejection notice")
+        record_human_decision(db, ticket, "REJECTED", user.id, payload.reason or "Rejection Desk notice")
 
     ticket.status = TicketStatus.REJECTED.value
     ticket.rejection_notice_sent_at = datetime.now(timezone.utc)
@@ -894,7 +894,7 @@ def cs3_send_rejection_notice(ticket_id:str, payload:RejectionNoticeIn, db:Sessi
     db.add(TicketComment(
         ticket_id=ticket.id,
         author_id=user.id,
-        body=f"📩 [CS-3 policy rejection notice, posted to the customer's ticket]:\n{payload.message}",
+        body=f"[Rejection Desk policy notice, posted to the customer's ticket]:\n{payload.message}",
         internal=False
     ))
     record_event(db, ticket.id, user.id, "CS3_REJECTION_NOTICE_DISPATCHED", {"destination": dest, "message": payload.message, "reason": payload.reason})
@@ -1031,7 +1031,7 @@ def handle_proof_action(ticket_id: str, payload: ProofActionPayload, db: Session
     elif payload.action == "DENY":
         record_human_decision(db, t, "REJECTED", user.id, payload.note or "Exception denied")
     else:
-        # Accepting proof moves the claim to CS-1, where a human authorizes the refund itself.
+        # Accepting proof moves the claim to the Approval Desk, where a human authorizes the refund itself.
         record_human_decision(db, t, "PROOF_ACCEPTED" if payload.action == "APPROVE_PROOF" else "PROOF_REQUESTED", user.id, payload.note or "")
 
     if payload.action == "APPROVE_PROOF":
@@ -1072,7 +1072,7 @@ def handle_proof_action(ticket_id: str, payload: ProofActionPayload, db: Session
 
 @router.get("/payouts/awaiting-authorization")
 def payouts_awaiting_authorization(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
-    """CS-1 tickets whose refund still needs someone to authorize the payout.
+    """Approval Desk tickets whose refund still needs someone to authorize the payout.
 
     Excludes tickets already refunded or decided, ones the store is already paying (decision sent), and ones with
     an active refund proposal (those are in the approvals queue).
@@ -1101,7 +1101,7 @@ def authorize_payout(ticket_id: str, db: Session = Depends(get_db), user: User =
     sent = store_decision(db, t, user, "APPROVED", "Refund approved by finance")
     if sent: return sent  # the store owns its payments and executes the refund
     record_human_decision(db, t, "APPROVED", user.id, "Refund proposed by finance")
-    proposal = propose_refund(db, t, user, Decimal(str(t.claimed_amount)), "Finance proposed payout for an eligible CS-1 claim")
+    proposal = propose_refund(db, t, user, Decimal(str(t.claimed_amount)), "Finance proposed payout for an eligible Approval Desk claim")
     db.refresh(t)
     return {"status": "REFUND_PROPOSED", "refund": proposal, "ticket": ticket_view(t)}
 

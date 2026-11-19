@@ -162,7 +162,7 @@ def main():
                 status=RefundStatus.REFUNDED.value,
                 approved_by_id=app_user.id,
                 provider_reference="MOCK-SETTLE-881920",
-                reason="CS-1 automated fast-track settlement credited to customer bank account.",
+                reason="Approval Desk automatic settlement credited to customer bank account.",
                 idempotency_key=f"seed-settle-{t_1005.id}"
             ))
             # Mark ticket as resolved
@@ -241,7 +241,7 @@ def main():
         print("Password:", settings.seed_password)
         for email, _, role in USERS:
             print(f"  {role:20} {email}")
-        print("Seeded Desks: CS-1 (Genuine), CS-2 (Exceptions), CS-3 (Ineligible/Non-refundable)")
+        print("Seeded Desks: Approval Desk, Review Desk, Rejection Desk")
         print("Seeded Double-Entry Chart of Accounts and Product Catalog.")
     finally:
         db.close()

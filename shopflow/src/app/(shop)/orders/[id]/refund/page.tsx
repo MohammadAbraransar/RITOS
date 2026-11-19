@@ -118,12 +118,12 @@ export default function OrderRefundPage({ params }: { params: { id: string } }) 
     <div className="max-w-2xl mx-auto space-y-6">
       <Link
         href={`/orders/${params.id}`}
-        className="inline-flex items-center gap-1.5 text-sm font-medium text-slate-600 hover:text-slate-900 transition"
+        className="inline-flex items-center gap-1.5 py-1.5 text-sm font-medium text-slate-600 hover:text-slate-900 transition"
       >
         <ArrowLeft className="w-4 h-4" /> Back to Order {params.id}
       </Link>
 
-      <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-sm space-y-6">
+      <div className="bg-white rounded-xl border border-slate-200 p-4 sm:p-6 shadow-sm space-y-6">
         <div>
           <h1 className="text-xl font-bold text-slate-900 flex items-center gap-2">
             <RotateCcw className="w-5 h-5 text-indigo-600" /> Request a Refund
@@ -167,7 +167,7 @@ export default function OrderRefundPage({ params }: { params: { id: string } }) 
                   <img
                     src={item.image_url}
                     alt={item.product_name}
-                    className="w-12 h-12 object-cover rounded border border-slate-200 bg-slate-50"
+                    className="w-12 h-12 object-cover rounded border border-slate-200 bg-slate-50 shrink-0"
                   />
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-semibold text-slate-900 truncate">

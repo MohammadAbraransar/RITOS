@@ -12,9 +12,9 @@ const L = (text: string, tone: Tone = 'blue'): Label => ({ text, tone })
 
 // Which desk the claim is on
 export const DESK: Record<string, Label> = {
-  CS_1: L('CS-1 · Fast-track', 'green'),
-  CS_2: L('CS-2 · Review', 'amber'),
-  CS_3: L('CS-3 · Not eligible', 'red'),
+  CS_1: L('Approval Desk', 'green'),
+  CS_2: L('Review Desk', 'amber'),
+  CS_3: L('Rejection Desk', 'red'),
 }
 
 // RITOS's verdict on the claim
@@ -93,9 +93,9 @@ export const PROOF_STATUS: Record<string, Label> = {
 
 export const ROLE: Record<string, string> = {
   customer: 'Customer',
-  cs_1: 'CS-1 agent',
-  cs_2: 'CS-2 agent',
-  cs_3: 'CS-3 agent',
+  cs_1: 'Approval Desk agent',
+  cs_2: 'Review Desk agent',
+  cs_3: 'Rejection Desk agent',
   support_agent: 'Support agent',
   supervisor: 'Supervisor',
   finance_approver: 'Finance',

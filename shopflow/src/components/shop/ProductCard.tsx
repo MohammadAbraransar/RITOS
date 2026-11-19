@@ -34,7 +34,7 @@ export function ProductCard({ product }: { product: any }) {
             </div>
           </div>
 
-          <Link href={`/products/${product.product_id}`}>
+          <Link href={`/products/${product.product_id}`} className="block py-0.5">
             <h3 className="font-semibold text-slate-900 group-hover:text-indigo-600 transition line-clamp-1">
               {product.name}
             </h3>
@@ -44,7 +44,7 @@ export function ProductCard({ product }: { product: any }) {
           </p>
         </div>
 
-        <div className="pt-2 border-t border-slate-100 flex items-center justify-between">
+        <div className="pt-2 border-t border-slate-100 flex items-center justify-between gap-3">
           <div>
             <span className="text-xs text-slate-400 block">Price</span>
             <span className="text-lg font-bold text-slate-900">{priceText}</span>
@@ -52,7 +52,7 @@ export function ProductCard({ product }: { product: any }) {
 
           <Link
             href={`/products/${product.product_id}`}
-            className="px-3.5 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-semibold rounded-lg transition"
+            className="px-3.5 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-semibold rounded-lg whitespace-nowrap transition"
           >
             View Details
           </Link>

@@ -74,10 +74,10 @@ export default function OrderDetailPage({ params }: { params: { id: string } }) 
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <Link
           href="/orders"
-          className="inline-flex items-center gap-1.5 text-sm font-medium text-slate-600 hover:text-slate-900 transition"
+          className="inline-flex items-center gap-1.5 py-1.5 text-sm font-medium text-slate-600 hover:text-slate-900 transition"
         >
           <ArrowLeft className="w-4 h-4" /> Back to My Orders
         </Link>
@@ -87,7 +87,7 @@ export default function OrderDetailPage({ params }: { params: { id: string } }) 
       </div>
 
       {/* Status Progress Header */}
-      <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-sm space-y-6">
+      <div className="bg-white rounded-xl border border-slate-200 p-4 sm:p-6 shadow-sm space-y-6">
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div>
             <h1 className="text-xl font-bold text-slate-900">
@@ -101,7 +101,7 @@ export default function OrderDetailPage({ params }: { params: { id: string } }) 
 
           {/* Refund Trigger Button / State */}
           {isDelivered && !hasActiveTicket && (
-            <div className="flex flex-col sm:flex-row items-end gap-2">
+            <div className="flex flex-col sm:flex-row items-start sm:items-end gap-2">
               <Link
                 href={`/orders/${order.id}/refund`}
                 className="inline-flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-semibold shadow-sm transition"
@@ -127,7 +127,7 @@ export default function OrderDetailPage({ params }: { params: { id: string } }) 
         {/* Existing Refund Notice */}
         {hasActiveTicket && (
           <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl space-y-2">
-            <div className="flex items-center justify-between">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <span className="text-xs font-bold text-amber-900 uppercase tracking-wider">
                 Refund Ticket: {order.tickets[0].ticket_number}
               </span>
@@ -145,7 +145,7 @@ export default function OrderDetailPage({ params }: { params: { id: string } }) 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         {/* Left Column: Items */}
         <div className="md:col-span-2 space-y-4">
-          <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-sm space-y-4">
+          <div className="bg-white rounded-xl border border-slate-200 p-4 sm:p-6 shadow-sm space-y-4">
             <h2 className="text-sm font-bold uppercase tracking-wider text-slate-700">
               Items Ordered ({order.items.length})
             </h2>
@@ -161,7 +161,7 @@ export default function OrderDetailPage({ params }: { params: { id: string } }) 
                   <div className="flex-1 min-w-0">
                     <Link
                       href={`/products/${item.product_id}`}
-                      className="text-sm font-semibold text-slate-900 hover:text-indigo-600 transition block truncate"
+                      className="text-sm font-semibold text-slate-900 hover:text-indigo-600 transition block truncate py-0.5"
                     >
                       {item.product_name}
                     </Link>
@@ -182,7 +182,7 @@ export default function OrderDetailPage({ params }: { params: { id: string } }) 
                       </div>
                     )}
                   </div>
-                  <div className="text-right text-sm font-bold text-slate-900">
+                  <div className="text-right text-sm font-bold text-slate-900 whitespace-nowrap">
                     {formatPrice(item.unit_price_minor * item.quantity)}
                   </div>
                 </div>

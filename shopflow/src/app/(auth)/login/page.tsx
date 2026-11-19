@@ -47,7 +47,7 @@ function LoginForm() {
   };
 
   return (
-    <div className="max-w-md w-full bg-white rounded-2xl border border-slate-200 p-8 shadow-xs space-y-6">
+    <div className="max-w-md w-full bg-white rounded-2xl border border-slate-200 p-6 sm:p-8 shadow-xs space-y-6">
       <div className="text-center space-y-2">
         <Link href="/" className="inline-flex items-center space-x-2 font-bold text-2xl text-slate-900">
           <span className="w-8 h-8 rounded-lg bg-indigo-600 text-white flex items-center justify-center font-bold text-lg">
@@ -102,7 +102,7 @@ function LoginForm() {
 
       <div className="pt-4 border-t border-slate-100 text-center text-xs text-slate-500">
         <span>Don&apos;t have an account? </span>
-        <Link href="/register" className="text-indigo-600 hover:underline font-semibold">
+        <Link href="/register" className="inline-block py-1 text-indigo-600 hover:underline font-semibold">
           Create account
         </Link>
       </div>

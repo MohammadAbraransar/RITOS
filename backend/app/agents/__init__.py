@@ -68,7 +68,7 @@ AGENTS = [
      "purpose": "30/90/365-day claim velocity, account age and amount thresholds as review signals.",
      "guardrail": "Risk indicators are review flags, not proof of fraud. Never auto-penalizes customers."},
     {"id": "decision_arbiter", "name": "Agent 6 · Decision & Routing Arbiter", "mode": "deterministic",
-     "purpose": "Route to CS-1 / CS-2 / CS-3 by fixed precedence with machine-readable reason codes.",
+     "purpose": "Route to the Approval, Review or Rejection desk by fixed precedence with machine-readable reason codes.",
      "guardrail": "Sole routing authority. Models never authorize refunds or execute payouts."},
     {"id": "review_coordination", "name": "Agent 9 · Human Review Coordinator", "mode": "deterministic+llm-briefing",
      "purpose": "Assign a reviewer, SLA, checklist, required evidence and permitted actions.",

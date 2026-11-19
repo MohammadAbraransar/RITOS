@@ -106,16 +106,16 @@ export default function CustomerRefundTicketPage({ params }: { params: { id: str
     <div className="max-w-3xl mx-auto space-y-6">
       <Link
         href="/orders"
-        className="inline-flex items-center gap-1.5 text-sm font-medium text-slate-600 hover:text-slate-900 transition"
+        className="inline-flex items-center gap-1.5 py-1.5 text-sm font-medium text-slate-600 hover:text-slate-900 transition"
       >
         <ArrowLeft className="w-4 h-4" /> Back to My Orders
       </Link>
 
       {/* Main Banner / Status Card */}
-      <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-sm space-y-6">
+      <div className="bg-white rounded-xl border border-slate-200 p-4 sm:p-6 shadow-sm space-y-6">
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div>
-            <div className="flex items-center gap-3">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
               <h1 className="text-xl font-bold text-slate-900">
                 Refund Ticket
               </h1>
@@ -181,13 +181,13 @@ export default function CustomerRefundTicketPage({ params }: { params: { id: str
               Claim Summary
             </h3>
             <div className="space-y-2 text-xs">
-              <div className="flex justify-between">
+              <div className="flex justify-between gap-3">
                 <span className="text-slate-500">Reason</span>
-                <span className="font-semibold text-slate-800">{ticket.reason}</span>
+                <span className="font-semibold text-slate-800 text-right break-all">{ticket.reason}</span>
               </div>
-              <div className="flex justify-between">
+              <div className="flex justify-between gap-3">
                 <span className="text-slate-500">Requested Action</span>
-                <span className="font-semibold text-slate-800">{ticket.requested_action}</span>
+                <span className="font-semibold text-slate-800 text-right break-all">{ticket.requested_action}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-slate-500">Amount Requested</span>
@@ -216,7 +216,7 @@ export default function CustomerRefundTicketPage({ params }: { params: { id: str
                   className="w-12 h-12 object-cover rounded bg-white border border-slate-200"
                 />
               )}
-              <div className="text-xs space-y-0.5">
+              <div className="text-xs space-y-0.5 min-w-0">
                 <p className="font-semibold text-slate-900">{ticket.product?.name}</p>
                 <p className="text-slate-500 font-mono">SKU: {ticket.product?.sku}</p>
               </div>
@@ -229,7 +229,7 @@ export default function CustomerRefundTicketPage({ params }: { params: { id: str
                   {ticket.evidence.map((ev: any) => (
                     <div key={ev.id} className="text-xs text-slate-600 flex items-center gap-1.5">
                       <FileText className="w-3.5 h-3.5 text-indigo-500" />
-                      <span>{ev.filename}</span>
+                      <span className="break-all">{ev.filename}</span>
                     </div>
                   ))}
                 </div>
@@ -248,7 +248,7 @@ export default function CustomerRefundTicketPage({ params }: { params: { id: str
               accept="image/jpeg,image/png,image/webp,application/pdf"
               disabled={uploading}
               onChange={(e) => uploadEvidence(e.target.files)}
-              className="text-xs"
+              className="block w-full text-xs text-slate-500 file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100"
             />
             {uploadMsg && <p className="text-xs text-slate-700">{uploadMsg}</p>}
           </div>
@@ -265,9 +265,9 @@ export default function CustomerRefundTicketPage({ params }: { params: { id: str
               <div key={idx} className="relative">
                 <div className="absolute -left-[27px] top-1 w-3.5 h-3.5 rounded-full border-2 border-white bg-indigo-600 ring-2 ring-indigo-100"></div>
                 <div>
-                  <div className="flex items-center justify-between">
+                  <div className="flex items-start justify-between gap-3">
                     <p className="text-xs font-bold text-slate-900">{item.title}</p>
-                    <span className="text-[10px] text-slate-400">
+                    <span className="text-[10px] text-slate-400 whitespace-nowrap">
                       {new Date(item.occurred_at).toLocaleTimeString(STORE_LOCALE, { hour: "2-digit", minute: "2-digit" })}
                     </span>
                   </div>

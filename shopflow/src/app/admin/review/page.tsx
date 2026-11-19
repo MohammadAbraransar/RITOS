@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { ArrowLeft, ShieldAlert, CheckCircle, Clock, Eye, AlertCircle, RefreshCw } from "lucide-react";
+import { Eye } from "lucide-react";
+import { AdminHeader } from "@/components/layout/AdminHeader";
 import { formatMoney } from "@/lib/money";
 
 export default function AdminReviewQueuePage() {
@@ -34,26 +35,10 @@ export default function AdminReviewQueuePage() {
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800">
-      <header className="bg-slate-900 text-white px-6 py-4 flex items-center justify-between shadow">
-        <div className="flex items-center space-x-3">
-          <Link href="/admin" className="text-slate-400 hover:text-white transition">
-            <ArrowLeft className="w-5 h-5" />
-          </Link>
-          <span className="font-bold text-lg tracking-tight">Support Analyst Review Queue</span>
-          <span className="text-xs bg-amber-500/20 text-amber-300 border border-amber-500/30 px-2 py-0.5 rounded">
-            HUMAN_REVIEW
-          </span>
-        </div>
-        <button
-          onClick={fetchQueue}
-          className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition text-xs flex items-center gap-1.5"
-        >
-          <RefreshCw className="w-3.5 h-3.5" /> Refresh
-        </button>
-      </header>
+      <AdminHeader backHref="/admin" title="Support Analyst Review Queue" badge="HUMAN_REVIEW" badgeTone="amber" onRefresh={fetchQueue} />
 
-      <main className="max-w-6xl mx-auto p-6 space-y-6">
-        <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-sm space-y-4">
+      <main className="max-w-6xl mx-auto p-4 sm:p-6 space-y-6">
+        <div className="bg-white rounded-xl border border-slate-200 p-4 sm:p-6 shadow-sm space-y-4">
           <div>
             <h1 className="text-xl font-bold text-slate-900">Escalated Tickets</h1>
             <p className="text-xs text-slate-500 mt-1">
@@ -70,7 +55,7 @@ export default function AdminReviewQueuePage() {
           ) : (
             <div className="divide-y divide-slate-100">
               {tickets.map((t) => (
-                <div key={t.ticket_id} className="py-4 flex items-center justify-between gap-4">
+                <div key={t.ticket_id} className="py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 sm:gap-4">
                   <div>
                     <div className="flex items-center gap-2">
                       <span className="font-mono font-semibold text-slate-900">{t.ticket_id}</span>

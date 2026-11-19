@@ -105,8 +105,8 @@ export default function MyOrdersPage() {
               key={order.id}
               className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm hover:border-slate-300 transition"
             >
-              <div className="bg-slate-50/70 px-6 py-4 border-b border-slate-200 flex flex-wrap items-center justify-between gap-4 text-xs">
-                <div className="flex items-center gap-6">
+              <div className="bg-slate-50/70 px-4 sm:px-6 py-4 border-b border-slate-200 flex flex-wrap items-center justify-between gap-4 text-xs">
+                <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
                   <div>
                     <span className="text-slate-500 block">Order Placed</span>
                     <span className="font-medium text-slate-800">
@@ -133,14 +133,14 @@ export default function MyOrdersPage() {
                   {getStatusBadge(order.status)}
                   <Link
                     href={`/orders/${order.id}`}
-                    className="inline-flex items-center gap-1 font-medium text-indigo-600 hover:text-indigo-800 transition"
+                    className="inline-flex items-center gap-1 px-3 py-2 -mr-3 rounded-lg font-medium text-indigo-600 hover:text-indigo-800 hover:bg-indigo-50 transition"
                   >
                     View Details <ArrowRight className="w-3.5 h-3.5" />
                   </Link>
                 </div>
               </div>
 
-              <div className="p-6 space-y-4">
+              <div className="p-4 sm:p-6 space-y-4">
                 {order.items.map((item: any) => (
                   <div key={item.id} className="flex items-center gap-4">
                     <img
@@ -151,7 +151,7 @@ export default function MyOrdersPage() {
                     <div className="flex-1 min-w-0">
                       <Link
                         href={`/products/${item.product_id}`}
-                        className="text-sm font-semibold text-slate-800 hover:text-indigo-600 transition truncate block"
+                        className="text-sm font-semibold text-slate-800 hover:text-indigo-600 transition truncate block py-0.5"
                       >
                         {item.product_name}
                       </Link>
@@ -169,8 +169,8 @@ export default function MyOrdersPage() {
 
                 {/* Refund Ticket Banner if already exists */}
                 {order.tickets && order.tickets.length > 0 && (
-                  <div className="mt-2 p-3 bg-amber-50 border border-amber-200 rounded-lg flex items-center justify-between text-xs text-amber-900">
-                    <div className="flex items-center gap-2">
+                  <div className="mt-2 p-3 bg-amber-50 border border-amber-200 rounded-lg flex flex-wrap items-center justify-between gap-2 text-xs text-amber-900">
+                    <div className="flex flex-wrap items-center gap-2">
                       <span className="font-semibold">Refund Ticket Active:</span>
                       <span className="font-mono">{order.tickets[0].ticket_number}</span>
                       <span className="px-2 py-0.5 bg-amber-200/60 rounded text-[11px] font-medium">
@@ -179,9 +179,9 @@ export default function MyOrdersPage() {
                     </div>
                     <Link
                       href={`/orders/${order.id}`}
-                      className="text-amber-800 hover:underline font-medium"
+                      className="inline-flex items-center gap-1 py-1 text-amber-800 hover:underline font-medium"
                     >
-                      Track Refund Timeline →
+                      Track Refund Timeline <ArrowRight className="w-3.5 h-3.5" />
                     </Link>
                   </div>
                 )}

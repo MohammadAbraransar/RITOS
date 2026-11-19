@@ -1,18 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Link from "next/link";
-import { 
-  ArrowLeft, 
-  Package, 
-  Sliders, 
-  CheckCircle, 
-  Truck, 
-  Calendar, 
-  Search, 
-  Clock, 
-  RefreshCw 
-} from "lucide-react";
+import { CheckCircle, Truck, Search, X } from "lucide-react";
+import { AdminHeader } from "@/components/layout/AdminHeader";
 import { formatMoney } from "@/lib/money";
 
 export default function AdminOrdersPage() {
@@ -96,25 +86,9 @@ export default function AdminOrdersPage() {
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800">
-      <header className="bg-slate-900 text-white px-6 py-4 flex items-center justify-between shadow">
-        <div className="flex items-center space-x-3">
-          <Link href="/admin" className="text-slate-400 hover:text-white transition">
-            <ArrowLeft className="w-5 h-5" />
-          </Link>
-          <span className="font-bold text-lg tracking-tight">Admin Orders & Delivery Simulator</span>
-          <span className="text-xs bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 px-2 py-0.5 rounded">
-            Phase 3
-          </span>
-        </div>
-        <button
-          onClick={fetchOrders}
-          className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition text-xs flex items-center gap-1.5"
-        >
-          <RefreshCw className="w-3.5 h-3.5" /> Refresh
-        </button>
-      </header>
+      <AdminHeader backHref="/admin" title="Admin Orders & Delivery Simulator" badge="Phase 3" onRefresh={fetchOrders} />
 
-      <main className="max-w-7xl mx-auto p-6 space-y-6">
+      <main className="max-w-7xl mx-auto p-4 sm:p-6 space-y-6">
         {actionSuccess && (
           <div className="p-4 bg-emerald-50 border border-emerald-200 text-emerald-900 rounded-xl text-sm font-medium flex items-center gap-2">
             <CheckCircle className="w-5 h-5 text-emerald-600 flex-shrink-0" />
@@ -122,7 +96,7 @@ export default function AdminOrdersPage() {
           </div>
         )}
 
-        <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-sm space-y-4">
+        <div className="bg-white rounded-xl border border-slate-200 p-4 sm:p-6 shadow-sm space-y-4">
           <div className="flex flex-col md:flex-row gap-4 justify-between items-center">
             <div>
               <h1 className="text-xl font-bold text-slate-900">Orders Roster</h1>
@@ -147,7 +121,7 @@ export default function AdminOrdersPage() {
             <div className="py-12 text-center text-slate-500">Loading orders...</div>
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs border-collapse">
+              <table className="w-full text-left text-xs border-collapse whitespace-nowrap">
                 <thead>
                   <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 uppercase font-semibold">
                     <th className="py-3 px-4">Order ID</th>
@@ -179,7 +153,7 @@ export default function AdminOrdersPage() {
                         <select
                           value={order.status}
                           onChange={(e) => handleUpdateStatus(order.id, e.target.value)}
-                          className="bg-white border border-slate-200 rounded px-2 py-1 text-xs font-medium focus:ring-1 focus:ring-indigo-500"
+                          className="bg-white border border-slate-200 rounded-lg px-2 py-2 text-xs font-medium focus:ring-1 focus:ring-indigo-500"
                         >
                           <option value="CONFIRMED">CONFIRMED</option>
                           <option value="PROCESSING">PROCESSING</option>
@@ -205,27 +179,28 @@ export default function AdminOrdersPage() {
                       </td>
                       <td className="py-3 px-4 text-right space-x-2">
                         {simulatingOrderId === order.id ? (
-                          <div className="inline-flex items-center gap-2 bg-indigo-50 p-1.5 rounded-lg border border-indigo-200">
+                          <div className="inline-flex items-center gap-2 bg-indigo-50 p-1.5 rounded-lg border border-indigo-200 whitespace-nowrap">
                             <input
                               type="number"
                               min="0"
                               max="90"
                               value={simDays}
                               onChange={(e) => setSimDays(parseInt(e.target.value) || 0)}
-                              className="w-14 px-2 py-0.5 text-xs border border-indigo-300 rounded"
+                              className="w-14 px-2 py-1.5 text-xs border border-indigo-300 rounded"
                             />
                             <span className="text-[11px] text-indigo-700">days ago</span>
                             <button
                               onClick={() => handleSimulateDelivery(order.id, simDays)}
-                              className="px-2 py-0.5 bg-indigo-600 text-white rounded text-xs hover:bg-indigo-700 font-medium"
+                              className="px-3 py-2 bg-indigo-600 text-white rounded-lg text-xs hover:bg-indigo-700 font-medium"
                             >
                               Apply
                             </button>
                             <button
                               onClick={() => setSimulatingOrderId(null)}
-                              className="px-1.5 py-0.5 text-slate-500 hover:text-slate-700 text-xs"
+                              className="inline-flex items-center justify-center w-8 h-8 rounded-lg text-slate-500 hover:text-slate-700 hover:bg-indigo-100"
+                              aria-label="Cancel"
                             >
-                              ✕
+                              <X className="w-4 h-4" />
                             </button>
                           </div>
                         ) : (
@@ -234,7 +209,7 @@ export default function AdminOrdersPage() {
                               setSimulatingOrderId(order.id);
                               setSimDays(4); // default 4 days ago as required by Phase 3 check
                             }}
-                            className="inline-flex items-center gap-1 px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded text-xs font-medium transition"
+                            className="inline-flex items-center gap-1 px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-medium whitespace-nowrap transition"
                           >
                             <Truck className="w-3.5 h-3.5" /> Simulate Delivery
                           </button>

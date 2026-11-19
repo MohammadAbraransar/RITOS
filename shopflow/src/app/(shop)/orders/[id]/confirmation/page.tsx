@@ -9,7 +9,7 @@ export default function OrderConfirmationPage({
   params: { id: string };
 }) {
   return (
-    <div className="max-w-md mx-auto text-center py-16 bg-white rounded-2xl border border-slate-200 p-8 space-y-6">
+    <div className="max-w-md mx-auto text-center py-12 sm:py-16 bg-white rounded-2xl border border-slate-200 px-6 sm:px-8 space-y-6">
       <div className="w-16 h-16 bg-emerald-50 text-emerald-600 rounded-full flex items-center justify-center mx-auto">
         <CheckCircle2 className="w-10 h-10" />
       </div>

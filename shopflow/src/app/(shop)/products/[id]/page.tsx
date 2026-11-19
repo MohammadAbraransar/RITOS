@@ -66,7 +66,7 @@ export default function ProductDetailPage({
     <div className="space-y-10">
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-10">
         {/* Product Image Placeholder */}
-        <div className="bg-white rounded-2xl border border-slate-200 p-8 flex items-center justify-center min-h-[380px] bg-gradient-to-tr from-slate-100 to-slate-50">
+        <div className="bg-white rounded-2xl border border-slate-200 p-6 sm:p-8 flex items-center justify-center min-h-[260px] sm:min-h-[380px] bg-gradient-to-tr from-slate-100 to-slate-50">
           <div className="text-center space-y-2">
             <span className="text-6xl font-black text-slate-300 block">
               {product.category[0]}
@@ -111,7 +111,7 @@ export default function ProductDetailPage({
             </span>
           </div>
 
-          <div className="flex space-x-3">
+          <div className="flex gap-3">
             <button
               onClick={handleAddToCart}
               disabled={addingToCart || product.stock <= 0}

@@ -1,7 +1,6 @@
-import Link from "next/link";
 import fs from "fs";
 import path from "path";
-import { ArrowLeft, BookOpen } from "lucide-react";
+import { AdminHeader } from "@/components/layout/AdminHeader";
 
 export const dynamic = "force-dynamic";
 
@@ -16,18 +15,11 @@ export default function AdminApiDocsPage() {
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 pb-12">
-      <header className="bg-slate-900 text-white px-6 py-4 flex items-center justify-between shadow">
-        <div className="flex items-center space-x-3">
-          <Link href="/admin" className="text-slate-400 hover:text-white transition">
-            <ArrowLeft className="w-5 h-5" />
-          </Link>
-          <span className="font-bold text-lg tracking-tight">API Contract Specification (docs/02)</span>
-        </div>
-      </header>
+      <AdminHeader backHref="/admin" title="API Contract Specification (docs/02)" />
 
-      <main className="max-w-5xl mx-auto p-6 space-y-6">
-        <div className="bg-white rounded-xl border border-slate-200 p-8 shadow-sm">
-          <pre className="font-mono text-xs text-slate-800 whitespace-pre-wrap leading-relaxed">
+      <main className="max-w-5xl mx-auto p-4 sm:p-6 space-y-6">
+        <div className="bg-white rounded-xl border border-slate-200 p-4 sm:p-8 shadow-sm">
+          <pre className="font-mono text-xs text-slate-800 whitespace-pre-wrap break-words leading-relaxed">
             {content}
           </pre>
         </div>

@@ -82,7 +82,7 @@ export default function CheckoutPage() {
       <form onSubmit={handleCheckout} className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         <div className="lg:col-span-2 space-y-6">
           {/* Shipping Address */}
-          <div className="bg-white rounded-xl border border-slate-200 p-6 space-y-4">
+          <div className="bg-white rounded-xl border border-slate-200 p-4 sm:p-6 space-y-4">
             <h2 className="font-bold text-slate-900 text-base">Shipping Address</h2>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
               <div className="sm:col-span-2">
@@ -129,7 +129,7 @@ export default function CheckoutPage() {
           </div>
 
           {/* Payment Method */}
-          <div className="bg-white rounded-xl border border-slate-200 p-6 space-y-4">
+          <div className="bg-white rounded-xl border border-slate-200 p-4 sm:p-6 space-y-4">
             <h2 className="font-bold text-slate-900 text-base">Payment Method (Mock Provider)</h2>
 
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -178,7 +178,7 @@ export default function CheckoutPage() {
         </div>
 
         {/* Order Summary & Confirm Button */}
-        <div className="bg-white rounded-xl border border-slate-200 p-6 space-y-5 h-fit">
+        <div className="bg-white rounded-xl border border-slate-200 p-4 sm:p-6 space-y-5 h-fit">
           <h2 className="font-bold text-slate-900 text-base">Payment Summary</h2>
 
           <div className="space-y-2 text-xs text-slate-600 border-b border-slate-100 pb-3">

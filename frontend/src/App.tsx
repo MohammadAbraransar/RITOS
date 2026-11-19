@@ -6,7 +6,8 @@ import {
   Filter, Gauge, Headphones, HelpCircle, Info, LayoutDashboard, Lock, LogOut,
   Mail, Menu, MessageSquare, Phone, Play, Plus, RefreshCw, Search, Send,
   Shield, ShieldAlert, Sparkles, Ticket as TicketIcon, Users, WalletCards, X, Zap,
-  Camera, Cpu, GitFork, UploadCloud, Trash2
+  Camera, Cpu, GitFork, UploadCloud, Trash2, XCircle, Landmark, ShoppingCart, Laptop, Shirt,
+  Backpack, Apple, Settings2, ArrowRight, Smartphone
 } from 'lucide-react'
 import { api, API_ROOT, getToken, setToken, type NextStep, type Ticket, type User } from './api'
 import { label, anyStatus, roleName, reasonText, humanize, DESK, BUCKET, NEXT_ACTION, LEDGER_STATUS, PROOF_STATUS,
@@ -15,10 +16,22 @@ import { isClosedStatus, priorityRank } from './logic'
 
 export { isClosedStatus, priorityRank }
 
+// One icon and colour per desk, used wherever a desk is named (menu, headings, legends, docs)
+const DESK_ICONS = {
+  cs1: { Icon: CheckCircle2, color: 'var(--emerald-600)' },
+  cs2: { Icon: AlertTriangle, color: 'var(--amber-600)' },
+  cs3: { Icon: XCircle, color: 'var(--rose-600)' },
+} as const
+
+function DeskIcon({ desk, size = 14 }: { desk: keyof typeof DESK_ICONS; size?: number }) {
+  const { Icon, color } = DESK_ICONS[desk]
+  return <Icon size={size} color={color} className="inline-icon" aria-hidden="true" />
+}
+
 const roles = [
-  { label: 'CS-1 (Fast-Track)', role: 'cs_1', email: 'cs1@ritos.local', icon: CheckCircle2, desc: 'Genuine in-policy refunds' },
-  { label: 'CS-2 (Exceptions)', role: 'cs_2', email: 'cs2@ritos.local', icon: AlertTriangle, desc: 'Missing proof & damage' },
-  { label: 'CS-3 (Denials)', role: 'cs_3', email: 'cs3@ritos.local', icon: X, desc: 'Policy rejection notices' },
+  { label: 'Approval Desk', role: 'cs_1', email: 'cs1@ritos.local', icon: CheckCircle2, desc: 'Genuine in-policy refunds' },
+  { label: 'Review Desk', role: 'cs_2', email: 'cs2@ritos.local', icon: AlertTriangle, desc: 'Missing proof & damage' },
+  { label: 'Rejection Desk', role: 'cs_3', email: 'cs3@ritos.local', icon: X, desc: 'Policy rejection notices' },
   { label: 'Administrator', role: 'administrator', email: 'admin@ritos.local', icon: Command, desc: 'Webhooks & system config' },
   { label: 'Supervisor', role: 'supervisor', email: 'lead@ritos.local', icon: Shield, desc: 'Omnichannel desk oversight' },
   { label: 'Finance Approver', role: 'finance_approver', email: 'finance@ritos.local', icon: CircleDollarSign, desc: 'Settlement authorization' },
@@ -33,22 +46,22 @@ const DEMO_PASSWORD: string = import.meta.env.VITE_DEMO_PASSWORD || ''
 const navFor = (role: string) => {
   if (role === 'cs_1') {
     return [
-      ['CS-1 Dashboard', 'dashboard'],
-      ['🟢 CS-1 Genuine Queue', 'cs1_desk'],
+      ['Approval Dashboard', 'dashboard'],
+      ['Approval Queue', 'cs1_desk'],
       ['My Desk Tickets', 'tickets']
     ]
   }
   if (role === 'cs_2') {
     return [
-      ['CS-2 Dashboard', 'dashboard'],
-      ['🟡 CS-2 Exception Queue', 'cs2_desk'],
+      ['Review Dashboard', 'dashboard'],
+      ['Review Queue', 'cs2_desk'],
       ['My Desk Tickets', 'tickets']
     ]
   }
   if (role === 'cs_3') {
     return [
-      ['CS-3 Dashboard', 'dashboard'],
-      ['🔴 CS-3 Denial Queue', 'cs3_desk'],
+      ['Rejection Dashboard', 'dashboard'],
+      ['Rejection Queue', 'cs3_desk'],
       ['My Desk Tickets', 'tickets']
     ]
   }
@@ -63,7 +76,7 @@ const navFor = (role: string) => {
   if (role === 'finance_approver') {
     return [
       ['Finance Dashboard', 'dashboard'],
-      ['💰 Finance Approvals Queue', 'finance_queue'],
+      ['Finance Approvals Queue', 'finance_queue'],
       ['Settlement Register', 'refunds'],
       ['Audit Trail', 'audit']
     ]
@@ -71,12 +84,12 @@ const navFor = (role: string) => {
   // Administrator and Supervisor: Full omnichannel visibility & controls
   return [
     ['Executive Command', 'dashboard'],
-    ['🟢 CS-1 Genuine Desk', 'cs1_desk'],
-    ['🟡 CS-2 Exception Desk', 'cs2_desk'],
-    ['🔴 CS-3 Denial Desk', 'cs3_desk'],
-    ['💰 Finance Approvals Queue', 'finance_queue'],
+    ['Approval Desk', 'cs1_desk'],
+    ['Review Desk', 'cs2_desk'],
+    ['Rejection Desk', 'cs3_desk'],
+    ['Finance Approvals Queue', 'finance_queue'],
     ['All Team Tickets Queue', 'tickets'],
-    ['🛒 eCommerce Integration Hub', 'ecommerce'],
+    ['eCommerce Integration Hub', 'ecommerce'],
     ['Specialist Agents Registry', 'automation'],
     ['Settlement Register', 'refunds'],
     ['Security Audit Trail', 'audit']
@@ -387,7 +400,7 @@ function App() {
     setNotice('Data synced with database and desk queues.')
   }
 
-  // --- CS-1 ACTIONS ---
+  // --- Approval Desk ACTIONS ---
   async function handleCS1DirectRefund(t: Ticket) {
     setBusy(true)
     try {
@@ -402,7 +415,7 @@ function App() {
       setSelected(res.ticket)
       await load()
     } catch (err) {
-      setNotice(`CS-1 Refund Failed: ${(err as Error).message}`)
+      setNotice(`Refund failed: ${(err as Error).message}`)
     } finally {
       setBusy(false)
     }
@@ -415,7 +428,7 @@ function App() {
     }
     setBusy(true)
     try {
-      const reason = decision === 'APPROVE' ? 'CS-1 Manual Inspection Verified and Approved.' : manualCancelReason
+      const reason = decision === 'APPROVE' ? 'Manually inspected and approved by the Approval Desk.' : manualCancelReason
       const res = await api.cs1ManualDecide(t.id, decision, reason)
       if (decision === 'APPROVE') {
         if (res.status === 'REFUND_PROPOSED') {
@@ -438,7 +451,7 @@ function App() {
     }
   }
 
-  // --- CS-2 ACTION: SEND PROOF REQUEST ---
+  // --- Review Desk ACTION: SEND PROOF REQUEST ---
   async function handleCS2SendProof(t: Ticket) {
     setBusy(true)
     try {
@@ -453,7 +466,7 @@ function App() {
     }
   }
 
-  // --- CS-3 ACTION: SEND REJECTION NOTICE ---
+  // --- Rejection Desk ACTION: SEND REJECTION NOTICE ---
   async function handleCS3SendRejection(t: Ticket) {
     setBusy(true)
     try {
@@ -468,14 +481,14 @@ function App() {
     }
   }
 
-  // --- CS-2 HUMAN-IN-THE-LOOP PROOF ACTIONS ---
+  // --- Review Desk HUMAN-IN-THE-LOOP PROOF ACTIONS ---
   async function handleProofAction(t: Ticket, action: 'APPROVE_PROOF' | 'REQUEST_PROOF' | 'DENY', note: string) {
     setBusy(true)
     try {
       const res = await api.proofAction(t.id, action, note)
       setNotice(
         action === 'APPROVE_PROOF'
-          ? 'Proof approved. The claim moves to CS-1 for payout.'
+          ? 'Proof approved. The claim moves to the Approval Desk for payout.'
           : action === 'REQUEST_PROOF'
           ? 'Asked the customer for more evidence.'
           : 'Claim rejected after reviewing the evidence.'
@@ -908,12 +921,14 @@ function App() {
                 }}
               >
                 {key === 'dashboard' ? <LayoutDashboard size={17} /> :
-                 key === 'cs1_desk' ? <CheckCircle2 size={17} color="#059669" /> :
-                 key === 'cs2_desk' ? <AlertTriangle size={17} color="#d97706" /> :
-                 key === 'cs3_desk' ? <X size={17} color="#e11d48" /> :
+                 key === 'cs1_desk' ? <CheckCircle2 size={17} color="var(--emerald-600)" /> :
+                 key === 'cs2_desk' ? <AlertTriangle size={17} color="var(--amber-600)" /> :
+                 key === 'cs3_desk' ? <XCircle size={17} color="var(--rose-600)" /> :
                  key === 'tickets' ? <TicketIcon size={17} /> :
                  key === 'refunds' ? <CircleDollarSign size={17} /> :
-                 key === 'ecommerce' ? <ExternalLink size={17} color="#2563eb" /> :
+                 key === 'finance_queue' ? <Landmark size={17} /> :
+                 key === 'new' ? <Plus size={17} /> :
+                 key === 'ecommerce' ? <ShoppingCart size={17} color="var(--primary-600)" /> :
                  key === 'automation' ? <BrainCircuit size={17} /> : <FileText size={17} />}
                 <span>{label}</span>
                 {count !== null && count !== undefined && count > 0 && (
@@ -928,7 +943,7 @@ function App() {
           <div className="secure-card">
             <div className="secure-icon"><ShieldCheckIcon /></div>
             <strong>AI Auto-Triage Active</strong>
-            <p>Tickets sorted into CS-1, CS-2, & CS-3 with pre-drafted customer notifications.</p>
+            <p>Tickets sorted into the Approval, Review and Rejection desks with pre-drafted customer notifications.</p>
             <span className="secure-status"><i />eCom Webhook Ready</span>
           </div>
 
@@ -952,7 +967,8 @@ function App() {
         {/* Topbar */}
         <header className="topbar">
           <div className="top-left">
-            <button className="icon-btn mobile-menu" onClick={() => setShowMobileNav(!showMobileNav)}>
+            <button className="icon-btn mobile-menu" onClick={() => setShowMobileNav(!showMobileNav)}
+              aria-label={showMobileNav ? 'Close menu' : 'Open menu'} aria-expanded={showMobileNav}>
               <Menu size={20} />
             </button>
             <div className="crumb">
@@ -978,12 +994,12 @@ function App() {
               ))}
             </div>
 
-            <button className="doc-btn" onClick={() => setShowDocModal(true)}>
+            <button className="doc-btn" onClick={() => setShowDocModal(true)} aria-label="System Docs" title="System Docs">
               <BookOpen size={15} />
               <span>System Docs</span>
             </button>
 
-            <button className="icon-btn" title="Refresh records" onClick={refresh}>
+            <button className="icon-btn" title="Refresh records" aria-label="Refresh records" onClick={refresh}>
               <RefreshCw size={17} />
             </button>
 
@@ -998,7 +1014,7 @@ function App() {
           {notice && (
             <div className="notice">
               <span>{notice}</span>
-              <button onClick={() => setNotice('')}><X size={16} /></button>
+              <button onClick={() => setNotice('')} aria-label="Dismiss"><X size={16} /></button>
             </div>
           )}
 
@@ -1029,8 +1045,8 @@ function App() {
             <>
               <div className="page-heading">
                 <div>
-                  <div className="eyebrow" style={{ color: 'var(--emerald-700)' }}>🟢 CS-1 OPERATIONAL PIPELINE</div>
-                  <h1>CS-1 Fast-Track Refund Workspace</h1>
+                  <div className="eyebrow" style={{ color: 'var(--emerald-700)' }}><DeskIcon desk="cs1" />APPROVAL DESK PIPELINE</div>
+                  <h1>Approval Desk Workspace</h1>
                   <p>Verified against payment gateway records and in-policy return windows. Direct 1-click execution or manual inspection.</p>
                 </div>
                 <div className="heading-actions">
@@ -1050,7 +1066,7 @@ function App() {
                 <Metric icon={<Clock3 />} label="Pipeline Runs" value={automation?.pipeline_runs ?? '—'} note="Each run records every agent step" tone="blue" />
               </div>
 
-              <SectionTitle title="CS-1 Genuine Queue" action="View Full Desk Queue" onAction={() => setPage('cs1_desk')} />
+              <SectionTitle title="Approval Queue" action="View Full Desk Queue" onAction={() => setPage('cs1_desk')} />
               <TicketTable tickets={cs1Tickets} onSelect={setSelected} />
             </>
           )}
@@ -1059,8 +1075,8 @@ function App() {
             <>
               <div className="page-heading">
                 <div>
-                  <div className="eyebrow" style={{ color: 'var(--amber-700)' }}>🟡 CS-2 OPERATIONAL PIPELINE</div>
-                  <h1>CS-2 Exceptions & Evidence Workspace</h1>
+                  <div className="eyebrow" style={{ color: 'var(--amber-700)' }}><DeskIcon desk="cs2" />REVIEW DESK PIPELINE</div>
+                  <h1>Review Desk Workspace</h1>
                   <p>Discrepancies, damaged merchandise, and claims requiring unboxing footage or proof of receipt.</p>
                 </div>
                 <div className="heading-actions">
@@ -1080,7 +1096,7 @@ function App() {
                 <Metric icon={<ShieldAlert />} label="High-Risk Signals" value={cs2Tickets.filter(t => t.priority === 'P1').length} note="P1 priority reviews" tone="rose" />
               </div>
 
-              <SectionTitle title="CS-2 Exceptions Queue" action="View Full Desk Queue" onAction={() => setPage('cs2_desk')} />
+              <SectionTitle title="Review Queue" action="View Full Desk Queue" onAction={() => setPage('cs2_desk')} />
               <TicketTable tickets={cs2Tickets} onSelect={setSelected} />
             </>
           )}
@@ -1089,8 +1105,8 @@ function App() {
             <>
               <div className="page-heading">
                 <div>
-                  <div className="eyebrow" style={{ color: 'var(--rose-700)' }}>🔴 CS-3 OPERATIONAL PIPELINE</div>
-                  <h1>CS-3 Denial & Ineligible Resolution Workspace</h1>
+                  <div className="eyebrow" style={{ color: 'var(--rose-700)' }}><DeskIcon desk="cs3" />REJECTION DESK PIPELINE</div>
+                  <h1>Rejection Desk Workspace</h1>
                   <p>Claims exceeding category return windows, non-returnable hygiene/perishables, or unverified transaction IDs.</p>
                 </div>
                 <div className="heading-actions">
@@ -1110,7 +1126,7 @@ function App() {
                 <Metric icon={<Shield />} label="Policy Rejections" value={cs3Tickets.length} note="Decided by versioned policy rules" tone="amber" />
               </div>
 
-              <SectionTitle title="CS-3 Ineligible Queue" action="View Full Desk Queue" onAction={() => setPage('cs3_desk')} />
+              <SectionTitle title="Rejection Queue" action="View Full Desk Queue" onAction={() => setPage('cs3_desk')} />
               <TicketTable tickets={cs3Tickets} onSelect={setSelected} />
             </>
           )}
@@ -1135,11 +1151,11 @@ function App() {
               </div>
 
               {/* 3-Desk Action Cards */}
-              <div className="metric-grid" style={{ gridTemplateColumns: 'repeat(3, 1fr)', marginBottom: '24px' }}>
+              <div className="metric-grid three" style={{ marginBottom: '24px' }}>
                 <div className="metric-card click-row" onClick={() => setPage('cs1_desk')}>
                   <div className="metric-top">
                     <span className="metric-icon green"><CheckCircle2 size={20} /></span>
-                    <span className="pill green"><i />CS-1 DESK</span>
+                    <span className="pill green"><i />APPROVAL DESK</span>
                   </div>
                   <div className="metric-value">{desks?.cs1_count ?? 0} Cases</div>
                   <div className="metric-label" style={{ fontWeight: 700, color: 'var(--emerald-700)', fontSize: '13px' }}>
@@ -1153,7 +1169,7 @@ function App() {
                 <div className="metric-card click-row" onClick={() => setPage('cs2_desk')}>
                   <div className="metric-top">
                     <span className="metric-icon amber"><AlertTriangle size={20} /></span>
-                    <span className="pill amber"><i />CS-2 DESK</span>
+                    <span className="pill amber"><i />REVIEW DESK</span>
                   </div>
                   <div className="metric-value">{desks?.cs2_count ?? 0} Cases</div>
                   <div className="metric-label" style={{ fontWeight: 700, color: 'var(--amber-700)', fontSize: '13px' }}>
@@ -1167,7 +1183,7 @@ function App() {
                 <div className="metric-card click-row" onClick={() => setPage('cs3_desk')}>
                   <div className="metric-top">
                     <span className="metric-icon red"><X size={20} /></span>
-                    <span className="pill red"><i />CS-3 DESK</span>
+                    <span className="pill red"><i />REJECTION DESK</span>
                   </div>
                   <div className="metric-value">{desks?.cs3_count ?? 0} Cases</div>
                   <div className="metric-label" style={{ fontWeight: 700, color: 'var(--rose-700)', fontSize: '13px' }}>
@@ -1602,10 +1618,10 @@ function App() {
                           </td>
                           <td>
                             <span style={{ fontSize: '12px', fontWeight: 600, color: t.status === 'RESOLVED' ? 'var(--emerald-700)' : t.status === 'REJECTED' ? 'var(--rose-700)' : 'var(--primary-700)' }}>
-                              {t.status === 'RESOLVED' ? '✅ Refund Credited to Bank' :
-                               t.status === 'REJECTED' ? '❌ Ineligible under Return Window' :
-                               t.status === 'AWAITING_INFORMATION' ? '📲 Evidence / Proof Requested' :
-                               '⚙ Automated AI Review'}
+                              {t.status === 'RESOLVED' ? <><CheckCircle2 size={13} className="inline-icon" aria-hidden="true" />Refund Credited to Bank</> :
+                               t.status === 'REJECTED' ? <><XCircle size={13} className="inline-icon" aria-hidden="true" />Ineligible under Return Window</> :
+                               t.status === 'AWAITING_INFORMATION' ? <><Smartphone size={13} className="inline-icon" aria-hidden="true" />Evidence / Proof Requested</> :
+                               <><Settings2 size={13} className="inline-icon" aria-hidden="true" />Automated AI Review</>}
                             </span>
                           </td>
                           <td>
@@ -1721,18 +1737,18 @@ function App() {
             </>
           )}
 
-          {/* 🟢 CS-1 DESK: GENUINE & REFUNDABLE */}
+          {/* APPROVAL DESK: GENUINE & REFUNDABLE */}
           {page === 'cs1_desk' && (
             <>
               <div className="page-heading">
                 <div>
-                  <div className="eyebrow" style={{ color: 'var(--emerald-700)' }}>🟢 CS-1 FAST-TRACK APPROVALS DESK</div>
+                  <div className="eyebrow" style={{ color: 'var(--emerald-700)' }}><DeskIcon desk="cs1" />APPROVAL DESK</div>
                   <h1>Genuine & Refundable Queue</h1>
                   <p>These tickets matched payment records in the ledger and comply with your store policy. You can execute a direct 1-click refund or manually inspect the order details.</p>
                 </div>
                 <div className="heading-actions">
                   <span className="pill green" style={{ padding: '8px 14px', fontSize: '12px' }}>
-                    {cs1Tickets.length} Cases Waiting for CS-1 Action
+                    {cs1Tickets.length} Cases Waiting for Approval
                   </span>
                 </div>
               </div>
@@ -1740,7 +1756,7 @@ function App() {
               <div className="panel table-panel">
                 <div className="panel-heading">
                   <div>
-                    <h3>CS-1 Action Queue</h3>
+                    <h3>Approval Queue</h3>
                     <p>Verified cases ready for financial settlement</p>
                   </div>
                 </div>
@@ -1814,7 +1830,7 @@ function App() {
                       {!cs1Tickets.length && (
                         <tr>
                           <td colSpan={6}>
-                            <Empty text="No pending genuine cases in the CS-1 queue right now." />
+                            <Empty text="No pending genuine cases in the approval queue right now." />
                           </td>
                         </tr>
                       )}
@@ -1825,12 +1841,12 @@ function App() {
             </>
           )}
 
-          {/* 🟡 CS-2 DESK: EXCEPTIONS & PROOF NEEDED */}
+          {/* REVIEW DESK: EXCEPTIONS & PROOF NEEDED */}
           {page === 'cs2_desk' && (
             <>
               <div className="page-heading">
                 <div>
-                  <div className="eyebrow" style={{ color: 'var(--amber-700)' }}>🟡 CS-2 EXCEPTION & EVIDENCE DESK</div>
+                  <div className="eyebrow" style={{ color: 'var(--amber-700)' }}><DeskIcon desk="cs2" />REVIEW DESK</div>
                   <h1>Exceptions & Proof Needed Queue</h1>
                   <p>Cases with order discrepancies, damaged package claims, or missing unboxing proof. The AI has drafted an SMS/email message for the customer's phone.</p>
                 </div>
@@ -1915,7 +1931,7 @@ function App() {
                       {!cs2Tickets.length && (
                         <tr>
                           <td colSpan={6}>
-                            <Empty text="No exception cases in the CS-2 queue right now." />
+                            <Empty text="No exception cases in the review queue right now." />
                           </td>
                         </tr>
                       )}
@@ -1926,12 +1942,12 @@ function App() {
             </>
           )}
 
-          {/* 🔴 CS-3 DESK: NON-REFUNDABLE / DENIALS */}
+          {/* REJECTION DESK: NON-REFUNDABLE / DENIALS */}
           {page === 'cs3_desk' && (
             <>
               <div className="page-heading">
                 <div>
-                  <div className="eyebrow" style={{ color: 'var(--rose-700)' }}>🔴 CS-3 RESOLUTION & POLICY DENIAL DESK</div>
+                  <div className="eyebrow" style={{ color: 'var(--rose-700)' }}><DeskIcon desk="cs3" />REJECTION DESK</div>
                   <h1>Non-Refundable / Ineligible Cases</h1>
                   <p>Cases disqualified by store policy (expired return window, fake transaction ID, duplicate claim, or non-returnable hygiene items). Polite rejection notice pre-drafted.</p>
                 </div>
@@ -2001,7 +2017,7 @@ function App() {
                       {!cs3Tickets.length && (
                         <tr>
                           <td colSpan={6}>
-                            <Empty text="No ineligible cases in the CS-3 queue right now." />
+                            <Empty text="No ineligible cases in the rejection queue right now." />
                           </td>
                         </tr>
                       )}
@@ -2018,20 +2034,20 @@ function App() {
               <div className="page-heading">
                 <div>
                   <div className="eyebrow">
-                    {user.role === 'cs_1' ? '🟢 CS-1 DESK PIPELINE' :
-                     user.role === 'cs_2' ? '🟡 CS-2 DESK PIPELINE' :
-                     user.role === 'cs_3' ? '🔴 CS-3 DESK PIPELINE' : 'OMNICHANNEL CASE REPOSITORY'}
+                    {user.role === 'cs_1' ? <><DeskIcon desk="cs1" />APPROVAL DESK PIPELINE</> :
+                     user.role === 'cs_2' ? <><DeskIcon desk="cs2" />REVIEW DESK PIPELINE</> :
+                     user.role === 'cs_3' ? <><DeskIcon desk="cs3" />REJECTION DESK PIPELINE</> : 'OMNICHANNEL CASE REPOSITORY'}
                   </div>
                   <h1>
-                    {user.role === 'cs_1' ? 'CS-1 Genuine Refund Queue' :
-                     user.role === 'cs_2' ? 'CS-2 Exception & Evidence Queue' :
-                     user.role === 'cs_3' ? 'CS-3 Denial & Ineligible Queue' : 'Master Ingested Tickets Queue'}
+                    {user.role === 'cs_1' ? 'Approval Queue' :
+                     user.role === 'cs_2' ? 'Review Queue' :
+                     user.role === 'cs_3' ? 'Rejection Queue' : 'Master Ingested Tickets Queue'}
                   </h1>
                   <p>
-                    {user.role === 'cs_1' ? 'Showing only verified, policy-compliant claims assigned to the CS-1 fast-track queue.' :
-                     user.role === 'cs_2' ? 'Showing only discrepancy, damage, and evidence-pending claims assigned to the CS-2 desk.' :
-                     user.role === 'cs_3' ? 'Showing only non-refundable and policy-disqualified claims assigned to the CS-3 desk.' :
-                     'Master ledger of all refund cases across CS-1, CS-2, and CS-3 desks.'}
+                    {user.role === 'cs_1' ? 'Showing only verified, policy-compliant claims assigned to the Approval Desk.' :
+                     user.role === 'cs_2' ? 'Showing only discrepancy, damage, and evidence-pending claims assigned to the Review Desk.' :
+                     user.role === 'cs_3' ? 'Showing only non-refundable and policy-disqualified claims assigned to the Rejection Desk.' :
+                     'Master ledger of all refund cases across the Approval, Review and Rejection desks.'}
                   </p>
                 </div>
               </div>
@@ -2092,7 +2108,7 @@ function App() {
                     <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Click to auto-fill verified ledger facts</span>
                   </div>
 
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '10px' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(220px, 100%), 1fr))', gap: '10px' }}>
                     {customerTxs.map(tx => (
                       <div
                         key={tx.id}
@@ -2120,10 +2136,10 @@ function App() {
               )}
 
               {/* DUAL-COLUMN INTAKE CONTAINER */}
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: '24px', alignItems: 'start' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(360px, 100%), 1fr))', gap: '24px', alignItems: 'start' }}>
                 {/* LEFT: PRIMARY INTAKE FORM */}
-                <div className="panel" style={{ padding: '24px' }}>
-                  <form onSubmit={submitTicket}>
+                <div className="panel" style={{ padding: 'clamp(16px, 3vw, 24px)' }}>
+                  <form onSubmit={submitTicket} className="claim-form">
                     <h3 style={{ fontSize: '16px', fontWeight: 800, color: 'var(--navy-900)', margin: '0 0 16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
                       <TicketIcon size={18} color="var(--primary-700)" /> Claim Details &amp; Item Specification
                     </h3>
@@ -2163,20 +2179,22 @@ function App() {
                       {/* Product Category Selector */}
                       <div className="span-2">
                         <label style={{ marginBottom: '6px' }}>Product Category &amp; Return Policy Window</label>
-                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))', gap: '8px' }}>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(130px, 100%), 1fr))', gap: '8px' }}>
                           {[
-                            { id: 'ELECTRONICS', label: '💻 Electronics', window: '7-Day Policy' },
-                            { id: 'APPAREL', label: '👕 Apparel', window: '14-Day Policy' },
-                            { id: 'ACCESSORIES', label: '🎒 Accessories', window: '14-Day Policy' },
-                            { id: 'PERISHABLES', label: '🍎 Perishables', window: 'Final Sale (0d)' },
-                            { id: 'DIGITAL', label: '⚡ Digital / Code', window: 'Non-refundable' },
+                            { id: 'ELECTRONICS', label: 'Electronics', icon: Laptop, window: '7-Day Policy' },
+                            { id: 'APPAREL', label: 'Apparel', icon: Shirt, window: '14-Day Policy' },
+                            { id: 'ACCESSORIES', label: 'Accessories', icon: Backpack, window: '14-Day Policy' },
+                            { id: 'PERISHABLES', label: 'Perishables', icon: Apple, window: 'Final Sale (0d)' },
+                            { id: 'DIGITAL', label: 'Digital / Code', icon: Zap, window: 'Non-refundable' },
                           ].map(cat => (
                             <button
                               type="button"
                               key={cat.id}
                               onClick={() => setForm({ ...form, item_category: cat.id })}
+                              aria-pressed={form.item_category === cat.id}
                               style={{
                                 padding: '8px 10px',
+                                minHeight: '44px',
                                 borderRadius: 'var(--radius-md)',
                                 textAlign: 'left',
                                 background: form.item_category === cat.id ? 'var(--primary-50)' : 'var(--slate-50)',
@@ -2186,7 +2204,7 @@ function App() {
                               }}
                             >
                               <div style={{ fontSize: '11px', fontWeight: 800, color: form.item_category === cat.id ? 'var(--primary-700)' : 'var(--navy-900)' }}>
-                                {cat.label}
+                                <cat.icon size={13} className="inline-icon" aria-hidden="true" />{cat.label}
                               </div>
                               <div style={{ fontSize: '9px', color: 'var(--text-muted)', marginTop: '2px' }}>
                                 {cat.window}
@@ -2288,7 +2306,7 @@ function App() {
                                     {form.custom_photo_name || 'custom_uploaded_photo.jpg'}
                                   </strong>
                                   <span style={{ fontSize: '10px', color: 'var(--emerald-600)', fontWeight: 700 }}>
-                                    ✓ Live File Loaded for Vision AI Inspection
+                                    <Check size={11} className="inline-icon" aria-hidden="true" />Live File Loaded for Vision AI Inspection
                                   </span>
                                 </div>
                               </div>
@@ -2319,27 +2337,27 @@ function App() {
                         </div>
 
                         {/* Defect Preset Dropdown */}
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px' }}>
                           <span style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
                             Or Select Preset Sample:
                           </span>
                           <select
                             value={form.evidence_image_preset}
                             onChange={e => setForm({ ...form, evidence_image_preset: e.target.value, custom_photo_base64: '', custom_photo_name: '' })}
-                            style={{ fontSize: '11px', padding: '4px 8px', height: 'auto', background: '#ffffff' }}
+                            style={{ fontSize: '11px', padding: '4px 8px', height: 'auto', background: '#ffffff', flex: '1 1 180px', minWidth: 0 }}
                           >
-                            <option value="stitching_loose_zipper.jpg">📸 stitching_loose_zipper.jpg (Seam Fracture Defect)</option>
-                            <option value="earcup_cushion_tear.jpg">📸 earcup_cushion_tear.jpg (Acoustic Hardware Tear)</option>
-                            <option value="damage_broken_box.jpg">📦 damage_broken_box.jpg (Transit Package Damage)</option>
-                            <option value="shipping_label_barcode.jpg">🏷️ shipping_label_barcode.jpg (Serial/Box Label Proof)</option>
-                            <option value="clean_unopened_package.jpg">📦 clean_unopened_package.jpg (Unopened Product Photo)</option>
+                            <option value="stitching_loose_zipper.jpg">stitching_loose_zipper.jpg (Seam Fracture Defect)</option>
+                            <option value="earcup_cushion_tear.jpg">earcup_cushion_tear.jpg (Acoustic Hardware Tear)</option>
+                            <option value="damage_broken_box.jpg">damage_broken_box.jpg (Transit Package Damage)</option>
+                            <option value="shipping_label_barcode.jpg">shipping_label_barcode.jpg (Serial/Box Label Proof)</option>
+                            <option value="clean_unopened_package.jpg">clean_unopened_package.jpg (Unopened Product Photo)</option>
                           </select>
                         </div>
                       </div>
                     </div>
 
-                    <div style={{ marginTop: '20px', display: 'flex', gap: '12px', alignItems: 'center' }}>
-                      <button className="primary" type="submit" disabled={busy} style={{ flex: 1, padding: '12px 18px', fontSize: '13px' }}>
+                    <div style={{ marginTop: '20px', display: 'flex', flexWrap: 'wrap', gap: '12px', alignItems: 'center' }}>
+                      <button className="primary" type="submit" disabled={busy} style={{ flex: '1 1 260px', padding: '12px 18px', fontSize: '13px' }}>
                         <Send size={15} /> Submit Claim to the RITOS {agentCatalog.length}-Agent Orchestrator
                       </button>
                       <button className="secondary" type="button" onClick={() => setPage(isCustomer ? 'dashboard' : 'tickets')}>
@@ -2398,15 +2416,15 @@ function App() {
 
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '11px' }}>
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 10px', background: 'var(--emerald-50)', borderRadius: '6px', border: '1px solid var(--emerald-100)' }}>
-                        <strong style={{ color: 'var(--emerald-800)' }}>🟢 CS-1 (Fast-Track)</strong>
+                        <strong style={{ color: 'var(--emerald-800)' }}><DeskIcon desk="cs1" />Approval Desk</strong>
                         <span style={{ color: 'var(--emerald-700)' }}>1-Click Auto Payout</span>
                       </div>
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 10px', background: 'var(--amber-50)', borderRadius: '6px', border: '1px solid var(--amber-100)' }}>
-                        <strong style={{ color: 'var(--amber-800)' }}>🟡 CS-2 (Exceptions)</strong>
+                        <strong style={{ color: 'var(--amber-800)' }}><DeskIcon desk="cs2" />Review Desk</strong>
                         <span style={{ color: 'var(--amber-700)' }}>Photo Proof / Human Inspection</span>
                       </div>
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 10px', background: 'var(--rose-50)', borderRadius: '6px', border: '1px solid var(--rose-100)' }}>
-                        <strong style={{ color: 'var(--rose-800)' }}>🔴 CS-3 (Denials)</strong>
+                        <strong style={{ color: 'var(--rose-800)' }}><DeskIcon desk="cs3" />Rejection Desk</strong>
                         <span style={{ color: 'var(--rose-700)' }}>Policy Window Expired / Ineligible</span>
                       </div>
                     </div>
@@ -2478,10 +2496,10 @@ function App() {
                     </div>
                   </div>
 
-                  <div style={{ marginTop: '20px', paddingTop: '16px', borderTop: '1px solid rgba(255,255,255,0.1)', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px', fontSize: '12px' }}>
+                  <div style={{ marginTop: '20px', paddingTop: '16px', borderTop: '1px solid rgba(255,255,255,0.1)', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(200px, 100%), 1fr))', gap: '16px', fontSize: '12px' }}>
                     <div>
                       <small style={{ color: '#94a3b8', display: 'block', textTransform: 'uppercase', letterSpacing: '0.5px' }}>ShopFlow Instance URL</small>
-                      <strong style={{ color: '#ffffff', fontFamily: 'var(--font-mono)' }}>{shopflowStatus?.shopflow_base_url || 'not reachable'}</strong>
+                      <strong style={{ color: '#ffffff', fontFamily: 'var(--font-mono)', overflowWrap: 'anywhere' }}>{shopflowStatus?.shopflow_base_url || 'not reachable'}</strong>
                     </div>
                     <div>
                       <small style={{ color: '#94a3b8', display: 'block', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Connection State</small>
@@ -2557,7 +2575,7 @@ function App() {
 
                   {ecomSimResult && (
                     <div style={{ marginTop: '20px', padding: '16px', background: 'var(--navy-50)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)' }}>
-                      <strong>🎉 Ingestion Output:</strong>
+                      <strong><CheckCircle2 size={14} color="var(--emerald-600)" className="inline-icon" aria-hidden="true" />Ingestion Output:</strong>
                       <div style={{ marginTop: '8px', display: 'grid', gap: '6px', fontSize: '13px' }}>
                         <div><strong>Assigned Desk:</strong> <span className="pill blue" style={{ marginLeft: '6px' }}>{ecomSimResult.assigned_desk}</span></div>
                         <div><strong>Decision Bucket:</strong> <b>{ecomSimResult.decision_bucket}</b></div>
@@ -2581,7 +2599,7 @@ function App() {
                     <small style={{ fontWeight: 700, color: 'var(--navy-700)', textTransform: 'uppercase', fontSize: '11px' }}>
                       POST Endpoint URL
                     </small>
-                    <div style={{ padding: '10px 12px', background: 'var(--navy-900)', color: '#93c5fd', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: '12px', margin: '6px 0 16px' }}>
+                    <div style={{ padding: '10px 12px', background: 'var(--navy-900)', color: '#93c5fd', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: '12px', margin: '6px 0 16px', overflowWrap: 'anywhere' }}>
                       {`${API_ROOT}/api/v1/integrations/ecommerce/ticket`}
                     </div>
 
@@ -2626,7 +2644,7 @@ await fetch('http://YOUR_RITOS_URL/api/v1/integrations/ecommerce/ticket', {
               <div className="page-heading">
                 <div>
                   <div className="eyebrow">FINANCE CLEARING HOUSE</div>
-                  <h1>💰 Finance Approvals &amp; Payout Execution</h1>
+                  <h1>Finance Approvals &amp; Payout Execution</h1>
                   <p>Authorize payouts for approved claims, then approve and execute them under the four-eyes rule.</p>
                 </div>
               </div>
@@ -2635,7 +2653,7 @@ await fetch('http://YOUR_RITOS_URL/api/v1/integrations/ecommerce/ticket', {
                 <div className="panel table-panel" style={{ marginBottom: '18px' }}>
                   <div className="section-title" style={{ padding: '12px 16px' }}>
                     <h4>Awaiting payout authorization ({awaitingPayout.length})</h4>
-                    <span>CS-1 claims whose refund nobody has authorized yet</span>
+                    <span>Approval Desk claims whose refund nobody has authorized yet</span>
                   </div>
                   <div className="table-wrap">
                     <table>
@@ -2730,9 +2748,10 @@ await fetch('http://YOUR_RITOS_URL/api/v1/integrations/ecommerce/ticket', {
                   <h1>{user.role === 'finance_approver' ? 'Refund Authorization & Double-Entry Ledger' : 'Settlement Register & Ledger'}</h1>
                   <p>Authoritative double-entry accounting journals, chart of accounts balances, and payment gateway settlements.</p>
                 </div>
-                <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                <div className="heading-actions" role="group" aria-label="Ledger view">
                   <button
                     className={ledgerSubTab === 'settlements' ? 'primary compact' : 'secondary compact'}
+                    aria-pressed={ledgerSubTab === 'settlements'}
                     onClick={() => setLedgerSubTab('settlements')}
                     style={{ fontSize: '12px' }}
                   >
@@ -2740,6 +2759,7 @@ await fetch('http://YOUR_RITOS_URL/api/v1/integrations/ecommerce/ticket', {
                   </button>
                   <button
                     className={ledgerSubTab === 'journals' ? 'primary compact' : 'secondary compact'}
+                    aria-pressed={ledgerSubTab === 'journals'}
                     onClick={() => { setLedgerSubTab('journals'); api.ledgerJournals().then(setJournals).catch(() => {}); }}
                     style={{ fontSize: '12px' }}
                   >
@@ -2747,6 +2767,7 @@ await fetch('http://YOUR_RITOS_URL/api/v1/integrations/ecommerce/ticket', {
                   </button>
                   <button
                     className={ledgerSubTab === 'accounts' ? 'primary compact' : 'secondary compact'}
+                    aria-pressed={ledgerSubTab === 'accounts'}
                     onClick={() => { setLedgerSubTab('accounts'); api.ledgerAccounts().then(setAccounts).catch(() => {}); }}
                     style={{ fontSize: '12px' }}
                   >
@@ -2834,7 +2855,7 @@ await fetch('http://YOUR_RITOS_URL/api/v1/integrations/ecommerce/ticket', {
                               </td>
                               <td>
                                 {isBalanced ? (
-                                  <span className="pill green" style={{ fontSize: '11px' }}><i />✓ Debits = Credits Balanced</span>
+                                  <span className="pill green" style={{ fontSize: '11px' }}><i />Debits = Credits Balanced</span>
                                 ) : (
                                   <span className="pill red" style={{ fontSize: '11px' }}><i />Unbalanced</span>
                                 )}
@@ -2928,7 +2949,7 @@ await fetch('http://YOUR_RITOS_URL/api/v1/integrations/ecommerce/ticket', {
                       style={{ background: '#2563eb', borderColor: '#3b82f6', display: 'flex', alignItems: 'center', gap: '8px' }}
                     >
                       {runningAllAgents ? <RefreshCw size={15} className="spin" /> : <Play size={15} />}
-                      <span>{runningAllAgents ? `Executing ${agentCatalog.length} Agents...` : `▶ Run All ${agentCatalog.length} Agents Across Active Tickets`}</span>
+                      <span>{runningAllAgents ? `Executing ${agentCatalog.length} Agents...` : `Run All ${agentCatalog.length} Agents Across Active Tickets`}</span>
                     </button>
                   </div>
                 </div>
@@ -2955,7 +2976,7 @@ await fetch('http://YOUR_RITOS_URL/api/v1/integrations/ecommerce/ticket', {
                       style={{ background: '#2563eb', borderColor: '#3b82f6', padding: '12px 22px', fontSize: '13px', fontWeight: 700, borderRadius: 'var(--radius-md)', display: 'inline-flex', alignItems: 'center', gap: '8px', boxShadow: '0 4px 14px rgba(37,99,235,0.4)' }}
                     >
                       {runningAllAgents ? <RefreshCw size={16} className="spin" /> : <Play size={16} />}
-                      <span>{runningAllAgents ? `Executing ${agentCatalog.length} Agents Pipeline...` : `▶ Run All ${agentCatalog.length} Agents Now`}</span>
+                      <span>{runningAllAgents ? `Executing ${agentCatalog.length} Agents Pipeline...` : `Run All ${agentCatalog.length} Agents Now`}</span>
                     </button>
                   </div>
 
@@ -2968,15 +2989,15 @@ await fetch('http://YOUR_RITOS_URL/api/v1/integrations/ecommerce/ticket', {
                         </span>
                       </div>
                       <div style={{ display: 'flex', gap: '8px' }}>
-                        <span className="pill green"><i />CS-1 Genuine</span>
-                        <span className="pill amber"><i />CS-2 Exceptions</span>
-                        <span className="pill red"><i />CS-3 Ineligible</span>
+                        <span className="pill green"><i />Approval</span>
+                        <span className="pill amber"><i />Review</span>
+                        <span className="pill red"><i />Rejection</span>
                       </div>
                     </div>
                   )}
                 </div>
 
-                <div className="metric-grid" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
+                <div className="metric-grid">
                   {agentCatalog.map((agent, i) => (
                     <div key={agent.id} className="metric-card click-row" onClick={() => setActiveAgentModal(agent)}>
                       <div className="metric-top">
@@ -3069,7 +3090,7 @@ await fetch('http://YOUR_RITOS_URL/api/v1/integrations/ecommerce/ticket', {
                 </div>
                 <h2>{selected.ticket_number}</h2>
               </div>
-              <button className="icon-btn" onClick={() => setSelected(null)}>
+              <button className="icon-btn" onClick={() => setSelected(null)} aria-label="Close ticket">
                 <X size={18} />
               </button>
             </div>
@@ -3100,7 +3121,7 @@ await fetch('http://YOUR_RITOS_URL/api/v1/integrations/ecommerce/ticket', {
                         <span className="hint">{h.at ? new Date(h.at).toLocaleString(LOCALE) : ''}</span>{' '}
                         <strong>{h.actor ? `${h.actor.name} (${roleName(h.actor.role)})` : 'RITOS (automatic)'}</strong>{' '}
                         {h.trigger === 'HUMAN_DECISION' ? (HUMAN_DECISION[h.decision] || 'made a decision') : (RUN_TRIGGER[h.trigger] || 'ran the checks')}
-                        {h.waiting_for ? <> → {label(NEXT_ACTION, h.waiting_for).text}</> : null}
+                        {h.waiting_for ? <><ArrowRight size={12} className="inline-icon between" aria-label="then" />{label(NEXT_ACTION, h.waiting_for).text}</> : null}
                         {h.assigned_to?.name ? <> · assigned to {h.assigned_to.name} ({roleName(h.assigned_to.role)})</> : null}
                         {h.note ? <span className="hint"> · “{h.note}”</span> : null}
                       </li>
@@ -3119,16 +3140,16 @@ await fetch('http://YOUR_RITOS_URL/api/v1/integrations/ecommerce/ticket', {
                 border: '1px solid #1e293b',
                 boxShadow: '0 4px 12px rgba(0,0,0,0.1)'
               }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
+                <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: '6px 12px', marginBottom: '12px' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', fontWeight: 800, color: '#a5b4fc' }}>
                     <GitFork size={15} /> RITOS 3-Step Routing Decision Tree
                   </div>
                   <span style={{ fontSize: '10px', fontFamily: 'monospace', color: '#94a3b8' }}>
-                    Step 1 ➔ Step 2 ➔ Step 3
+                    Step 1<ChevronRight size={11} className="inline-icon between" aria-hidden="true" />Step 2<ChevronRight size={11} className="inline-icon between" aria-hidden="true" />Step 3
                   </span>
                 </div>
 
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '10px' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(180px, 100%), 1fr))', gap: '10px' }}>
                   {/* Step 1: Ledger Verification */}
                   <div style={{
                     padding: '10px 12px',
@@ -3206,11 +3227,11 @@ await fetch('http://YOUR_RITOS_URL/api/v1/integrations/ecommerce/ticket', {
                 </div>
               </div>
 
-              {/* ACTION BOX FOR CS-1 (GENUINE / REFUNDABLE) */}
+              {/* ACTION BOX FOR Approval Desk (GENUINE / REFUNDABLE) */}
               {selected.decision_bucket === 'GENUINE_REFUNDABLE' && (
                 <div style={{ background: 'var(--emerald-50)', border: '1px solid var(--emerald-100)', padding: '18px', borderRadius: 'var(--radius-lg)', marginBottom: '22px' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--emerald-700)', fontWeight: 800, fontSize: '14px', marginBottom: '8px' }}>
-                    <CheckCircle2 size={18} /> CS-1 Fast-Track Actions
+                    <CheckCircle2 size={18} /> Approval Desk Actions
                   </div>
                   <p style={{ fontSize: '12px', color: 'var(--emerald-800)', margin: '0 0 14px', lineHeight: '1.5' }}>
                     {selected.policy_evaluation_reason}
@@ -3275,11 +3296,11 @@ await fetch('http://YOUR_RITOS_URL/api/v1/integrations/ecommerce/ticket', {
                 </div>
               )}
 
-              {/* ACTION BOX FOR CS-2 (EXCEPTIONS / PROOF NEEDED) */}
+              {/* ACTION BOX FOR Review Desk (EXCEPTIONS / PROOF NEEDED) */}
               {selected.decision_bucket === 'EXCEPTIONAL_PROOF_NEEDED' && (
                 <div style={{ background: 'var(--amber-50)', border: '1px solid var(--amber-100)', padding: '18px', borderRadius: 'var(--radius-lg)', marginBottom: '22px' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--amber-700)', fontWeight: 800, fontSize: '14px', marginBottom: '8px' }}>
-                    <AlertTriangle size={18} /> CS-2 Exception Dispatcher
+                    <AlertTriangle size={18} /> Review Desk Actions
                   </div>
                   <p style={{ fontSize: '12px', color: 'var(--amber-800)', margin: '0 0 12px' }}>
                     <strong>Discrepancy:</strong> {selected.policy_evaluation_reason}
@@ -3326,7 +3347,7 @@ await fetch('http://YOUR_RITOS_URL/api/v1/integrations/ecommerce/ticket', {
 
                         {/* Vision Metrics Breakdown */}
                         <div style={{ flex: 1, fontSize: '11px', color: 'var(--navy-700)', display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
+                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '6px' }}>
                             <div style={{ padding: '6px 8px', background: 'var(--slate-50)', borderRadius: '4px', border: '1px solid var(--border-subtle)' }}>
                               <span style={{ color: 'var(--text-muted)', fontSize: '10px', display: 'block' }}>Product Identity (7A):</span>
                               <strong style={{ color: selected.classification_evidence?.visual_analysis?.product_identity_status === 'verified' ? 'var(--emerald-700)' : 'var(--navy-800)' }}>
@@ -3341,7 +3362,7 @@ await fetch('http://YOUR_RITOS_URL/api/v1/integrations/ecommerce/ticket', {
                             </div>
                           </div>
 
-                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
+                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '6px' }}>
                             <div style={{ padding: '6px 8px', background: 'var(--slate-50)', borderRadius: '4px', border: '1px solid var(--border-subtle)' }}>
                               <span style={{ color: 'var(--text-muted)', fontSize: '10px', display: 'block' }}>Verification Status:</span>
                               <strong>{selected.classification_evidence?.visual_analysis?.verification_status || 'inconclusive'}</strong>
@@ -3423,7 +3444,7 @@ await fetch('http://YOUR_RITOS_URL/api/v1/integrations/ecommerce/ticket', {
                       disabled={busy}
                       style={{ background: 'var(--emerald-600)', borderColor: 'var(--emerald-600)' }}
                     >
-                      <CheckCircle2 size={13} /> Approve Proof &amp; Move to CS-1
+                      <CheckCircle2 size={13} /> Approve Proof &amp; Send for Approval
                     </button>
 
                     <button
@@ -3446,11 +3467,11 @@ await fetch('http://YOUR_RITOS_URL/api/v1/integrations/ecommerce/ticket', {
                 </div>
               )}
 
-              {/* ACTION BOX FOR CS-3 (NON-REFUNDABLE / DENIALS) */}
+              {/* ACTION BOX FOR Rejection Desk (NON-REFUNDABLE / DENIALS) */}
               {selected.decision_bucket === 'NON_REFUNDABLE' && (
                 <div style={{ background: 'var(--rose-50)', border: '1px solid var(--rose-100)', padding: '18px', borderRadius: 'var(--radius-lg)', marginBottom: '22px' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--rose-700)', fontWeight: 800, fontSize: '14px', marginBottom: '8px' }}>
-                    <X size={18} /> CS-3 Policy Denial Dispatcher
+                    <X size={18} /> Rejection Desk Actions
                   </div>
                   <p style={{ fontSize: '12px', color: 'var(--rose-800)', margin: '0 0 12px' }}>
                     <strong>Policy Ineligibility:</strong> {selected.policy_evaluation_reason}
@@ -3551,14 +3572,14 @@ await fetch('http://YOUR_RITOS_URL/api/v1/integrations/ecommerce/ticket', {
                     )
                   })()}
 
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '8px' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(260px, 100%), 1fr))', gap: '8px' }}>
                     {selected.classification_evidence.agents.map((ag: any, idx: number) => (
                       <div key={idx} style={{ padding: '10px 12px', background: 'var(--bg-page)', border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-md)', fontSize: '11px' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
                           <span style={{ fontWeight: 700, color: 'var(--navy-900)' }}>
                             {idx + 1}. {ag.agent_name}
                           </span>
-                          <span style={{ fontSize: '9px', fontWeight: 700, color: ag.status === 'COMPLETED' ? 'var(--emerald-700)' : ag.status === 'FAILED' ? '#b91c1c' : 'var(--navy-500)' }}>{ag.status === 'COMPLETED' ? '✓' : ag.status === 'FAILED' ? '✕' : '–'} {ag.status}</span>
+                          <span style={{ fontSize: '9px', fontWeight: 700, color: ag.status === 'COMPLETED' ? 'var(--emerald-700)' : ag.status === 'FAILED' ? '#b91c1c' : 'var(--navy-500)' }}>{ag.status === 'COMPLETED' ? <Check size={10} className="inline-icon" aria-hidden="true" /> : ag.status === 'FAILED' ? <X size={10} className="inline-icon" aria-hidden="true" /> : null}{ag.status}</span>
                         </div>
                         <p style={{ margin: 0, color: 'var(--navy-600)', lineHeight: '1.4' }}>
                           {ag.findings}
@@ -3579,14 +3600,14 @@ await fetch('http://YOUR_RITOS_URL/api/v1/integrations/ecommerce/ticket', {
 
               {/* FINANCE PAYOUT EXECUTION BOX */}
               {selected.decision_bucket === 'GENUINE_REFUNDABLE' && selected.refund_status !== 'REFUNDED' && (
-                <div style={{ padding: '14px 18px', background: 'var(--indigo-50)', border: '1px solid var(--indigo-100)', borderRadius: 'var(--radius-lg)', marginBottom: '18px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <div>
+                <div style={{ padding: '14px 18px', background: 'var(--indigo-50)', border: '1px solid var(--indigo-100)', borderRadius: 'var(--radius-lg)', marginBottom: '18px', display: 'flex', flexWrap: 'wrap', gap: '12px', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div style={{ minWidth: 0 }}>
                     <div style={{ fontWeight: 700, fontSize: '13px', color: 'var(--indigo-950)' }}>
-                      💰 Authorized for Gateway Settlement
+                      <Landmark size={14} className="inline-icon" aria-hidden="true" />Authorized for Gateway Settlement
                     </div>
                     <div style={{ fontSize: '11px', color: 'var(--indigo-800)' }}>
                       {selected.classification_evidence?.workflow?.next_action === 'AUTO_APPROVE'
-                        ? 'All automated checks passed (CS-1 auto-approval).'
+                        ? 'All automated checks passed (approved automatically).'
                         : `Needs approval: ${selected.policy_evaluation_reason || 'see decision trace'}`}
                     </div>
                   </div>
@@ -3660,7 +3681,7 @@ await fetch('http://YOUR_RITOS_URL/api/v1/integrations/ecommerce/ticket', {
                 <h2>How RITOS Automates eCommerce Refunds</h2>
                 <p>3-Bucket Classification, Pre-Drafted Messaging, and Four-Eyes Governance.</p>
               </div>
-              <button className="icon-btn" onClick={() => setShowDocModal(false)}>
+              <button className="icon-btn" onClick={() => setShowDocModal(false)} aria-label="Close">
                 <X size={18} />
               </button>
             </div>
@@ -3668,26 +3689,26 @@ await fetch('http://YOUR_RITOS_URL/api/v1/integrations/ecommerce/ticket', {
             <div className="doc-article">
               <h3>1. The 3 Operational Desks</h3>
               <div className="doc-agent-card" style={{ borderLeft: '4px solid #059669' }}>
-                <strong style={{ color: '#059669' }}>🟢 CS-1: Genuine & Refundable Desk</strong>
+                <strong style={{ color: '#059669' }}><DeskIcon desk="cs1" />Approval Desk: genuine, refundable claims</strong>
                 <p>
                   For claims where the transaction is verified on the ledger, within the product return window, and zero risk flags.
-                  <strong>CS-1 can either 1-click execute the refund directly</strong>, or manually review and approve/cancel with audit notes.
+                  <strong>The Approval Desk can either 1-click execute the refund directly</strong>, or manually review and approve/cancel with audit notes.
                 </p>
               </div>
 
               <div className="doc-agent-card" style={{ borderLeft: '4px solid #d97706' }}>
-                <strong style={{ color: '#d97706' }}>🟡 CS-2: Exception & Proof Desk</strong>
+                <strong style={{ color: '#d97706' }}><DeskIcon desk="cs2" />Review Desk: claims that need proof or a person</strong>
                 <p>
                   For claims involving damaged packaging, broken hinges, missing items, or wrong products delivered.
-                  <strong>The AI pre-drafts an SMS/email tailored with the order reference</strong> asking for the exact proof items. CS-2 reviews and clicks Send.
+                  <strong>The AI pre-drafts an SMS/email tailored with the order reference</strong> asking for the exact proof items. The Review Desk checks it and clicks Send.
                 </p>
               </div>
 
               <div className="doc-agent-card" style={{ borderLeft: '4px solid #e11d48' }}>
-                <strong style={{ color: '#e11d48' }}>🔴 CS-3: Denial & Resolution Desk</strong>
+                <strong style={{ color: '#e11d48' }}><DeskIcon desk="cs3" />Rejection Desk: claims that are not refundable</strong>
                 <p>
                   For claims past the return window (e.g. &gt;7 days for electronics), fake transaction IDs, or final-sale hygiene items.
-                  <strong>The AI writes a polite, legally compliant rejection explanation</strong>. CS-3 reviews and clicks Send.
+                  <strong>The AI writes a polite, legally compliant rejection explanation</strong>. The Rejection Desk checks it and clicks Send.
                 </p>
               </div>
             </div>
@@ -3705,7 +3726,7 @@ await fetch('http://YOUR_RITOS_URL/api/v1/integrations/ecommerce/ticket', {
                 <h2>{activeAgentModal.name}</h2>
                 <p>{activeAgentModal.mode}</p>
               </div>
-              <button className="icon-btn" onClick={() => setActiveAgentModal(null)}>
+              <button className="icon-btn" onClick={() => setActiveAgentModal(null)} aria-label="Close">
                 <X size={18} />
               </button>
             </div>

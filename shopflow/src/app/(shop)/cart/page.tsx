@@ -46,7 +46,7 @@ export default function CartPage() {
 
   if (items.length === 0) {
     return (
-      <div className="max-w-md mx-auto text-center py-16 bg-white rounded-2xl border border-slate-200 p-8 space-y-4">
+      <div className="max-w-md mx-auto text-center py-12 sm:py-16 bg-white rounded-2xl border border-slate-200 px-6 sm:px-8 space-y-4">
         <div className="w-16 h-16 bg-slate-50 text-slate-400 rounded-full flex items-center justify-center mx-auto">
           <ShoppingBag className="w-8 h-8" />
         </div>
@@ -81,10 +81,10 @@ export default function CartPage() {
           {items.map((item) => (
             <div
               key={item.productId}
-              className="bg-white rounded-xl border border-slate-200 p-4 flex items-center justify-between gap-4"
+              className="bg-white rounded-xl border border-slate-200 p-4 flex flex-wrap sm:flex-nowrap items-center justify-between gap-4"
             >
-              <div className="flex items-center space-x-4">
-                <div className="w-16 h-16 bg-slate-100 rounded-lg flex items-center justify-center font-bold text-slate-400 text-xs uppercase">
+              <div className="flex items-center gap-4 min-w-0">
+                <div className="w-16 h-16 shrink-0 bg-slate-100 rounded-lg flex items-center justify-center font-bold text-slate-400 text-xs uppercase">
                   {item.name.substring(0, 4)}
                 </div>
                 <div>
@@ -95,11 +95,11 @@ export default function CartPage() {
                 </div>
               </div>
 
-              <div className="flex items-center space-x-3">
+              <div className="flex items-center gap-3 ml-auto">
                 <div className="flex items-center border border-slate-200 rounded-lg bg-slate-50">
                   <button
                     onClick={() => updateQuantity(item.productId, item.quantity - 1)}
-                    className="p-1.5 text-slate-600 hover:text-slate-900"
+                    className="inline-flex items-center justify-center w-9 h-9 text-slate-600 hover:text-slate-900"
                   >
                     <Minus className="w-3.5 h-3.5" />
                   </button>
@@ -108,7 +108,7 @@ export default function CartPage() {
                   </span>
                   <button
                     onClick={() => updateQuantity(item.productId, item.quantity + 1)}
-                    className="p-1.5 text-slate-600 hover:text-slate-900"
+                    className="inline-flex items-center justify-center w-9 h-9 text-slate-600 hover:text-slate-900"
                   >
                     <Plus className="w-3.5 h-3.5" />
                   </button>
@@ -116,7 +116,7 @@ export default function CartPage() {
 
                 <button
                   onClick={() => updateQuantity(item.productId, 0)}
-                  className="p-2 text-slate-400 hover:text-rose-600 transition"
+                  className="inline-flex items-center justify-center w-9 h-9 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition"
                 >
                   <Trash2 className="w-4 h-4" />
                 </button>
@@ -126,7 +126,7 @@ export default function CartPage() {
         </div>
 
         {/* Cart Summary */}
-        <div className="bg-white rounded-xl border border-slate-200 p-6 space-y-4 h-fit">
+        <div className="bg-white rounded-xl border border-slate-200 p-4 sm:p-6 space-y-4 h-fit">
           <h2 className="text-base font-bold text-slate-900">Order Summary</h2>
           <div className="space-y-2 text-xs text-slate-600">
             <div className="flex justify-between">

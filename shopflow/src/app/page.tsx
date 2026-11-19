@@ -25,7 +25,9 @@ import {
   Eye,
   Trash2,
   GitFork,
-  ArrowDown
+  ArrowDown,
+  Check,
+  X
 } from "lucide-react";
 import { formatMoney } from "@/lib/money";
 
@@ -250,8 +252,8 @@ export default function ShopFlowStorePage() {
       {/* 1. TOP ANNOUNCEMENT BANNER */}
       <div className="bg-slate-900 text-white text-xs py-2.5 px-4 border-b border-slate-800">
         <div className="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-2">
-          <div className="flex items-center gap-2">
-            <span className="flex h-2 w-2 relative">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 min-w-0">
+            <span className="flex h-2 w-2 relative shrink-0">
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
               <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
             </span>
@@ -262,7 +264,7 @@ export default function ShopFlowStorePage() {
             <Link 
               href={RITOS_CONSOLE_URL || "#"} 
               target="_blank" 
-              className="inline-flex items-center gap-1 text-indigo-400 hover:text-indigo-300 font-semibold"
+              className="inline-flex items-center gap-1 py-1 text-indigo-400 hover:text-indigo-300 font-semibold"
             >
               Open RITOS Desk Console <ExternalLink size={12} />
             </Link>
@@ -272,14 +274,14 @@ export default function ShopFlowStorePage() {
 
       {/* 2. STORE HEADER */}
       <header className="bg-white border-b border-slate-200 sticky top-0 z-30 shadow-xs">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-indigo-600 text-white flex items-center justify-center font-bold text-xl shadow-md">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-3 sm:gap-4">
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+            <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-indigo-600 text-white flex items-center justify-center font-bold text-lg sm:text-xl shadow-md shrink-0">
               S
             </div>
-            <div>
-              <span className="font-bold text-xl tracking-tight text-slate-900">ShopFlow</span>
-              <span className="text-xs bg-slate-100 text-slate-700 px-2 py-0.5 rounded-full font-medium ml-2 border border-slate-200">
+            <div className="flex items-center min-w-0">
+              <span className="font-bold text-lg sm:text-xl tracking-tight text-slate-900">ShopFlow</span>
+              <span className="hidden sm:inline-flex text-xs bg-slate-100 text-slate-700 px-2 py-0.5 rounded-full font-medium ml-2 border border-slate-200 whitespace-nowrap">
                 Official Store
               </span>
             </div>
@@ -297,17 +299,29 @@ export default function ShopFlowStorePage() {
             </div>
           </div>
 
-          <div className="flex items-center gap-3">
-            <div className="flex items-center gap-2 bg-slate-100 hover:bg-slate-200 px-3 py-1.5 rounded-lg text-xs font-medium text-slate-700 transition">
-              <User size={14} className="text-indigo-600" />
-              {me ? <span>{me.name}</span> : <Link href="/login" className="hover:underline">Sign in</Link>}
-            </div>
+          <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+            {me ? (
+              <div className="flex items-center gap-2 bg-slate-100 px-3 py-2 rounded-lg text-xs font-medium text-slate-700">
+                <User size={14} className="text-indigo-600 shrink-0" />
+                <span className="hidden sm:inline max-w-[10rem] truncate">{me.name}</span>
+              </div>
+            ) : (
+              <Link
+                href="/login"
+                className="flex items-center gap-2 bg-slate-100 hover:bg-slate-200 px-3 py-2 rounded-lg text-xs font-medium text-slate-700 whitespace-nowrap transition"
+              >
+                <User size={14} className="text-indigo-600 shrink-0" />
+                Sign in
+              </Link>
+            )}
             <Link 
               href={RITOS_CONSOLE_URL || "#"} 
               target="_blank" 
-              className="bg-indigo-600 hover:bg-indigo-700 text-white px-3.5 py-2 rounded-lg text-xs font-semibold flex items-center gap-1.5 shadow-sm transition"
+              className="bg-indigo-600 hover:bg-indigo-700 text-white px-3 sm:px-3.5 py-2 rounded-lg text-xs font-semibold flex items-center gap-1.5 shadow-sm whitespace-nowrap transition"
             >
-              RITOS Agent Portal <ExternalLink size={12} />
+              <span className="sm:hidden">RITOS</span>
+              <span className="hidden sm:inline">RITOS Agent Portal</span>
+              <ExternalLink size={12} />
             </Link>
           </div>
         </div>
@@ -346,7 +360,7 @@ export default function ShopFlowStorePage() {
           </div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
           {DEMO_ORDERS.map((order) => (
             <div 
               key={`${order.orderId}-${order.itemName}`}
@@ -371,12 +385,12 @@ export default function ShopFlowStorePage() {
                 </div>
 
                 <div className="p-4 space-y-2">
-                  <div className="flex justify-between items-start">
-                    <div>
+                  <div className="flex justify-between items-start gap-3">
+                    <div className="min-w-0">
                       <span className="text-[11px] font-mono font-medium text-slate-400">{order.orderId}</span>
                       <h3 className="font-bold text-sm text-slate-900">{order.itemName}</h3>
                     </div>
-                    <span className="font-extrabold text-sm text-slate-900">
+                    <span className="font-extrabold text-sm text-slate-900 whitespace-nowrap">
                       {formatMoney(order.amount * 100)}
                     </span>
                   </div>
@@ -426,7 +440,7 @@ export default function ShopFlowStorePage() {
               </div>
               <button
                 onClick={() => handleInstantBuyAndClaim(item)}
-                className="w-full py-1.5 bg-slate-100 hover:bg-indigo-50 text-slate-700 hover:text-indigo-600 rounded-lg text-[11px] font-semibold transition border border-slate-200"
+                className="w-full py-2 bg-slate-100 hover:bg-indigo-50 text-slate-700 hover:text-indigo-600 rounded-lg text-[11px] font-semibold transition border border-slate-200"
               >
                 Buy &amp; Request Refund
               </button>
@@ -439,7 +453,7 @@ export default function ShopFlowStorePage() {
       {recentClaims.length > 0 && (
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-10">
           <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-xs space-y-4">
-            <div className="flex items-center justify-between">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <h3 className="font-bold text-sm text-slate-900 flex items-center gap-2">
                 <CheckCircle2 size={16} className="text-emerald-600" />
                 Live Customer Claims Dispatched ({recentClaims.length})
@@ -447,7 +461,7 @@ export default function ShopFlowStorePage() {
               <Link 
                 href={RITOS_CONSOLE_URL || "#"} 
                 target="_blank" 
-                className="text-xs font-semibold text-indigo-600 hover:underline flex items-center gap-1"
+                className="text-xs font-semibold text-indigo-600 hover:underline flex items-center gap-1 py-1"
               >
                 Inspect in RITOS Queues <ArrowRight size={12} />
               </Link>
@@ -463,7 +477,7 @@ export default function ShopFlowStorePage() {
                     <span className="text-slate-400 mx-1.5">•</span>
                     <span className="text-slate-500">{formatMoney((claim.payload_sent?.claimed_amount || 0) * 100)}</span>
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     <span className="bg-slate-100 text-slate-800 border border-slate-200 px-2 py-0.5 rounded text-[11px] font-bold">
                       {claim.ritos_response?.data?.assigned_desk
                         ? `Desk: ${claim.ritos_response.data.assigned_desk} (${claim.ritos_response.data.next_action || claim.ritos_response.data.decision || "routed"})`
@@ -472,9 +486,9 @@ export default function ShopFlowStorePage() {
                     <Link 
                       href={RITOS_CONSOLE_URL || "#"} 
                       target="_blank" 
-                      className="text-indigo-600 hover:underline text-[11px] font-semibold"
+                      className="inline-flex items-center gap-1 py-1 text-indigo-600 hover:underline text-[11px] font-semibold"
                     >
-                      View in RITOS Console →
+                      View in RITOS Console <ArrowRight size={12} />
                     </Link>
                   </div>
                 </div>
@@ -487,9 +501,9 @@ export default function ShopFlowStorePage() {
       {/* 7. REFUND SUBMISSION MODAL */}
       {selectedOrder && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
-          <div className="bg-white rounded-2xl max-w-2xl w-full p-6 shadow-2xl border border-slate-200 space-y-5 animate-in fade-in zoom-in-95 duration-150 my-8">
-            <div className="flex justify-between items-start border-b border-slate-100 pb-3">
-              <div>
+          <div className="bg-white rounded-2xl max-w-2xl w-full p-4 sm:p-6 shadow-2xl border border-slate-200 space-y-5 animate-in fade-in zoom-in-95 duration-150 my-8">
+            <div className="flex justify-between items-start gap-3 border-b border-slate-100 pb-3">
+              <div className="min-w-0">
                 <span className="text-xs font-semibold text-indigo-600">Customer Refund Request</span>
                 <h3 className="font-extrabold text-lg text-slate-900">{selectedOrder.itemName}</h3>
                 <span className="text-xs text-slate-500 font-mono">
@@ -501,9 +515,10 @@ export default function ShopFlowStorePage() {
                   setSelectedOrder(null);
                   setTicketResult(null);
                 }}
-                className="text-slate-400 hover:text-slate-600 p-1 rounded-lg text-sm"
+                className="inline-flex items-center justify-center w-9 h-9 -mr-1.5 shrink-0 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-lg transition"
+                aria-label="Close"
               >
-                ✕
+                <X size={18} />
               </button>
             </div>
 
@@ -651,12 +666,12 @@ export default function ShopFlowStorePage() {
 
                 {/* Photo Evidence & Image Extraction Uploader */}
                 <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-3">
-                  <div className="flex items-center justify-between">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
                     <label className="text-xs font-semibold text-slate-800 flex items-center gap-1.5">
-                      <Camera size={14} className="text-indigo-600" />
+                      <Camera size={14} className="text-indigo-600 shrink-0" />
                       Attach Photo Proof (Visual Evidence AI)
                     </label>
-                    <label className="flex items-center gap-1.5 text-xs text-slate-600 cursor-pointer">
+                    <label className="flex items-center gap-1.5 py-1 text-xs text-slate-600 cursor-pointer">
                       <input 
                         type="checkbox" 
                         checked={attachPhoto} 
@@ -680,19 +695,19 @@ export default function ShopFlowStorePage() {
                         />
                         {customPhotoBase64 ? (
                           <div className="flex items-center justify-between gap-3 text-left">
-                            <div className="flex items-center gap-3">
+                            <div className="flex items-center gap-3 min-w-0">
                               {/* eslint-disable-next-line @next/next/no-img-element */}
                               <img 
                                 src={customPhotoBase64} 
                                 alt="Uploaded Proof Preview" 
-                                className="w-12 h-12 rounded object-cover border border-slate-200"
+                                className="w-12 h-12 rounded object-cover border border-slate-200 shrink-0"
                               />
-                              <div>
-                                <span className="font-bold text-xs text-slate-800 block truncate max-w-[200px]">
+                              <div className="min-w-0">
+                                <span className="font-bold text-xs text-slate-800 block truncate">
                                   {customPhotoName || "custom_uploaded_photo.jpg"}
                                 </span>
                                 <span className="text-[10px] text-emerald-600 font-semibold flex items-center gap-1">
-                                  ✓ Live File Ready for Computer Vision AI
+                                  <Check size={12} className="shrink-0" /> Live File Ready for Computer Vision AI
                                 </span>
                               </div>
                             </div>
@@ -703,7 +718,7 @@ export default function ShopFlowStorePage() {
                                 setCustomPhotoBase64(null);
                                 setCustomPhotoName(null);
                               }}
-                              className="p-1.5 text-rose-500 hover:bg-rose-50 rounded-lg transition"
+                              className="relative z-10 inline-flex items-center justify-center w-9 h-9 shrink-0 text-rose-500 hover:bg-rose-50 rounded-lg transition"
                               title="Remove uploaded photo"
                             >
                               <Trash2 size={16} />
@@ -736,11 +751,11 @@ export default function ShopFlowStorePage() {
                           }}
                           className="w-full p-2 bg-white border border-slate-200 rounded-lg text-xs font-mono text-slate-700"
                         >
-                          <option value="stitching_loose_zipper.jpg">📸 stitching_loose_zipper.jpg (Hardware/Seam Defect)</option>
-                          <option value="earcup_cushion_tear.jpg">📸 earcup_cushion_tear.jpg (Acoustic Hardware Tear)</option>
-                          <option value="damage_broken_box.jpg">📦 damage_broken_box.jpg (Transit Package Damage)</option>
-                          <option value="shipping_label_barcode.jpg">🏷️ shipping_label_barcode.jpg (Serial/Box Label Proof)</option>
-                          <option value="clean_unopened_package.jpg">📦 clean_unopened_package.jpg (Unopened Product Photo)</option>
+                          <option value="stitching_loose_zipper.jpg">stitching_loose_zipper.jpg (Hardware/Seam Defect)</option>
+                          <option value="earcup_cushion_tear.jpg">earcup_cushion_tear.jpg (Acoustic Hardware Tear)</option>
+                          <option value="damage_broken_box.jpg">damage_broken_box.jpg (Transit Package Damage)</option>
+                          <option value="shipping_label_barcode.jpg">shipping_label_barcode.jpg (Serial/Box Label Proof)</option>
+                          <option value="clean_unopened_package.jpg">clean_unopened_package.jpg (Unopened Product Photo)</option>
                         </select>
                       </div>
 

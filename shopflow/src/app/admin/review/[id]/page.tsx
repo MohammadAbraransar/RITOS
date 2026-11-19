@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Link from "next/link";
-import { ArrowLeft, CheckCircle, XCircle, Edit3, ShieldAlert, FileText, User, ShoppingBag } from "lucide-react";
+import { CheckCircle, XCircle, Edit3, ShieldAlert, FileText } from "lucide-react";
+import { AdminHeader } from "@/components/layout/AdminHeader";
 import { formatMoney } from "@/lib/money";
 
 export default function AdminReviewDetailPage({ params }: { params: { id: string } }) {
@@ -71,19 +71,9 @@ export default function AdminReviewDetailPage({ params }: { params: { id: string
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 pb-12">
-      <header className="bg-slate-900 text-white px-6 py-4 flex items-center justify-between shadow">
-        <div className="flex items-center space-x-3">
-          <Link href="/admin/review" className="text-slate-400 hover:text-white transition">
-            <ArrowLeft className="w-5 h-5" />
-          </Link>
-          <span className="font-bold text-lg tracking-tight">Review Dossier: {ticket.ticket_id}</span>
-          <span className="text-xs bg-amber-500/20 text-amber-300 border border-amber-500/30 px-2 py-0.5 rounded">
-            {ticket.status}
-          </span>
-        </div>
-      </header>
+      <AdminHeader backHref="/admin/review" title={`Review Dossier: ${ticket.ticket_id}`} badge={ticket.status} badgeTone="amber" />
 
-      <main className="max-w-6xl mx-auto p-6 space-y-6">
+      <main className="max-w-6xl mx-auto p-4 sm:p-6 space-y-6">
         {successMsg && (
           <div className="p-4 bg-emerald-50 border border-emerald-200 text-emerald-900 rounded-xl text-sm font-semibold flex items-center gap-2">
             <CheckCircle className="w-5 h-5 text-emerald-600 flex-shrink-0" />
@@ -95,7 +85,7 @@ export default function AdminReviewDetailPage({ params }: { params: { id: string
           {/* Main Dossier */}
           <div className="md:col-span-2 space-y-6">
             {/* Ticket & Claim */}
-            <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-sm space-y-4">
+            <div className="bg-white rounded-xl border border-slate-200 p-4 sm:p-6 shadow-sm space-y-4">
               <h2 className="text-sm font-bold uppercase tracking-wider text-slate-700 flex items-center gap-2">
                 <FileText className="w-4 h-4 text-indigo-600" /> Claim Details
               </h2>
@@ -118,7 +108,7 @@ export default function AdminReviewDetailPage({ params }: { params: { id: string
             </div>
 
             {/* Derived Facts & Conflict Analysis */}
-            <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-sm space-y-3">
+            <div className="bg-white rounded-xl border border-slate-200 p-4 sm:p-6 shadow-sm space-y-3">
               <h2 className="text-sm font-bold uppercase tracking-wider text-slate-700 flex items-center gap-2">
                 <ShieldAlert className="w-4 h-4 text-amber-600" /> RITOS Orchestration Analysis
               </h2>
@@ -152,7 +142,7 @@ export default function AdminReviewDetailPage({ params }: { params: { id: string
             </div>
 
             {/* Evidence Viewer */}
-            <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-sm space-y-3">
+            <div className="bg-white rounded-xl border border-slate-200 p-4 sm:p-6 shadow-sm space-y-3">
               <h2 className="text-sm font-bold uppercase tracking-wider text-slate-700">Evidence Attachments ({evidence.length})</h2>
               {evidence.length === 0 ? (
                 <p className="text-xs text-slate-400">No evidence attached to this ticket.</p>
@@ -173,7 +163,7 @@ export default function AdminReviewDetailPage({ params }: { params: { id: string
 
           {/* Right Column: Actions */}
           <div className="space-y-6">
-            <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-sm space-y-4">
+            <div className="bg-white rounded-xl border border-slate-200 p-4 sm:p-6 shadow-sm space-y-4">
               <h2 className="text-sm font-bold uppercase tracking-wider text-slate-700">Adjudication Controls</h2>
 
               <div className="space-y-3">
