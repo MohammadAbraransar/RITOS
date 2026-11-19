@@ -39,20 +39,67 @@ def main():
         customer = users["customer"]
         now = datetime.now(timezone.utc)
 
+        # (transaction, order, amount, payment status, refunded, days since purchase)
         txs = [
-            ("TXN-1001", "ORD-1001", 1500.00, "SUCCESSFUL", 0),
-            ("TXN-1002", "ORD-1002", 2499.00, "SUCCESSFUL", 0),
-            ("TXN-1003", "ORD-1003", 799.00, "SUCCESSFUL", 0),
-            ("TXN-1004", "ORD-1004", 1200.00, "PENDING", 0),
-            ("TXN-1005", "ORD-1005", 1500.00, "SUCCESSFUL", 0),
+            ("TXN-1001", "ORD-1001", 1500.00, "SUCCESSFUL", 0, 0),
+            ("TXN-1002", "ORD-1002", 2499.00, "SUCCESSFUL", 0, 0),
+            ("TXN-1003", "ORD-1003", 799.00, "SUCCESSFUL", 0, 0),
+            ("TXN-1004", "ORD-1004", 1200.00, "PENDING", 0, 0),
+            ("TXN-1005", "ORD-1005", 1500.00, "SUCCESSFUL", 0, 0),
+            ("TXN-1006", "ORD-1006", 3499.00, "SUCCESSFUL", 0, 3),    # apparel, within its window
+            ("TXN-1007", "ORD-1007", 1999.00, "SUCCESSFUL", 0, 40),   # electronics, return window ended
+            ("TXN-1008", "ORD-1008", 1598.00, "SUCCESSFUL", 0, 1),    # two products in one order
         ]
-        for txid, order, amount, status, refunded in txs:
+        for txid, order, amount, status, refunded, days_ago in txs:
             if not db.get(Transaction, txid):
                 db.add(Transaction(
                     id=txid, customer_id=customer.id, order_id=order, amount=amount,
                     currency="INR", payment_status=status, refunded_amount=refunded,
-                    provider_reference=f"DEMO-{txid}"
+                    provider_reference=f"DEMO-{txid}", created_at=now - timedelta(days=days_ago)
                 ))
+        db.flush()
+
+        # Catalog products and what was bought in each demo order: the portal takes product, category and the
+        # refundable amount from these records, never from what the customer types.
+        # (SONY-WH1000XM4 and BAG-LTH-01 are created further down with their variants and reference images.)
+        from .models import Product, OrderItem
+        catalog = [
+            ("KB-MECH-01", "Wireless Mechanical Keyboard", "ELECTRONICS", "Keychron", 150000),
+            ("SERUM-ORG-30", "Organic Skincare Serum", "HYGIENE", "Botanica", 79900),
+            ("WATCH-FT-REFLEX", "Fastrack Smartwatch Reflex", "ELECTRONICS", "Fastrack", 120000),
+            ("CHAIR-ERGO-01", "Ergonomic Office Chair", "GENERAL", "Featherlite", 150000),
+            ("SPK-BT-01", "Portable Bluetooth Speaker", "ELECTRONICS", "JBL", 199900),
+            ("DOCK-USBC-01", "USB-C Charging Dock", "ELECTRONICS", "Anker", 129900),
+            ("CABLE-USBC-2M", "Braided USB-C Cable (2 m)", "ELECTRONICS", "Anker", 29900),
+        ]
+        for sku, name, category, brand, price in catalog:
+            if not db.get(Product, sku):
+                db.add(Product(sku=sku, name=name, category=category, brand=brand, model=name,
+                               price_minor=price, currency="INR"))
+        db.flush()
+        order_items = {
+            "TXN-1001": [("KB-MECH-01", 1500.00)],
+            "TXN-1002": [("SONY-WH1000XM4", 2499.00)],
+            "TXN-1003": [("SERUM-ORG-30", 799.00)],
+            "TXN-1004": [("WATCH-FT-REFLEX", 1200.00)],
+            "TXN-1005": [("CHAIR-ERGO-01", 1500.00)],
+            "TXN-1006": [("BAG-LTH-01", 3499.00)],
+            "TXN-1007": [("SPK-BT-01", 1999.00)],
+            "TXN-1008": [("DOCK-USBC-01", 1299.00), ("CABLE-USBC-2M", 299.00)],
+        }
+        for txid, lines in order_items.items():
+            if db.get(Transaction, txid) and not db.scalar(select(OrderItem).where(OrderItem.transaction_id == txid)):
+                for sku, amount in lines:
+                    db.add(OrderItem(transaction_id=txid, product_sku=sku, amount=amount))
+
+        # Return policies must exist before the sample tickets run through the pipeline: without them the
+        # policy agent finds no window and every sample claim lands on the Review desk.
+        from .models import ReturnPolicy
+        if not db.scalar(select(ReturnPolicy).where(ReturnPolicy.category == "ELECTRONICS")):
+            db.add(ReturnPolicy(category="ELECTRONICS", allow_damaged_exceptions=True, return_window_days=14, policy_summary="14-day warranty for verified hardware defects."))
+            db.add(ReturnPolicy(category="APPAREL", allow_damaged_exceptions=True, return_window_days=30, policy_summary="30-day return window for unworn items with tags."))
+            db.add(ReturnPolicy(category="GENERAL", allow_damaged_exceptions=True, return_window_days=14, policy_summary="Standard 14-day eCommerce satisfaction guarantee."))
+            db.add(ReturnPolicy(category="HYGIENE", allow_damaged_exceptions=True, return_window_days=0, policy_summary="Final sale once unsealed for health standards."))
         db.commit()
 
         # Seed sample tickets across all 3 desks if not already created
@@ -147,6 +194,9 @@ def main():
                 reason="Pre-dispatch cancellation verified against warehouse ledger; pending Finance four-eyes sign-off.",
                 idempotency_key=f"seed-refund-{ticket_1001.id}"
             ))
+            # Same ticket state propose_refund() leaves, so the desks show it as waiting for approval
+            ticket_1001.refund_status = RefundStatus.PENDING_APPROVAL.value
+            ticket_1001.status = "IN_REVIEW"
 
         # 2. Executed Settled Refund for TXN-1005
         t_1005 = db.scalar(select(Ticket).where(Ticket.ticket_number == "RIT-CS1-GENUINE"))
@@ -165,13 +215,16 @@ def main():
                 reason="Approval Desk automatic settlement credited to customer bank account.",
                 idempotency_key=f"seed-settle-{t_1005.id}"
             ))
-            # Mark ticket as resolved
+            # Mark ticket as resolved, and record the settled amount on the ledger so it cannot be refunded twice
             t_1005.status = "RESOLVED"
             t_1005.refund_status = "REFUNDED"
+            tx_1005 = db.get(Transaction, "TXN-1005")
+            if tx_1005:
+                tx_1005.refunded_amount = Decimal("1500.00")
         
         # Seed default chart of accounts and products
         from .finance import ensure_default_accounts, FinancialSettlementService
-        from .models import Product, ProductVariant, ProductReferenceImage, ReturnPolicy
+        from .models import Product, ProductVariant, ProductReferenceImage
         ensure_default_accounts(db)
 
         # Seed sample product catalog
@@ -212,13 +265,6 @@ def main():
                 price_minor=249900,
                 currency="INR"
             ))
-
-        # Seed return policies
-        if not db.scalar(select(ReturnPolicy).where(ReturnPolicy.category == "ELECTRONICS")):
-            db.add(ReturnPolicy(category="ELECTRONICS", allow_damaged_exceptions=True, return_window_days=14, policy_summary="14-day warranty for verified hardware defects."))
-            db.add(ReturnPolicy(category="APPAREL", allow_damaged_exceptions=True, return_window_days=30, policy_summary="30-day return window for unworn items with tags."))
-            db.add(ReturnPolicy(category="GENERAL", allow_damaged_exceptions=True, return_window_days=14, policy_summary="Standard 14-day eCommerce satisfaction guarantee."))
-            db.add(ReturnPolicy(category="HYGIENE", allow_damaged_exceptions=True, return_window_days=0, policy_summary="Final sale once unsealed for health standards."))
 
         # If t_1005 has settled refund, post balanced double-entry journal if not existing
         from .models import LedgerJournal

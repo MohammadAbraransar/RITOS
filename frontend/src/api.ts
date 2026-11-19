@@ -47,6 +47,43 @@ export type Ticket = {
   created_at: string
   updated_at: string
   comments?: { id: string; author_id: string; body: string; internal: boolean; created_at: string }[]
+  // Customer view only (staff get the full record instead)
+  customer_status?: CustomerClaimStatus
+  reason?: string | null
+  reason_label?: string | null
+  details?: string | null
+  product_sku?: string | null
+}
+
+// Customer portal (backend/app/purchases.py): every value here comes from the ledger order, never from the customer
+export type EligibilityStatus = 'ELIGIBLE' | 'ITEM_PROBLEM_ONLY' | 'NEEDS_REVIEW' | 'NOT_REFUNDABLE' | 'EXPIRED'
+  | 'REFUNDED' | 'ALREADY_CLAIMED' | 'UNAVAILABLE'
+export type Purchase = {
+  purchase_id: string | null
+  transaction_id: string
+  order_id: string
+  currency: string
+  purchased_at: string
+  quantity: number | null
+  amount: number
+  product: { sku: string; name: string; category: string; brand: string | null; image_url: string | null } | null
+  eligibility: {
+    status: EligibilityStatus
+    claimable: boolean
+    message: string
+    refundable_amount: number
+    return_window_days: number | null
+    days_elapsed: number | null
+    window_ends_at: string | null
+    existing_claim: { id: string; ticket_number: string } | null
+    reason_code: string | null
+  }
+}
+export type ClaimReason = { code: string; label: string; item_problem: boolean; details_required: boolean }
+export type CustomerClaimStatus = {
+  code: 'UNDER_REVIEW' | 'ACTION_NEEDED' | 'REFUND_IN_PROGRESS' | 'REFUNDED' | 'NOT_APPROVED' | 'CLOSED'
+  label: string
+  description: string
 }
 
 let token = localStorage.getItem('ritos_token') || ''
@@ -113,6 +150,10 @@ export const api = {
   runAutomation: (id: string) => request<any>(`/automation/tickets/${id}/run`, { method: 'POST' }),
   runAllAutomation: () => request<any>('/automation/run-all', { method: 'POST' }),
   customerTransactions: () => request<any[]>('/customer/transactions'),
+  customerPurchases: () => request<{ items: Purchase[]; reasons: ClaimReason[] }>('/customer/purchases'),
+  // Portal claim: the server derives product, category, amount and order from the purchase
+  submitClaim: (data: { transaction_id: string; purchase_id: string; reason: string; description?: string; evidence_images?: string[] }) =>
+    request<Ticket>('/tickets', { method: 'POST', body: JSON.stringify(data) }),
 
   // 3-Bucket CS Desks & eCommerce Webhook
   desksSummary: () => request<any>('/desks/summary'),

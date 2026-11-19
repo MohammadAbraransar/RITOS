@@ -188,6 +188,18 @@ def run_workflow(db: Session, ticket: Ticket, trigger: str = "MANUAL", actor_id:
     return result
 
 
+def needs_supervisor(ticket: Ticket) -> bool:
+    """Same rule as the arbiter's AWAIT_APPROVAL gate: above the automatic limit, or risk-flagged by Agent 4.
+    Fails safe: if the risk assessment is missing, a supervisor is required."""
+    if Decimal(str(ticket.claimed_amount or 0)) > Decimal(str(settings.auto_approve_max_inr)):
+        return True
+    agents = (ticket.classification_evidence or {}).get("agents") or []
+    risk = next((a for a in agents if a.get("agent_id") == "risk_assessment"), None)
+    if not risk or risk.get("status") != "COMPLETED":
+        return True
+    return bool(risk.get("requires_supervisory_review")) or risk.get("risk_tier") == "HIGH"
+
+
 def record_human_decision(db: Session, ticket: Ticket, decision: str, actor_id: str, reason: str) -> WorkflowRun:
     """Resume a waiting ticket with a human decision (APPROVED / REJECTED / PROOF_ACCEPTED / PROOF_REQUESTED)."""
     _close_waiting_runs(db, ticket.id, "RESUMED")
@@ -203,6 +215,10 @@ def record_human_decision(db: Session, ticket: Ticket, decision: str, actor_id: 
     evidence = dict(ticket.classification_evidence or {})
     evidence["workflow"] = {"run_id": run.id, "trigger": "HUMAN_DECISION", "status": run.status,
                             "next_action": run.next_action, "gate_reason": reason}
+    if run.next_action == AWAIT_APPROVAL:
+        # Accepted proof within the automatic limit and without risk flags is approved by the Approval Desk;
+        # otherwise it keeps the supervisory approval rule (permissions.proposal_action).
+        evidence["workflow"]["supervised"] = needs_supervisor(ticket)
     ticket.classification_evidence = evidence
     db.flush()
     return run

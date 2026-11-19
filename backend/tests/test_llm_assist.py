@@ -8,7 +8,7 @@ from sqlalchemy import select
 from app import llm
 from app.main import app
 from app.database import SessionLocal
-from app.models import Transaction, User
+from app.models import Transaction, User, OrderItem, Product, TicketEvent
 from app.agents import llm_assist
 
 client = TestClient(app)
@@ -41,13 +41,18 @@ def _portal_claim(description):
         customer = db.scalar(select(User).where(User.email == "customer@ritos.local"))
         db.add(Transaction(id=txid, customer_id=customer.id, order_id=f"ORD-{txid}", amount=1000, currency="INR",
                            payment_status="SUCCESSFUL", refunded_amount=0, created_at=datetime.now(timezone.utc) - timedelta(days=2)))
+        # what was bought: the portal takes product, category and amount from this record
+        db.add(Product(sku=f"SKU-{txid}", name=f"LLM item {txid}", category="GENERAL", price_minor=50000, currency="INR"))
+        db.add(OrderItem(transaction_id=txid, product_sku=f"SKU-{txid}", amount=500))
         db.commit()
     tok = client.post("/api/v1/auth/login", json={"email": "customer@ritos.local", "password": "ChangeMe123!"}).json()["access_token"]
     r = client.post("/api/v1/tickets", headers={"Authorization": f"Bearer {tok}"}, json={
-        "transaction_id": txid, "order_id": f"ORD-{txid}", "claimed_amount": 500, "description": description,
-        "item_name": f"LLM item {txid}", "item_category": "GENERAL"})
+        "transaction_id": txid, "description": description})
     assert r.status_code == 200, r.text
-    return r.json()["automation"]
+    with SessionLocal() as db:  # the pipeline trace is staff-side; customers never receive it
+        return db.scalars(select(TicketEvent).where(TicketEvent.ticket_id == r.json()["id"],
+                                                    TicketEvent.event_type == "AUTOMATION_PIPELINE_COMPLETED")
+                          .order_by(TicketEvent.created_at.desc())).first().details
 
 
 def test_llm_catches_damage_the_keywords_missed_and_tightens_routing(stub_llm):

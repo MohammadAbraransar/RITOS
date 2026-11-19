@@ -13,7 +13,7 @@ from sqlalchemy import select
 from app.main import app
 from app import outbox
 from app.database import SessionLocal
-from app.models import Transaction, User, OutboxMessage
+from app.models import Transaction, User, OutboxMessage, OrderItem, Product, TicketEvent
 from app.agents.policy_agent import evaluate_policy_eligibility
 
 client = TestClient(app)
@@ -35,24 +35,60 @@ def _old_transaction(days_ago: int) -> str:
     return txid
 
 
-def _claim(txid: str, **extra):
-    body = {"transaction_id": txid, "order_id": f"ORD-{txid}", "claimed_amount": 1000, "currency": "INR",
-            "description": "I changed my mind and no longer need this item, it is unused.",
-            "item_name": f"Headphones {txid}", "item_category": "ELECTRONICS", **extra}
+def _link_item(txid: str, name: str, category: str, amount) -> str:
+    """The product bought in the order: portal claims take product, category and amount from this record."""
+    with SessionLocal() as db:
+        sku = f"SKU-{txid}"
+        if not db.get(Product, sku):
+            db.add(Product(sku=sku, name=name, category=category, price_minor=int(amount * 100), currency="INR"))
+        item = OrderItem(transaction_id=txid, product_sku=sku, amount=amount)
+        db.add(item); db.commit()
+        return item.id
+
+
+def _automation(ticket_id: str) -> dict:
+    """The latest pipeline result for a ticket (staff-side record; customers never receive it)."""
+    with SessionLocal() as db:
+        ev = db.scalars(select(TicketEvent).where(TicketEvent.ticket_id == ticket_id,
+                                                  TicketEvent.event_type == "AUTOMATION_PIPELINE_COMPLETED")
+                        .order_by(TicketEvent.created_at.desc())).first()
+        return ev.details
+
+
+def _staff_view(ticket_id: str) -> dict:
+    r = client.post("/api/v1/auth/login", json={"email": "admin@ritos.local", "password": "ChangeMe123!"})
+    return client.get(f"/api/v1/tickets/{ticket_id}", headers={"Authorization": f"Bearer {r.json()['access_token']}"}).json()
+
+
+def _claim(txid: str, claimed_amount=1000, item_category="ELECTRONICS", **extra):
+    with SessionLocal() as db:
+        if claimed_amount > float(db.get(Transaction, txid).amount):
+            db.query(Transaction).filter(Transaction.id == txid).update({"amount": claimed_amount}); db.commit()
+    _link_item(txid, f"Headphones {txid}", item_category, claimed_amount)
+    body = {"transaction_id": txid, "description": "I changed my mind and no longer need this item, it is unused.", **extra}
     r = client.post("/api/v1/tickets", json=body, headers=_customer_headers())
     assert r.status_code == 200, r.text
-    return r.json()
+    data = r.json()
+    return {**data, "automation": _automation(data["id"])}
 
 
 def test_customer_supplied_purchase_date_cannot_reopen_an_expired_window():
     txid = _old_transaction(days_ago=60)
-    data = _claim(txid, purchase_date=datetime.now(timezone.utc).isoformat())
-    auto = data["automation"]
-    assert auto["assigned_desk"] == "CS_3" and auto["next_action"] == "AUTO_REJECT"
-    assert "POLICY_WINDOW_EXPIRED" in auto["reason_codes"]
-    evidence = data["classification_evidence"]
+    _link_item(txid, f"Headphones {txid}", "ELECTRONICS", 1000)
+    fake_date = datetime.now(timezone.utc).isoformat()
+    # An ordinary refund past the window is refused at intake, whatever date the customer sends
+    r = client.post("/api/v1/tickets", headers=_customer_headers(), json={
+        "transaction_id": txid, "reason": "CHANGED_MIND", "purchase_date": fake_date})
+    assert r.status_code == 409 and "problem with the item itself" in r.json()["detail"]
+    # The merchant's defect exception still applies, judged on the ledger date (window not reopened)
+    r = client.post("/api/v1/tickets", headers=_customer_headers(), json={
+        "transaction_id": txid, "reason": "PRODUCT_DAMAGED", "purchase_date": fake_date})
+    assert r.status_code == 200, r.text
+    auto = _automation(r.json()["id"])
+    assert auto["next_action"] == "AWAIT_PROOF" and "POLICY_DEFECT_UNVERIFIED" in auto["reason_codes"]
+    evidence = _staff_view(r.json()["id"])["classification_evidence"]
     assert evidence["purchase_date_source"] == "LEDGER_CAPTURE"
-    assert evidence["customer_reported_purchase_date"]  # kept for reviewers only
+    assert evidence["customer_reported_purchase_date"] == fake_date  # kept for reviewers only
 
 
 def test_portal_claim_without_a_date_uses_the_ledger_capture_date():
@@ -77,7 +113,10 @@ def test_uploading_requested_proof_resumes_the_workflow():
         "ticket_id": data["id"], "file_name": "crack.jpg", "file_type": "image/jpeg",
         "base64_data": base64.b64encode(buf.getvalue()).decode()})
     assert r.status_code == 200, r.text
-    automation = r.json()["automation"]
+    body = r.json()
+    assert body["resumed"] is True and "automation" not in body  # the trace is staff-only
+    assert body["claim"]["id"] == data["id"] and "classification_evidence" not in body["claim"]
+    automation = _automation(data["id"])
     assert automation and automation["trigger"] == "EVIDENCE_UPLOADED"
     assert "EVIDENCE_MISSING" not in automation["reason_codes"]
 
@@ -226,3 +265,33 @@ def test_history_shows_automatic_steps_as_ritos_and_closed_tickets_cannot_rerun(
         db.commit()
     r = client.post(f"/api/v1/automation/tickets/{auto['ticket_id']}/run", headers=H)
     assert r.status_code == 409
+
+
+def test_accepted_proof_within_limits_is_refundable_by_approval_desk_but_above_limit_needs_supervisor():
+    def headers(email):
+        r = client.post("/api/v1/auth/login", json={"email": email, "password": "ChangeMe123!"})
+        return {"Authorization": f"Bearer {r.json()['access_token']}"}
+    defect = "The screen arrived cracked and the device is defective, it does not turn on."
+
+    def accepted_proof_claim(amount):
+        txid = _old_transaction(days_ago=2)
+        with SessionLocal() as db:
+            db.query(Transaction).filter(Transaction.id == txid).update({"amount": amount})
+            db.commit()
+        auto = _claim(txid, claimed_amount=amount, description=defect)["automation"]
+        assert auto["assigned_desk"] == "CS_2" and auto["next_action"] == "AWAIT_PROOF", auto["next_action"]
+        r = client.post(f"/api/v1/tickets/{auto['ticket_id']}/proof-action", headers=headers("cs2@ritos.local"),
+                        json={"action": "APPROVE_PROOF", "note": "Photo shows the cracked screen"})
+        assert r.status_code == 200, r.text
+        return auto["ticket_id"]
+
+    # within the automatic limit and not risk-flagged: the Approval Desk proposes the refund (four-eyes still applies)
+    small = accepted_proof_claim(1000)
+    r = client.post(f"/api/v1/cs1/tickets/{small}/direct-refund", headers=headers("cs1@ritos.local"))
+    assert r.status_code == 200 and r.json()["status"] == "REFUND_PROPOSED", r.text
+    assert r.json()["refund"]["status"] == "PENDING_APPROVAL"
+
+    # above the automatic limit: still needs a supervisory role
+    large = accepted_proof_claim(9000)
+    r = client.post(f"/api/v1/cs1/tickets/{large}/direct-refund", headers=headers("cs1@ritos.local"))
+    assert r.status_code == 403 and "supervisor" in r.json()["detail"]

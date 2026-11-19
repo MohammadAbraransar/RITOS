@@ -52,9 +52,11 @@ def require_payout(action: str):
 
 
 def proposal_action(ticket) -> str:
-    """Which proposal permission a ticket needs: claims RITOS sent for approval need a supervisory role."""
+    """Which proposal permission a ticket needs: claims RITOS sent for approval need a supervisory role,
+    unless the workflow recorded that no supervisor is required (accepted proof within limits, no risk flags)."""
     workflow = (ticket.classification_evidence or {}).get("workflow") or {}
-    return PROPOSE_SUPERVISED if workflow.get("next_action") == "AWAIT_APPROVAL" else PROPOSE
+    supervised = workflow.get("next_action") == "AWAIT_APPROVAL" and workflow.get("supervised") is not False
+    return PROPOSE_SUPERVISED if supervised else PROPOSE
 
 
 def can_propose(user: User, ticket) -> bool:

@@ -13,6 +13,10 @@ import { api, API_ROOT, getToken, setToken, type NextStep, type Ticket, type Use
 import { label, anyStatus, roleName, reasonText, humanize, DESK, BUCKET, NEXT_ACTION, LEDGER_STATUS, PROOF_STATUS,
          PAYOUT_ACTION, RUN_TRIGGER, HUMAN_DECISION, REFUND_STATUS } from './labels'
 import { isClosedStatus, priorityRank } from './logic'
+import { LOCALE, money } from './format'
+import { FileClaim } from './customer/FileClaim'
+import { CLAIM_TONE, claimStatus } from './customer/claimUi'
+import { CustomerClaimDrawer, MyClaims } from './customer/MyClaims'
 
 export { isClosedStatus, priorityRank }
 
@@ -97,18 +101,19 @@ const navFor = (role: string) => {
 }
 
 const roleTitle = (r: string) => roleName(r)
-// Display locale/currency come from configuration (frontend/.env); records carry their own currency.
-const LOCALE: string = import.meta.env.VITE_LOCALE || navigator.language
-const money = (n: number, c: string | undefined = import.meta.env.VITE_DEFAULT_CURRENCY) =>
-  c ? new Intl.NumberFormat(LOCALE, { style: 'currency', currency: c, maximumFractionDigits: 2 }).format(n || 0)
-    : new Intl.NumberFormat(LOCALE, { maximumFractionDigits: 2 }).format(n || 0)
 
-// Payout approval rights for a claim: claims RITOS routed for approval (AWAIT_APPROVAL) need a supervisory role.
+// Payout approval rights for a claim: claims RITOS routed for approval (AWAIT_APPROVAL) need a supervisory role,
+// unless the workflow recorded that none is needed (mirrors backend permissions.proposal_action).
 function proposalRoles(user: User | null, t: Ticket): string[] {
-  const supervised = (t as any).classification_evidence?.workflow?.next_action === 'AWAIT_APPROVAL'
+  const wf = (t as any).classification_evidence?.workflow
+  const supervised = wf?.next_action === 'AWAIT_APPROVAL' && wf?.supervised !== false
   return user?.permissions?.payout_roles[supervised ? 'propose_supervised' : 'propose'] || []
 }
 const canProposeFor = (user: User | null, t: Ticket) => !!user && proposalRoles(user, t).includes(user.role)
+// A refund is already in the four-eyes flow (or paid): proposing again would be refused by the server.
+const hasActiveRefund = (t: Ticket, refunds: any[]) =>
+  ['PENDING_APPROVAL', 'APPROVED', 'PROCESSING', 'REFUNDED'].includes(t.refund_status) ||
+  refunds.some((r: any) => r.ticket_id === t.id && !['REJECTED', 'FAILED'].includes(r.status))
 
 // One sentence telling staff where the claim stands and who acts next.
 function nextStepText(t: Ticket, user: User | null, refunds: any[]): string {
@@ -171,7 +176,6 @@ function App() {
   const [priorityFilter, setPriorityFilter] = useState('')
 
   const [notice, setNotice] = useState('')
-  const [showNew, setShowNew] = useState(false)
   const [showMobileNav, setShowMobileNav] = useState(false)
   const [showDocModal, setShowDocModal] = useState(false)
   const [activeAgentModal, setActiveAgentModal] = useState<any>(null)
@@ -199,35 +203,11 @@ function App() {
   })
   const [ecomSimResult, setEcomSimResult] = useState<any>(null)
 
-  const [form, setForm] = useState({
-    transaction_id: 'TXN-1001',
-    order_id: 'ORD-1001',
-    item_name: 'Fastrack Smartwatch Reflex',
-    item_category: 'ELECTRONICS',
-    claimed_amount: '1500',
-    currency: import.meta.env.VITE_DEFAULT_CURRENCY || '',
-    category: 'DEFECTIVE_PRODUCT',
-    description: 'Product received with display defect and erratic touch response out of the box.',
-    custom_photo_base64: '' as string,
-    custom_photo_name: '' as string,
-    evidence_image_preset: 'stitching_loose_zipper.jpg'
-  })
-
-  const handleClaimFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (file) {
-      const reader = new FileReader()
-      reader.onload = (ev) => {
-        const b64 = ev.target?.result as string
-        setForm(prev => ({
-          ...prev,
-          custom_photo_base64: b64,
-          custom_photo_name: file.name
-        }))
-      }
-      reader.readAsDataURL(file)
-    }
-  }
+  // Customer claims list: loading/error state, the order a claim starts from, and the request just filed
+  const [ticketsLoaded, setTicketsLoaded] = useState(false)
+  const [ticketsError, setTicketsError] = useState('')
+  const [claimPreselectTx, setClaimPreselectTx] = useState<string | null>(null)
+  const [newClaimId, setNewClaimId] = useState<string | null>(null)
 
   const [customerTxs, setCustomerTxs] = useState<any[]>([])
   const [runningAllAgents, setRunningAllAgents] = useState(false)
@@ -269,6 +249,8 @@ function App() {
       if (!full && tickets.length > 0) {
         const t = await api.tickets(params.toString() ? '?' + params.toString() : '')
         setTickets(t.items)
+        setTicketsLoaded(true)
+        setTicketsError('')
         setApiStatus('connected')
         return
       }
@@ -280,6 +262,8 @@ function App() {
       ])
       setTickets(t.items)
       setRefunds(r)
+      setTicketsLoaded(true)
+      setTicketsError('')
       setApiStatus('connected')
       if (!isCustomer) {
         api.analytics().then(setMetrics).catch(() => {})
@@ -295,12 +279,18 @@ function App() {
           setAutomation(null)
         }
       }
-      if (['administrator', 'auditor', 'supervisor', 'finance_approver', 'refund_operations'].includes(user?.role || '')) {
-        try {
-          setAudit(await api.audit())
-        } catch {}
-        api.ledgerJournals().then(setJournals).catch(() => {})
-        api.ledgerAccounts().then(setAccounts).catch(() => {})
+      const role = user?.role || ''
+      if (['administrator', 'auditor', 'supervisor', 'finance_approver', 'refund_operations'].includes(role)) {
+        // Only call what the server lets this role read (backend api.py role guards)
+        if (['administrator', 'auditor'].includes(role)) {
+          try {
+            setAudit(await api.audit())
+          } catch {}
+        }
+        if (['administrator', 'auditor', 'finance_approver'].includes(role)) {
+          api.ledgerJournals().then(setJournals).catch(() => {})
+          api.ledgerAccounts().then(setAccounts).catch(() => {})
+        }
         api.healthReadiness().then(setReadiness).catch(() => {})
       }
       if (!isCustomer) {
@@ -308,6 +298,7 @@ function App() {
       }
     } catch (e) {
       setApiStatus('degraded')
+      setTicketsError((e as Error).message)
       setNotice((e as Error).message)
     }
   }
@@ -339,6 +330,9 @@ function App() {
 
   useEffect(() => {
     if (user) {
+      setTicketsLoaded(false)
+      setTicketsError('')
+      setNewClaimId(null)
       load(true)
       api.automationAgents().then((r) => setAgentCatalog(r.agents || [])).catch(() => setAgentCatalog([]))
     }
@@ -375,11 +369,11 @@ function App() {
       }
       const data = await api.login(targetEmail, DEMO_PASSWORD)
       setToken(data.access_token)
-      setUser(data.user)
+      setUser(data.user)  // the [user] effect reloads with the new role (this closure still holds the old one)
+      setPage('dashboard')
       setSelected(null)
       setPipelineTrace(null)
       setNotice(`Switched session to ${data.user.full_name} (${roleTitle(data.user.role)})`)
-      await load()
     } catch (err) {
       setNotice(`Role switch failed: ${(err as Error).message}`)
     } finally {
@@ -621,14 +615,7 @@ function App() {
   }
 
   function handleRequestRefundForOrder(tx: any) {
-    setForm(prev => ({
-      ...prev,
-      transaction_id: tx.id,
-      order_id: tx.order_id,
-      claimed_amount: String(Number(tx.amount) - Number(tx.refunded_amount)),
-      currency: tx.currency,
-      description: `Refund requested for Order ${tx.order_id} (${tx.id}).`
-    }))
+    setClaimPreselectTx(tx.id)
     setPage('new')
   }
 
@@ -664,36 +651,6 @@ function App() {
       await load()
     } catch (err) {
       setNotice(`ShopFlow Webhook Simulation Note: ${(err as Error).message}`)
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  async function submitTicket(e: FormEvent) {
-    e.preventDefault()
-    setBusy(true)
-    setNotice('Submitting your claim: the specialist agents are reviewing it…')
-    try {
-      const evidence = form.custom_photo_base64
-        ? [form.custom_photo_base64]
-        : (form.evidence_image_preset ? [form.evidence_image_preset] : [])
-      const created = await api.createTicket({
-        transaction_id: form.transaction_id,
-        order_id: form.order_id,
-        claimed_amount: Number(form.claimed_amount),
-        currency: form.currency || undefined, // empty: RITOS applies its configured default
-        description: form.description,
-        item_name: form.item_name,
-        item_category: form.item_category,
-        evidence_images: evidence
-      })
-      // Confirm as soon as RITOS answers; refreshing the lists can take a few seconds on a remote database.
-      setNotice(`Claim ${created.ticket_number} submitted and routed to ${created.assigned_desk ? label(DESK, created.assigned_desk).text : 'review'}.`)
-      setShowNew(false)
-      setPage('tickets')
-      await load()
-    } catch (e) {
-      setNotice((e as Error).message)
     } finally {
       setBusy(false)
     }
@@ -1587,7 +1544,7 @@ function App() {
                         <th>ORDER & PRODUCT</th>
                         <th>AMOUNT</th>
                         <th>STATUS</th>
-                        <th>TRIAGE STAGE</th>
+                        <th>PROGRESS</th>
                         <th>SUBMITTED</th>
                         <th>ACTION</th>
                       </tr>
@@ -1617,11 +1574,8 @@ function App() {
                             <StatusPill value={t.status} />
                           </td>
                           <td>
-                            <span style={{ fontSize: '12px', fontWeight: 600, color: t.status === 'RESOLVED' ? 'var(--emerald-700)' : t.status === 'REJECTED' ? 'var(--rose-700)' : 'var(--primary-700)' }}>
-                              {t.status === 'RESOLVED' ? <><CheckCircle2 size={13} className="inline-icon" aria-hidden="true" />Refund Credited to Bank</> :
-                               t.status === 'REJECTED' ? <><XCircle size={13} className="inline-icon" aria-hidden="true" />Ineligible under Return Window</> :
-                               t.status === 'AWAITING_INFORMATION' ? <><Smartphone size={13} className="inline-icon" aria-hidden="true" />Evidence / Proof Requested</> :
-                               <><Settings2 size={13} className="inline-icon" aria-hidden="true" />Automated AI Review</>}
+                            <span className={`mc-status-inline tone-${CLAIM_TONE[claimStatus(t).code]}`}>
+                              <i aria-hidden="true" />{claimStatus(t).label}
                             </span>
                           </td>
                           <td>
@@ -1803,7 +1757,7 @@ function App() {
                             <div className="row-actions" onClick={e => e.stopPropagation()}>
                               {t.status !== 'RESOLVED' && (
                                 <>
-                                  {canProposeFor(user, t) && (
+                                  {canProposeFor(user, t) && !hasActiveRefund(t, refunds) && (
                                     <button
                                       className="primary compact"
                                       onClick={() => handleCS1DirectRefund(t)}
@@ -2029,7 +1983,19 @@ function App() {
           )}
 
           {/* TICKETS QUEUE - STRICTLY ROLE FILTERED */}
-          {page === 'tickets' && (
+          {page === 'tickets' && isCustomer && (
+            <MyClaims
+              claims={tickets}
+              loaded={ticketsLoaded}
+              error={ticketsError}
+              highlightId={newClaimId}
+              onRetry={refresh}
+              onOpen={t => setSelected(t)}
+              onNewClaim={() => { setClaimPreselectTx(null); setPage('new') }}
+            />
+          )}
+
+          {page === 'tickets' && !isCustomer && (
             <>
               <div className="page-heading">
                 <div>
@@ -2081,357 +2047,23 @@ function App() {
             </>
           )}
 
-          {/* FILE NEW CLAIM (PROFESSIONAL CUSTOMER & STAFF PORTAL) */}
-          {page === 'new' && (
-            <>
-              <div className="page-heading">
-                <div>
-                  <div className="eyebrow" style={{ color: 'var(--primary-700)', fontWeight: 800 }}>ONLINE CLAIM &amp; RETURN INTAKE</div>
-                  <h1>File a Return or Refund Claim</h1>
-                  <p>Submit order details for real-time payment gateway ledger verification, category policy window compliance, and automated triage by all specialist agents.</p>
-                </div>
-                <div className="heading-actions">
-                  <button className="secondary" onClick={() => setPage(isCustomer ? 'dashboard' : 'tickets')}>
-                    Return to {isCustomer ? 'My Dashboard' : 'Tickets'}
-                  </button>
-                </div>
-              </div>
-
-              {/* QUICK RECENT ORDERS SELECTOR (FOR CUSTOMER) */}
-              {customerTxs && customerTxs.length > 0 && (
-                <div style={{ marginBottom: '20px', padding: '16px', background: 'var(--slate-50)', border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-lg)' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
-                    <span style={{ fontSize: '12px', fontWeight: 800, color: 'var(--navy-900)', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                      <Clock3 size={14} color="var(--primary-700)" />
-                      1-Click Select From Your Verified Orders:
-                    </span>
-                    <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Click to auto-fill verified ledger facts</span>
-                  </div>
-
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(220px, 100%), 1fr))', gap: '10px' }}>
-                    {customerTxs.map(tx => (
-                      <div
-                        key={tx.id}
-                        onClick={() => handleRequestRefundForOrder(tx)}
-                        style={{
-                          padding: '10px 12px',
-                          background: form.transaction_id === tx.id ? 'var(--primary-50)' : '#ffffff',
-                          border: `1px solid ${form.transaction_id === tx.id ? 'var(--primary-600)' : 'var(--border-subtle)'}`,
-                          borderRadius: 'var(--radius-md)',
-                          cursor: 'pointer',
-                          transition: 'all 0.15s ease'
-                        }}
-                      >
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                          <strong style={{ fontSize: '12px', color: 'var(--navy-900)' }}>{tx.order_id || tx.id}</strong>
-                          <span style={{ fontSize: '11px', fontWeight: 800, color: 'var(--emerald-700)' }}>{money(tx.amount, tx.currency)}</span>
-                        </div>
-                        <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '2px', fontFamily: 'monospace' }}>
-                          Txn: {tx.id}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* DUAL-COLUMN INTAKE CONTAINER */}
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(360px, 100%), 1fr))', gap: '24px', alignItems: 'start' }}>
-                {/* LEFT: PRIMARY INTAKE FORM */}
-                <div className="panel" style={{ padding: 'clamp(16px, 3vw, 24px)' }}>
-                  <form onSubmit={submitTicket} className="claim-form">
-                    <h3 style={{ fontSize: '16px', fontWeight: 800, color: 'var(--navy-900)', margin: '0 0 16px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                      <TicketIcon size={18} color="var(--primary-700)" /> Claim Details &amp; Item Specification
-                    </h3>
-
-                    <div className="form-grid">
-                      {/* Order and Transaction */}
-                      <div>
-                        <label>Order Reference ID</label>
-                        <input
-                          placeholder="e.g. ORD-1001"
-                          value={form.order_id}
-                          onChange={e => setForm({ ...form, order_id: e.target.value })}
-                          required
-                        />
-                      </div>
-                      <div>
-                        <label>Transaction ID (Gateway Receipt)</label>
-                        <input
-                          placeholder="e.g. TXN-1001"
-                          value={form.transaction_id}
-                          onChange={e => setForm({ ...form, transaction_id: e.target.value })}
-                          required
-                        />
-                      </div>
-
-                      {/* Product Name */}
-                      <div className="span-2">
-                        <label>Product Name / Item Description</label>
-                        <input
-                          placeholder="e.g. Executive Leather Laptop Sleeve 15-inch"
-                          value={form.item_name}
-                          onChange={e => setForm({ ...form, item_name: e.target.value })}
-                          required
-                        />
-                      </div>
-
-                      {/* Product Category Selector */}
-                      <div className="span-2">
-                        <label style={{ marginBottom: '6px' }}>Product Category &amp; Return Policy Window</label>
-                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(130px, 100%), 1fr))', gap: '8px' }}>
-                          {[
-                            { id: 'ELECTRONICS', label: 'Electronics', icon: Laptop, window: '7-Day Policy' },
-                            { id: 'APPAREL', label: 'Apparel', icon: Shirt, window: '14-Day Policy' },
-                            { id: 'ACCESSORIES', label: 'Accessories', icon: Backpack, window: '14-Day Policy' },
-                            { id: 'PERISHABLES', label: 'Perishables', icon: Apple, window: 'Final Sale (0d)' },
-                            { id: 'DIGITAL', label: 'Digital / Code', icon: Zap, window: 'Non-refundable' },
-                          ].map(cat => (
-                            <button
-                              type="button"
-                              key={cat.id}
-                              onClick={() => setForm({ ...form, item_category: cat.id })}
-                              aria-pressed={form.item_category === cat.id}
-                              style={{
-                                padding: '8px 10px',
-                                minHeight: '44px',
-                                borderRadius: 'var(--radius-md)',
-                                textAlign: 'left',
-                                background: form.item_category === cat.id ? 'var(--primary-50)' : 'var(--slate-50)',
-                                border: `1px solid ${form.item_category === cat.id ? 'var(--primary-600)' : 'var(--border-subtle)'}`,
-                                cursor: 'pointer',
-                                transition: 'all 0.15s ease'
-                              }}
-                            >
-                              <div style={{ fontSize: '11px', fontWeight: 800, color: form.item_category === cat.id ? 'var(--primary-700)' : 'var(--navy-900)' }}>
-                                <cat.icon size={13} className="inline-icon" aria-hidden="true" />{cat.label}
-                              </div>
-                              <div style={{ fontSize: '9px', color: 'var(--text-muted)', marginTop: '2px' }}>
-                                {cat.window}
-                              </div>
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-
-                      {/* Claim Category Reason */}
-                      <div className="span-2">
-                        <label>Primary Reason for Return</label>
-                        <select
-                          value={form.category}
-                          onChange={e => setForm({ ...form, category: e.target.value })}
-                        >
-                          <option value="DEFECTIVE_PRODUCT">Defective Product / Hardware Malfunction</option>
-                          <option value="PRODUCT_DAMAGED">Damaged in Transit / Broken Packaging</option>
-                          <option value="WRONG_ITEM">Received Incorrect Item</option>
-                          <option value="SIZE_FIT_ISSUE">Size or Fitting Discrepancy</option>
-                          <option value="ORDER_CANCELLED">Order Cancelled Prior to Dispatch</option>
-                        </select>
-                      </div>
-
-                      {/* Claimed Amount and Currency */}
-                      <div>
-                        <label>Claimed Refund Amount</label>
-                        <input
-                          type="number"
-                          step="0.01"
-                          placeholder="1500.00"
-                          value={form.claimed_amount}
-                          onChange={e => setForm({ ...form, claimed_amount: e.target.value })}
-                          required
-                        />
-                      </div>
-                      <div>
-                        <label>Currency</label>
-                        <select value={form.currency} onChange={e => setForm({ ...form, currency: e.target.value })}>
-                          <option value="INR">INR (₹)</option>
-                          <option value="USD">USD ($)</option>
-                          <option value="EUR">EUR (€)</option>
-                        </select>
-                      </div>
-
-                      {/* Description Statement */}
-                      <div className="span-2">
-                        <label>Customer Statement &amp; Issue Details</label>
-                        <textarea
-                          rows={3}
-                          placeholder="Explain what happened with the product upon opening or delivery..."
-                          value={form.description}
-                          onChange={e => setForm({ ...form, description: e.target.value })}
-                          required
-                        />
-                      </div>
-
-                      {/* Photo Evidence & Computer Vision Proof Uploader */}
-                      <div className="span-2" style={{ padding: '14px', background: 'var(--slate-50)', border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-lg)' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
-                          <span style={{ fontSize: '12px', fontWeight: 800, color: 'var(--navy-900)', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                            <Camera size={14} color="var(--primary-700)" />
-                            Photo Proof (checked by Agent 7)
-                          </span>
-                          <span style={{ fontSize: '10px', background: 'var(--emerald-50)', color: 'var(--emerald-700)', padding: '2px 6px', borderRadius: '4px', fontWeight: 700 }}>
-                            Agent 7 Verified
-                          </span>
-                        </div>
-
-                        {/* Drag and Drop Dropzone */}
-                        <div style={{
-                          border: '2px dashed var(--primary-200)',
-                          borderRadius: 'var(--radius-md)',
-                          padding: '12px',
-                          background: '#ffffff',
-                          textAlign: 'center',
-                          position: 'relative',
-                          cursor: 'pointer',
-                          marginBottom: '8px'
-                        }}>
-                          <input
-                            type="file"
-                            accept="image/*"
-                            onChange={handleClaimFileUpload}
-                            style={{ position: 'absolute', inset: 0, opacity: 0, cursor: 'pointer', width: '100%', height: '100%' }}
-                            title="Upload real damage photo"
-                          />
-
-                          {form.custom_photo_base64 ? (
-                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', textAlign: 'left' }}>
-                              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                                <img
-                                  src={form.custom_photo_base64}
-                                  alt="Custom Upload Preview"
-                                  style={{ width: '48px', height: '48px', objectFit: 'cover', borderRadius: '4px', border: '1px solid var(--border-subtle)' }}
-                                />
-                                <div>
-                                  <strong style={{ fontSize: '12px', color: 'var(--navy-900)', display: 'block', maxWidth: '220px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                    {form.custom_photo_name || 'custom_uploaded_photo.jpg'}
-                                  </strong>
-                                  <span style={{ fontSize: '10px', color: 'var(--emerald-600)', fontWeight: 700 }}>
-                                    <Check size={11} className="inline-icon" aria-hidden="true" />Live File Loaded for Vision AI Inspection
-                                  </span>
-                                </div>
-                              </div>
-                              <button
-                                type="button"
-                                onClick={(ev) => {
-                                  ev.stopPropagation()
-                                  setForm(prev => ({ ...prev, custom_photo_base64: '', custom_photo_name: '' }))
-                                }}
-                                className="icon-btn"
-                                title="Remove photo"
-                                style={{ color: 'var(--rose-600)' }}
-                              >
-                                <Trash2 size={16} />
-                              </button>
-                            </div>
-                          ) : (
-                            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px' }}>
-                              <UploadCloud size={24} color="var(--primary-600)" />
-                              <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--navy-800)' }}>
-                                Click or drag real defect image here
-                              </span>
-                              <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
-                                PNG, JPG, or WEBP • Inspected for physical edge fractures &amp; EXIF tampering
-                              </span>
-                            </div>
-                          )}
-                        </div>
-
-                        {/* Defect Preset Dropdown */}
-                        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '8px' }}>
-                          <span style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
-                            Or Select Preset Sample:
-                          </span>
-                          <select
-                            value={form.evidence_image_preset}
-                            onChange={e => setForm({ ...form, evidence_image_preset: e.target.value, custom_photo_base64: '', custom_photo_name: '' })}
-                            style={{ fontSize: '11px', padding: '4px 8px', height: 'auto', background: '#ffffff', flex: '1 1 180px', minWidth: 0 }}
-                          >
-                            <option value="stitching_loose_zipper.jpg">stitching_loose_zipper.jpg (Seam Fracture Defect)</option>
-                            <option value="earcup_cushion_tear.jpg">earcup_cushion_tear.jpg (Acoustic Hardware Tear)</option>
-                            <option value="damage_broken_box.jpg">damage_broken_box.jpg (Transit Package Damage)</option>
-                            <option value="shipping_label_barcode.jpg">shipping_label_barcode.jpg (Serial/Box Label Proof)</option>
-                            <option value="clean_unopened_package.jpg">clean_unopened_package.jpg (Unopened Product Photo)</option>
-                          </select>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div style={{ marginTop: '20px', display: 'flex', flexWrap: 'wrap', gap: '12px', alignItems: 'center' }}>
-                      <button className="primary" type="submit" disabled={busy} style={{ flex: '1 1 260px', padding: '12px 18px', fontSize: '13px' }}>
-                        <Send size={15} /> Submit Claim to the RITOS {agentCatalog.length}-Agent Orchestrator
-                      </button>
-                      <button className="secondary" type="button" onClick={() => setPage(isCustomer ? 'dashboard' : 'tickets')}>
-                        Cancel
-                      </button>
-                    </div>
-                  </form>
-                </div>
-
-                {/* RIGHT: AUTONOMOUS TRIAGE RADAR & POLICY RULES */}
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                  {/* Decision Tree Routing Radar */}
-                  <div style={{
-                    background: '#0f172a',
-                    borderRadius: 'var(--radius-lg)',
-                    padding: '20px',
-                    color: '#ffffff',
-                    boxShadow: '0 4px 14px rgba(0,0,0,0.15)',
-                    border: '1px solid #1e293b'
-                  }}>
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '14px' }}>
-                      <span style={{ fontSize: '12px', fontWeight: 800, color: '#38bdf8', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                        <GitFork size={15} /> 3-Step Decision Tree Architecture
-                      </span>
-                      <span style={{ fontSize: '10px', background: 'rgba(56, 189, 248, 0.2)', color: '#7dd3fc', padding: '2px 6px', borderRadius: '4px', fontFamily: 'monospace' }}>
-                      </span>
-                    </div>
-
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', fontSize: '11px' }}>
-                      {/* Step 1 */}
-                      <div style={{ padding: '10px 12px', background: 'rgba(30, 41, 59, 0.7)', borderRadius: '8px', borderLeft: '3px solid #10b981' }}>
-                        <strong style={{ color: '#6ee7b7', display: 'block' }}>Step 1: Ledger Verification</strong>
-                        <span style={{ color: '#cbd5e1' }}>Does the transaction exist in the ledger? Is the refundable balance at least the claimed amount?</span>
-                      </div>
-
-                      {/* Step 2 */}
-                      <div style={{ padding: '10px 12px', background: 'rgba(30, 41, 59, 0.7)', borderRadius: '8px', borderLeft: '3px solid #3b82f6' }}>
-                        <strong style={{ color: '#93c5fd', display: 'block' }}>Step 2: Category Policy Window</strong>
-                        <span style={{ color: '#cbd5e1' }}>Is the claim within the category's return window (from the versioned return-policy table)?</span>
-                      </div>
-
-                      {/* Step 3 */}
-                      <div style={{ padding: '10px 12px', background: 'rgba(30, 41, 59, 0.7)', borderRadius: '8px', borderLeft: '3px solid #f59e0b' }}>
-                        <strong style={{ color: '#fcd34d', display: 'block' }}>Step 3: Risk &amp; Proof Inspection</strong>
-                        <span style={{ color: '#cbd5e1' }}>Claim velocity, account age and amount thresholds (configured in settings); photo quality and reused-photo checks.</span>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Expected Destination Desks */}
-                  <div className="panel" style={{ padding: '18px' }}>
-                    <h4 style={{ fontSize: '13px', fontWeight: 800, color: 'var(--navy-900)', margin: '0 0 10px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                      <BrainCircuit size={15} color="var(--primary-700)" />
-                      Expected Desk Routing
-                    </h4>
-
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '11px' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 10px', background: 'var(--emerald-50)', borderRadius: '6px', border: '1px solid var(--emerald-100)' }}>
-                        <strong style={{ color: 'var(--emerald-800)' }}><DeskIcon desk="cs1" />Approval Desk</strong>
-                        <span style={{ color: 'var(--emerald-700)' }}>1-Click Auto Payout</span>
-                      </div>
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 10px', background: 'var(--amber-50)', borderRadius: '6px', border: '1px solid var(--amber-100)' }}>
-                        <strong style={{ color: 'var(--amber-800)' }}><DeskIcon desk="cs2" />Review Desk</strong>
-                        <span style={{ color: 'var(--amber-700)' }}>Photo Proof / Human Inspection</span>
-                      </div>
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 10px', background: 'var(--rose-50)', borderRadius: '6px', border: '1px solid var(--rose-100)' }}>
-                        <strong style={{ color: 'var(--rose-800)' }}><DeskIcon desk="cs3" />Rejection Desk</strong>
-                        <span style={{ color: 'var(--rose-700)' }}>Policy Window Expired / Ineligible</span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </>
+          {/* FILE NEW CLAIM (customers only; the API accepts claims from customers only) */}
+          {page === 'new' && isCustomer && (
+            <FileClaim
+              key={claimPreselectTx || 'new'}
+              preselectTransactionId={claimPreselectTx}
+              onCancel={() => { setClaimPreselectTx(null); setPage('dashboard') }}
+              onOpenClaim={async id => {
+                try { setSelected(await api.ticket(id)) } catch (err) { setNotice((err as Error).message) }
+              }}
+              onSubmitted={claim => {
+                setClaimPreselectTx(null)
+                setNewClaimId(claim.id)
+                setNotice(`Your refund request for the ${claim.item_name} has been submitted (reference ${claim.ticket_number}). We'll keep you updated here.`)
+                setPage('tickets')
+                load()
+              }}
+            />
           )}
 
           {/* ECOMMERCE INTEGRATION HUB (ADMINISTRATOR & SUPERVISOR ONLY) */}
@@ -3078,7 +2710,17 @@ await fetch('http://YOUR_RITOS_URL/api/v1/integrations/ecommerce/ticket', {
       </main>
 
       {/* --- TICKET DETAILS / DESK ACTION DRAWER --- */}
-      {selected && (
+      {selected && isCustomer && (
+        <CustomerClaimDrawer
+          claim={selected}
+          refunds={refunds}
+          userId={user.id}
+          onClose={() => setSelected(null)}
+          onChanged={t => { setSelected(t); load(false) }}
+        />
+      )}
+
+      {selected && !isCustomer && (
         <div className="drawer-backdrop" onClick={() => setSelected(null)}>
           <aside className="ticket-drawer" onClick={e => e.stopPropagation()} style={{ width: 'min(680px, 100%)' }}>
             <div className="drawer-top">
@@ -3240,7 +2882,9 @@ await fetch('http://YOUR_RITOS_URL/api/v1/integrations/ecommerce/ticket', {
                   {selected.status !== 'RESOLVED' ? (
                     <div>
                       <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
-                        {canProposeFor(user, selected) ? (
+                        {hasActiveRefund(selected, refunds) ? (
+                          <span className="hint">{nextStepText(selected, user, refunds)}</span>
+                        ) : canProposeFor(user, selected) ? (
                           <button
                             className="primary"
                             onClick={() => handleCS1DirectRefund(selected)}
@@ -3611,7 +3255,9 @@ await fetch('http://YOUR_RITOS_URL/api/v1/integrations/ecommerce/ticket', {
                         : `Needs approval: ${selected.policy_evaluation_reason || 'see decision trace'}`}
                     </div>
                   </div>
-                  {canProposeFor(user, selected) ? (
+                  {hasActiveRefund(selected, refunds) ? (
+                    <span className="hint" style={{ maxWidth: '260px' }}>{nextStepText(selected, user, refunds)}</span>
+                  ) : canProposeFor(user, selected) ? (
                     <button
                       className="primary compact"
                       onClick={() => handleAuthorizePayout(selected)}

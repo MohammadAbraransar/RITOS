@@ -116,10 +116,15 @@ def arbitrate(i: DecisionInputs) -> Decision:
         return Decision("CS_3", "NON_REFUNDABLE", "AUTO_REJECT", "REJECTED_BY_POLICY", i.policy_reason,
                         [i.policy_reason_code], final=True)
     if i.policy_eligible is None:
+        # A defect exception needs the defect verified: ask the customer for a photo only if they have not sent one;
+        # otherwise a person verifies it from the photo (same rule as the evidence step below).
+        ask_photo = i.policy_reason_code == "POLICY_DEFECT_UNVERIFIED" and i.evidence_count == 0
         return _review(i.policy_reason, [i.policy_reason_code],
-                       next_action="AWAIT_PROOF" if i.policy_reason_code == "POLICY_DEFECT_UNVERIFIED" else "MANUAL_REVIEW",
-                       evidence=["Close-up photo of the defect"] if i.policy_reason_code == "POLICY_DEFECT_UNVERIFIED" else [],
-                       checklist=["Confirm the applicable policy and dates"])
+                       next_action="AWAIT_PROOF" if ask_photo else "MANUAL_REVIEW",
+                       evidence=["Close-up photo of the defect"] if ask_photo else [],
+                       checklist=["Confirm the applicable policy and dates"] +
+                                 (["Verify the claimed defect in the customer's photos"]
+                                  if i.policy_reason_code == "POLICY_DEFECT_UNVERIFIED" and not ask_photo else []))
 
     # 3. Contradictions (a reason to verify, not proof of fraud)
     if i.contradictions:

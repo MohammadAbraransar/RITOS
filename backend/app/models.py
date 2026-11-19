@@ -73,6 +73,17 @@ class Transaction(Base):
     provider_reference: Mapped[str|None]=mapped_column(String(120), nullable=True)
     created_at: Mapped[datetime]=mapped_column(DateTime(timezone=True), default=now_utc)
 
+class OrderItem(Base):
+    """A product bought in a ledger transaction: the trusted source for what the customer may claim
+    (product, category and the amount paid for it). An order can hold several items."""
+    __tablename__="order_items"
+    id: Mapped[str]=mapped_column(String(36), primary_key=True, default=lambda:str(uuid.uuid4()))
+    transaction_id: Mapped[str]=mapped_column(String(80), index=True)
+    product_sku: Mapped[str]=mapped_column(String(80), index=True)
+    quantity: Mapped[int]=mapped_column(Integer, default=1)
+    amount: Mapped[float]=mapped_column(Numeric(12,2))  # what the customer paid for this line
+    created_at: Mapped[datetime]=mapped_column(DateTime(timezone=True), default=now_utc)
+
 class Ticket(Base):
     __tablename__="tickets"
     __table_args__=(Index("ix_ticket_customer_transaction", "customer_id", "transaction_id"),)

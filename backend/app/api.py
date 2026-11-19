@@ -12,8 +12,12 @@ from .models import (
     User, Ticket, TicketComment, TicketEvent, Transaction, RefundRequest, RefundStatus, TicketStatus,
     AuditLog, Role, DecisionBucket, AssignedDesk, LedgerAccount, LedgerJournal, LedgerEntry,
     GatewaySettlementAttempt, Product, ProductVariant, ProductReferenceImage, EvidenceFile, ReturnPolicy,
-    WorkflowRun, OutboxMessage
+    WorkflowRun, OutboxMessage, OrderItem
 )
+from .purchases import (CLAIM_REASONS, DETAILS_REQUIRED, ITEM_PROBLEM_REASONS, ITEM_PROBLEM_ONLY, assess_purchase,
+                        customer_tickets, list_purchases)
+from .agents.claim_reason_agent import classify_claim_reason
+from .agents.decision_agent import EVIDENCE_REASONS
 from .schemas import (
     LoginIn, TicketCreate, CommentCreate, TicketUpdate, RefundCreate, RefundDecision,
     CS1DecisionIn, ProofRequestIn, RejectionNoticeIn, EcommerceTicketIn,
@@ -71,6 +75,62 @@ def ticket_view(t: Ticket, include_private=False):
       "rejection_notice_sent_at":t.rejection_notice_sent_at.isoformat() if getattr(t,"rejection_notice_sent_at",None) else None,
       "refund_decided_at":t.refund_decided_at.isoformat() if getattr(t,"refund_decided_at",None) else None,
       "created_at":t.created_at.isoformat(),"updated_at":t.updated_at.isoformat(),"comments":comments}
+
+# --- Customer-facing claim view --------------------------------------------------------------------------------
+# Customers see their claim in plain language. Desk routing, risk scores, agent traces, reviewer names, unsent drafts
+# and internal notes stay on the staff side (ticket_view(include_private=True)).
+_CUSTOMER_FIELDS = ("id", "ticket_number", "transaction_id", "order_id", "claimed_amount", "currency", "description",
+                    "category", "status", "refund_status", "item_name", "item_category", "purchase_date", "proof_required",
+                    "proof_status", "proof_request_sent_at", "rejection_notice_sent_at", "refund_decided_at",
+                    "created_at", "updated_at", "comments")
+_REFUND_IN_PROGRESS = {RefundStatus.PENDING_APPROVAL.value, RefundStatus.APPROVED.value, RefundStatus.PROCESSING.value,
+                       RefundStatus.RECONCILIATION_REQUIRED.value}
+_NOT_APPROVED_TEXT = {
+    "POLICY_FINAL_SALE": "Products in this category are final sale under our refund policy.",
+    "POLICY_WINDOW_EXPIRED": "The request was made after the return period for this product ended.",
+    "LEDGER_DUPLICATE_CLAIM": "An earlier refund request already exists for this item.",
+    "LEDGER_ALREADY_REFUNDED": "This purchase has already been fully refunded.",
+}
+
+
+def customer_claim_state(t: Ticket) -> dict:
+    """Where the claim stands, in the customer's terms."""
+    rs, st = t.refund_status, t.status
+    if rs == RefundStatus.REFUNDED.value:
+        return {"code": "REFUNDED", "label": "Refunded",
+                "description": "Your refund has been paid to your original payment method."}
+    if rs in _REFUND_IN_PROGRESS:
+        return {"code": "REFUND_IN_PROGRESS", "label": "Refund in progress",
+                "description": "Your request was accepted. The refund is going through final checks before it is paid."}
+    if st == TicketStatus.REJECTED.value or rs in (RefundStatus.REJECTED.value, "CANCELLED"):
+        codes = ((t.classification_evidence or {}).get("decision") or {}).get("reason_codes") or []
+        reason = next((_NOT_APPROVED_TEXT[c] for c in codes if c in _NOT_APPROVED_TEXT),
+                      "Your request doesn't meet our refund policy. See the messages below for details.")
+        return {"code": "NOT_APPROVED", "label": "Not approved", "description": reason}
+    if st == TicketStatus.RESOLVED.value:
+        return {"code": "CLOSED", "label": "Closed", "description": "This request is closed."}
+    # Waiting on the customer only while proof is actually requested: once they send it (proof UNDER_REVIEW) the
+    # ticket can still read AWAITING_INFORMATION until a person acts, but it is our turn, not theirs.
+    if st == TicketStatus.AWAITING_INFORMATION.value and t.proof_status in ("PROOF_REQUESTED", "REQUESTED"):
+        need = (t.proof_required or "a photo of the item").rstrip(".")
+        return {"code": "ACTION_NEEDED", "label": "Action needed",
+                "description": f"We need more information to continue: {need[0].lower() + need[1:]}."}
+    if t.proof_status == "UNDER_REVIEW":
+        return {"code": "UNDER_REVIEW", "label": "Under review",
+                "description": "We received your photo. Our team is reviewing it."}
+    return {"code": "UNDER_REVIEW", "label": "Under review",
+            "description": "We're checking your purchase against our refund policy."}
+
+
+def customer_ticket_view(t: Ticket) -> dict:
+    view = ticket_view(t)  # public comments only
+    out = {k: view[k] for k in _CUSTOMER_FIELDS}
+    ev = t.classification_evidence or {}
+    reason = ev.get("customer_reason")
+    out.update(product_sku=ev.get("product_sku"), reason=reason, reason_label=CLAIM_REASONS.get(reason) if reason else None,
+               details=ev.get("customer_details"), customer_status=customer_claim_state(t))
+    return out
+
 
 def store_decision(db: Session, ticket: Ticket, user: User, decision: str, reason: str) -> dict | None:
     """Human approve/reject on a store-linked ticket: the store executes the refund, RITOS records the decision."""
@@ -136,32 +196,95 @@ def logout(user: User=Depends(get_current_user)):
     # Stateless access tokens expire naturally; production should add a revocation/session store.
     return {"message":"Signed out on client. Access token expires automatically."}
 
+@router.get("/customer/purchases")
+def customer_purchases(db: Session=Depends(get_db), user: User=Depends(require_roles(Role.CUSTOMER.value))):
+    """The customer's purchased items with refund eligibility, all from trusted records (purchases.py)."""
+    return {"items": list_purchases(db, user.id), "reasons": [
+        {"code": k, "label": v, "item_problem": k in ITEM_PROBLEM_REASONS, "details_required": k in DETAILS_REQUIRED}
+        for k, v in CLAIM_REASONS.items()]}
+
+
 @router.post("/tickets")
 def create_ticket(payload: TicketCreate, db: Session=Depends(get_db), user: User=Depends(require_roles(Role.CUSTOMER.value))):
-    currency=(payload.currency or settings.default_currency).upper()
-    if currency not in settings.currencies: raise HTTPException(422,"Unsupported currency")
-    # Ledger, ownership and duplicate checks are Agent 1's job; intake only reads the customer's own transaction.
-    tx=db.get(Transaction,payload.transaction_id)
-    own_tx=tx if tx and tx.customer_id==user.id else None
-    triage=classify(payload.description)
-    priority=calculate_priority(triage["category"],payload.description)
+    """Customer portal claim. Product, category, amount, currency, order and purchase date come from the ledger order;
+    eligibility is re-checked here with the same rules the portal shows (purchases.assess_purchase)."""
+    # 1. The purchase must be the customer's own; unknown orders and other customers' orders look the same.
+    tx = db.get(Transaction, payload.transaction_id.strip())
+    if not tx or tx.customer_id != user.id:
+        raise HTTPException(404, "Purchase not found")
+    items = db.scalars(select(OrderItem).where(OrderItem.transaction_id == tx.id)).all()
+    if payload.purchase_id:
+        item = next((i for i in items if i.id == payload.purchase_id), None)
+        if not item:
+            raise HTTPException(404, "Purchase not found")
+    elif len(items) == 1:
+        item = items[0]
+    elif not items:
+        raise HTTPException(409, "This order has no product details on record, so it can't be claimed online. Please contact support.")
+    else:
+        raise HTTPException(422, "Choose which product in this order the request is for")
+    product = db.get(Product, item.product_sku)
+    assessment = assess_purchase(db, tx, item, product, customer_tickets(db, user.id))
+    if not assessment["claimable"]:
+        raise HTTPException(409, assessment["message"])
+
+    # 2. What went wrong: a listed reason, the customer's own words, or both.
+    reason = (payload.reason or "").strip().upper() or None
+    if reason and reason not in CLAIM_REASONS:
+        raise HTTPException(422, "Unknown reason")
+    details = (payload.description or "").strip()
+    if (not reason or reason in DETAILS_REQUIRED) and len(details) < 8:
+        raise HTTPException(422, "Please tell us what went wrong (at least 8 characters)")
+    if assessment["status"] == ITEM_PROBLEM_ONLY:
+        item_problem = reason in ITEM_PROBLEM_REASONS if reason else \
+            classify_claim_reason(details)["controlled_reason"] in EVIDENCE_REASONS
+        if not item_problem:
+            raise HTTPException(409, "For this purchase you can only request a refund for a problem with the item itself, "
+                                     "such as damage or a defect.")
+    description = (f"{CLAIM_REASONS[reason]}." + (f" {details}" if details else "")) if reason else details
+
+    # 3. Trusted values. Anything the client sent for them is ignored; differences are kept for reviewers.
+    amount = Decimal(str(assessment["refundable_amount"])).quantize(Decimal("0.01"))
+    trusted = {"claimed_amount": amount, "item_name": product.name, "item_category": product.category,
+               "order_id": tx.order_id, "currency": tx.currency}
+    sent = {"claimed_amount": payload.claimed_amount, "item_name": payload.item_name, "item_category": payload.item_category,
+            "order_id": payload.order_id, "currency": payload.currency}
+    ignored = {}
+    for k, v in sent.items():
+        if v in (None, ""):
+            continue
+        same = Decimal(str(v)).quantize(Decimal("0.01")) == amount if k == "claimed_amount" else \
+            str(v).strip().upper() == str(trusted[k]).upper()
+        if not same:
+            ignored[k] = {"sent": v, "used": str(trusted[k])}
+
+    triage=classify(description)
+    priority=calculate_priority(triage["category"],description)
     t=Ticket(ticket_number=f"RIT-{datetime.now(timezone.utc):%y%m%d}-{uuid4().hex[:6].upper()}",
-       customer_id=user.id,transaction_id=payload.transaction_id,order_id=payload.order_id,
-       claimed_amount=payload.claimed_amount,currency=currency,description=payload.description,
+       customer_id=user.id,transaction_id=tx.id,order_id=tx.order_id,
+       claimed_amount=amount,currency=tx.currency,description=description,
        category=triage["category"],confidence=triage["confidence"],priority=priority,
        queue=ROUTES.get(triage["category"],"Manual Triage"),status=TicketStatus.TRIAGED.value,
-       item_name=payload.item_name or (own_tx.order_id if own_tx else "Customer Item"),
-       item_category=payload.item_category or "GENERAL",
+       item_name=product.name,
+       item_category=product.category,
        customer_name=user.full_name or "Portal Customer",
        customer_email=user.email,
        # The return window counts from the ledger's capture date, never from a date the customer types.
-       purchase_date=own_tx.created_at if own_tx else None,
-       payment_verification="PENDING_VERIFICATION",refund_status=(own_tx.payment_status if own_tx else "UNKNOWN"),
+       purchase_date=tx.created_at,
+       payment_verification="PENDING_VERIFICATION",refund_status=tx.payment_status,
        recommended_action=triage["recommended_action"],
        classification_evidence={
            "matched_terms":triage["evidence"],
            "classifier":"rules-v1",
-           "purchase_date_source":"LEDGER_CAPTURE" if own_tx else None,
+           "purchase_date_source":"LEDGER_CAPTURE",
+           "order_item_id": item.id,
+           "product_sku": product.sku,
+           "customer_reason": reason,
+           "customer_details": details or None,
+           # Facts from the ledger order (not from the customer): the selected reason and the catalog product
+           "store_facts": {k: v for k, v in {"reason": reason, "sku": product.sku}.items() if v},
+           "portal_eligibility": {k: assessment[k] for k in ("status", "reason_code", "return_window_days", "days_elapsed")},
+           "client_values_ignored": ignored or None,
            # Kept for reviewers only; policy never reads it.
            "customer_reported_purchase_date":payload.purchase_date,
            "evidence_images": payload.evidence_images or []
@@ -169,12 +292,11 @@ def create_ticket(payload: TicketCreate, db: Session=Depends(get_db), user: User
     db.add(t); db.flush()
     record_event(db,t.id,user.id,"TICKET_CREATED",{"ticket_number":t.ticket_number})
     record_event(db,t.id,None,"TRIAGE_COMPLETED",{"category":t.category,"priority":t.priority,"queue":t.queue})
-    audit(db,user.id,"TICKET_CREATED","ticket",t.id,{"ticket_number":t.ticket_number})
-    automation_result = run_ticket_pipeline(db, t, None)
+    audit(db,user.id,"TICKET_CREATED","ticket",t.id,{"ticket_number":t.ticket_number,
+                                                      **({"client_values_ignored": ignored} if ignored else {})})
+    run_ticket_pipeline(db, t, None)  # full trace stays on the staff side (ticket events and workflow runs)
     db.commit(); db.refresh(t)
-    response = ticket_view(t)
-    response["automation"] = automation_result
-    return response
+    return customer_ticket_view(t)
 
 @router.post("/integrations/ecommerce/tickets", status_code=202)
 def ecommerce_ticket_webhook(payload: dict, x_ritos_webhook_secret: str | None = Header(default=None), db: Session=Depends(get_db)):
@@ -248,14 +370,17 @@ def list_tickets(status: str|None=None, priority: str|None=None, queue: str|None
     total = db.scalar(count_stmt) or 0
     rows = db.scalars(stmt.options(selectinload(Ticket.comments)).offset((page-1)*page_size).limit(page_size)).all()
     staff=user.role != Role.CUSTOMER.value
-    return {"items":[ticket_view(t,include_private=staff) for t in rows],"total":total,"page":page,"page_size":page_size}
+    view = (lambda t: ticket_view(t, include_private=True)) if staff else customer_ticket_view
+    return {"items":[view(t) for t in rows],"total":total,"page":page,"page_size":page_size}
 
 @router.get("/tickets/{ticket_id}")
 def get_ticket(ticket_id: str, db: Session=Depends(get_db), user: User=Depends(get_current_user)):
     t=db.scalar(select(Ticket).where(Ticket.id==ticket_id).options(selectinload(Ticket.comments)))
     if not t: raise HTTPException(404,"Ticket not found")
-    if user.role==Role.CUSTOMER.value and t.customer_id != user.id: raise HTTPException(404,"Ticket not found")
-    return ticket_view(t,include_private=user.role != Role.CUSTOMER.value)
+    if user.role==Role.CUSTOMER.value:
+        if t.customer_id != user.id: raise HTTPException(404,"Ticket not found")
+        return customer_ticket_view(t)
+    return ticket_view(t,include_private=True)
 
 @router.patch("/tickets/{ticket_id}")
 def update_ticket(ticket_id: str, payload: TicketUpdate, db: Session=Depends(get_db),
@@ -502,7 +627,9 @@ def upload_evidence(
         "lifecycle_status": evidence_file.lifecycle_status,
         "file_name": evidence_file.file_name,
         "tamper_flags": evidence_file.tamper_flags or [],
-        "automation": automation,
+        # The automation trace (risk, routing, reviewers) is staff-only; customers get where their claim now stands.
+        **({"claim": customer_ticket_view(t), "resumed": automation is not None} if user.role == Role.CUSTOMER.value
+           else {"automation": automation}),
     }
 
 

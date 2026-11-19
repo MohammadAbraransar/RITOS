@@ -6,14 +6,19 @@ class LoginIn(BaseModel):
     password: str
 
 class TicketCreate(BaseModel):
+    """Customer portal claim. The server takes product, category, amount, currency, order and purchase date from the
+    ledger order; the matching fields below are still accepted from older clients but never used as the truth."""
     transaction_id: str = Field(min_length=3, max_length=80)
+    purchase_id: Optional[str] = Field(default=None, max_length=36)   # OrderItem id; required when the order has several
+    reason: Optional[str] = Field(default=None, max_length=40)        # purchases.CLAIM_REASONS key
+    description: Optional[str] = Field(default=None, max_length=5000) # customer's own words (optional with a reason)
+    evidence_images: Optional[list] = None
+    # Ignored (derived server-side); kept so existing clients keep working
     order_id: Optional[str] = Field(default=None, max_length=80)
-    claimed_amount: float = Field(gt=0, le=100000000)
-    currency: Optional[str] = Field(default=None, min_length=3, max_length=3)  # settings.default_currency when omitted
-    description: str = Field(min_length=8, max_length=5000)
+    claimed_amount: Optional[float] = Field(default=None, gt=0, le=100000000)
+    currency: Optional[str] = Field(default=None, min_length=3, max_length=3)
     item_name: Optional[str] = None
     item_category: Optional[str] = None
-    evidence_images: Optional[list] = None
     purchase_date: Optional[str] = None
 
 class CommentCreate(BaseModel):
