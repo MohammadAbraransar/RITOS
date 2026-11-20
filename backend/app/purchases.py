@@ -96,7 +96,7 @@ def assess_purchase(db: Session, tx: Transaction, item: OrderItem, product: Opti
     if refundable <= 0:
         return result(REFUNDED, "This item has already been refunded.")
 
-    policy = get_effective_policy(db, product.category)
+    policy = get_effective_policy(db, product.category, sku=product.sku)
     decision = evaluate_policy_eligibility(policy, purchased_at, as_of=now)
     window = policy.get("return_window_days")
     out.update(return_window_days=window, days_elapsed=decision.get("days_elapsed"), reason_code=decision["reason_code"])

@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import hmac
 from decimal import Decimal
 from uuid import uuid4
@@ -12,7 +12,7 @@ from .models import (
     User, Ticket, TicketComment, TicketEvent, Transaction, RefundRequest, RefundStatus, TicketStatus,
     AuditLog, Role, DecisionBucket, AssignedDesk, LedgerAccount, LedgerJournal, LedgerEntry,
     GatewaySettlementAttempt, Product, ProductVariant, ProductReferenceImage, EvidenceFile, ReturnPolicy,
-    WorkflowRun, OutboxMessage, OrderItem
+    WorkflowRun, OutboxMessage, OrderItem, InboundEvent
 )
 from .purchases import (CLAIM_REASONS, DETAILS_REQUIRED, ITEM_PROBLEM_REASONS, ITEM_PROBLEM_ONLY, assess_purchase,
                         customer_tickets, list_purchases)
@@ -462,6 +462,13 @@ def refund_row(r: RefundRequest, user: User) -> dict:
 ACTIVE_REFUND_STATUSES = [RefundStatus.PENDING_APPROVAL.value, RefundStatus.APPROVED.value, RefundStatus.PROCESSING.value,
                           RefundStatus.RECONCILIATION_REQUIRED.value]
 
+def customer_amount(amount, currency: str) -> str:
+    return f"{'₹' if currency == 'INR' else currency + ' '}{Decimal(str(amount)):,.2f}"
+
+def tell_customer(db: Session, t: Ticket, author_id: str | None, body: str) -> None:
+    """A message on the customer's claim (they see it under Messages on My Claims)."""
+    db.add(TicketComment(ticket_id=t.id, author_id=author_id, internal=False, body=body))
+
 def active_refund(db: Session, ticket_id: str) -> RefundRequest | None:
     return db.scalar(select(RefundRequest).where(RefundRequest.ticket_id == ticket_id,
                                                  RefundRequest.status.in_(ACTIVE_REFUND_STATUSES)))
@@ -497,6 +504,13 @@ def propose_refund(db: Session, t: Ticket, user: User, amount: Decimal, reason: 
     db.add(r); db.flush()
     t.refund_status = RefundStatus.PENDING_APPROVAL.value
     t.status = TicketStatus.IN_REVIEW.value
+    if not t.refund_decided_at:  # the customer's timeline shows when the claim was decided
+        t.refund_decided_at = datetime.now(timezone.utc); t.refund_decided_by_id = user.id
+    tell_customer(db, t, user.id, (
+        f"Your refund request was approved. {customer_amount(amount, t.currency)} now goes through a final payment "
+        "check before it is sent to your original payment method." if attempt == 1 else
+        f"We are sending your refund of {customer_amount(amount, t.currency)} again. It goes through the final "
+        "payment check once more before it is sent."))
     record_event(db, t.id, user.id, "REFUND_PROPOSED", {"refund_id": r.id, "amount": str(amount)})
     audit(db, user.id, "REFUND_PROPOSED", "refund", r.id, {"amount": str(amount), "currency": t.currency, "reason": reason})
     db.commit(); db.refresh(r)
@@ -518,7 +532,10 @@ def approve_refund(refund_id:str,payload:RefundDecision,db:Session=Depends(get_d
     if r.status!=RefundStatus.PENDING_APPROVAL.value: raise HTTPException(409,"Refund is not awaiting approval")
     r.status=RefundStatus.APPROVED.value; r.approved_by_id=user.id
     t=db.get(Ticket,r.ticket_id)
-    if t: t.refund_status=RefundStatus.APPROVED.value  # approved for payment; no money has moved yet
+    if t:
+        t.refund_status=RefundStatus.APPROVED.value  # approved for payment; no money has moved yet
+        tell_customer(db,t,user.id,f"Your refund of {customer_amount(r.amount,r.currency)} passed the final check and "
+                                   "is approved for payment to your original payment method.")
     audit(db,user.id,"REFUND_APPROVED","refund",r.id,{"reason":payload.reason})
     record_event(db,r.ticket_id,user.id,"REFUND_APPROVED",{"refund_id":r.id,"reason":payload.reason})
     db.commit(); db.refresh(r)
@@ -1423,7 +1440,14 @@ def ticket_timeline(ticket_id: str, db: Session = Depends(get_db), user: User = 
                     "decision": r.decision, "waiting_for": r.next_action, "note": human.get("reason"),
                     "assigned_to": {"name": review.get("assigned_reviewer_name"), "role": review.get("assigned_reviewer_role"),
                                     "queue": review.get("queue")} if review.get("review_required") else None})
-    return {"ticket_number": t.ticket_number, "history": out}
+    # Store claims: whether the approve/reject decision actually reached the store (outbox), so the desk never shows
+    # "sent to the store" for a decision that is still retrying or was refused.
+    msg = db.scalar(select(OutboxMessage).where(OutboxMessage.ticket_id == t.id, OutboxMessage.kind == "DECISION")
+                    .order_by(OutboxMessage.created_at.desc()))
+    delivery = {"id": msg.id, "status": msg.status, "attempts": msg.attempts, "last_error": msg.last_error,
+                "sent_at": msg.sent_at.isoformat() if msg.sent_at else None,
+                "decision": (msg.payload or {}).get("decision")} if msg else None
+    return {"ticket_number": t.ticket_number, "history": out, "store_delivery": delivery}
 
 @router.get("/workflow/runs")
 def workflow_runs(status: str | None = None, limit: int = Query(50, ge=1, le=200), db: Session = Depends(get_db),
@@ -1453,3 +1477,56 @@ def retry_outbox_message(message_id: str, db: Session = Depends(get_db),
 @router.post("/integrations/outbox/deliver")
 def deliver_outbox_now(db: Session = Depends(get_db), user: User = Depends(require_roles(Role.ADMIN.value, Role.SUPERVISOR.value))):
     return {"attempted": deliver_due(db)}
+
+# ---- Developer Integrations console (read-only views; actions keep their own endpoints and role guards) ----
+# Who may look at integration health and logs. Changing anything (sync, retry, deliver) stays Administrator/Supervisor.
+INTEGRATION_VIEW_ROLES = (Role.ADMIN.value, Role.SUPERVISOR.value, Role.AUDITOR.value)
+DEV_DEFAULT_API_KEY = "ritos_dev_key_secret_2026"  # the development default; refused in production (main.py)
+
+
+def mcp_status() -> dict:
+    """MCP (Model Context Protocol) servers are not supported in this build: there is no MCP client, server registry
+    or credential store yet. The console reads this instead of assuming, so it lights up once the backend adds them."""
+    return {"supported": False, "servers": [],
+            "reason": "This RITOS build has no MCP connector yet: servers cannot be registered, and agents use only "
+                      "their built-in checks."}
+
+
+@router.get("/integrations/overview")
+def integrations_overview(db: Session = Depends(get_db), user: User = Depends(require_roles(*INTEGRATION_VIEW_ROLES))):
+    """Health of every connector. Credentials are reported as configured or not; their values never leave the server."""
+    health = check_shopflow_health()
+    counts = dict(db.execute(select(OutboxMessage.status, func.count(OutboxMessage.id)).group_by(OutboxMessage.status)).all())
+    since = datetime.now(timezone.utc) - timedelta(hours=24)
+    last = db.scalar(select(func.max(InboundEvent.received_at)))
+    gw = gateway_status()
+    return {
+        "shopflow": {"connected": bool(health.get("connected")), "base_url": settings.shopflow_base_url},
+        "credentials": {
+            "store_api_key": {"configured": bool(settings.ritos_api_key),
+                              "development_default": settings.ritos_api_key == DEV_DEFAULT_API_KEY},
+            "ecommerce_secret": {"configured": bool(settings.ecommerce_webhook_secret)},
+            "gateway_webhook_secret": {"configured": bool(settings.gateway_webhook_secret)},
+        },
+        "deliveries": {"sent": counts.get("SENT", 0), "pending": counts.get("PENDING", 0), "failed": counts.get("FAILED", 0)},
+        "inbound": {"last_received_at": last.isoformat() if last else None,
+                    "last_24h": db.scalar(select(func.count(InboundEvent.id)).where(InboundEvent.received_at >= since)) or 0},
+        "payments": {"provider": gw["active_provider"], "live": gw["live_payments_enabled"]},
+        "mcp": {k: v for k, v in mcp_status().items() if k != "servers"} | {"servers": len(mcp_status()["servers"])},
+    }
+
+
+@router.get("/integrations/events")
+def list_inbound_events(limit: int = Query(100, ge=1, le=500), db: Session = Depends(get_db),
+                        user: User = Depends(require_roles(*INTEGRATION_VIEW_ROLES))):
+    """Store events RITOS received (newest first): what arrived, for which store ticket, and what RITOS did."""
+    rows = db.scalars(select(InboundEvent).order_by(InboundEvent.received_at.desc()).limit(limit)).all()
+    return [{"id": e.id, "source": e.source, "event_type": e.event_type, "store_ticket": e.external_ticket_id,
+             "outcome": (e.result or {}).get("status"), "received_at": e.received_at.isoformat() if e.received_at else None}
+            for e in rows]
+
+
+@router.get("/integrations/mcp")
+def list_mcp_servers(user: User = Depends(require_roles(*INTEGRATION_VIEW_ROLES))):
+    """Registered MCP servers. Empty, with supported=false, until the backend implements MCP connections."""
+    return mcp_status()

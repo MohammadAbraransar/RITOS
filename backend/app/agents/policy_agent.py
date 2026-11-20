@@ -19,7 +19,10 @@ from ..models import ReturnPolicy
 RULE_VERSION = "policy-rules-1.0"
 
 
-def get_effective_policy(db: Session, category: Optional[str], store_facts: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def get_effective_policy(db: Session, category: Optional[str], store_facts: Optional[Dict[str, Any]] = None,
+                         sku: Optional[str] = None) -> Dict[str, Any]:
+    """`sku`: a product whose rules differ from its category (e.g. a clearance or defective-only item) has its own
+    return_policies row keyed "SKU:<sku>", which wins over the category row."""
     cat = (category or "GENERAL").upper()
     facts = store_facts or {}
     if facts.get("return_window_days") is not None:
@@ -33,7 +36,7 @@ def get_effective_policy(db: Session, category: Optional[str], store_facts: Opti
             "allow_damaged_exceptions": bool(facts.get("defect_exception_allowed")),
             "policy_summary": f"Store policy v{facts.get('policy_version')}: {int(facts['return_window_days'])}-day return window.",
         }
-    for candidate in (cat, "GENERAL"):
+    for candidate in ((f"SKU:{sku}",) if sku else ()) + (cat, "GENERAL"):
         row = db.scalar(select(ReturnPolicy).where(ReturnPolicy.category == candidate, ReturnPolicy.active.is_(True))
                         .order_by(ReturnPolicy.policy_version.desc()))
         if row:
@@ -41,7 +44,7 @@ def get_effective_policy(db: Session, category: Optional[str], store_facts: Opti
                 "source": "RITOS_POLICY",
                 "policy_id": row.id,
                 "policy_version": row.policy_version,
-                "category": row.category,
+                "category": cat if row.category.startswith("SKU:") else row.category,  # never show the SKU key
                 "return_window_days": row.return_window_days,
                 "allow_damaged_exceptions": row.allow_damaged_exceptions,
                 "requires_serial": row.requires_serial,

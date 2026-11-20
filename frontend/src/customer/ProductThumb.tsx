@@ -1,8 +1,14 @@
 import { useState } from 'react'
-import { Apple, Backpack, Droplets, Laptop, Package, Shirt, Zap, type LucideIcon } from 'lucide-react'
+import { Apple, Backpack, BatteryCharging, Cloud, Droplets, Footprints, Headphones, House, Keyboard, Laptop, Lightbulb,
+         Monitor, Package, Shirt, Smartphone, Tablet, Watch, type LucideIcon } from 'lucide-react'
 
+// Keys are product categories as stored (store categories are upper-cased, so "Smart Home" is "SMART HOME")
 const CATEGORY_ICON: Record<string, LucideIcon> = {
-  ELECTRONICS: Laptop, APPAREL: Shirt, HYGIENE: Droplets, ACCESSORIES: Backpack, PERISHABLES: Apple, DIGITAL: Zap,
+  ELECTRONICS: Laptop, APPAREL: Shirt, HYGIENE: Droplets, PERISHABLES: Apple, GENERAL: Package,
+  // ShopFlow catalog categories
+  AUDIO: Headphones, MOBILE: Smartphone, COMPUTERS: Laptop, FOOTWEAR: Footprints, HOME: House, 'SMART HOME': Lightbulb,
+  ACCESSORIES: BatteryCharging, BAGS: Backpack, DIGITAL: Cloud, WEARABLES: Watch, PERIPHERALS: Keyboard,
+  DISPLAYS: Monitor, TABLETS: Tablet,
 }
 
 /** Product image when the catalog has one; otherwise a neutral category icon. */

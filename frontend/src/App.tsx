@@ -7,18 +7,21 @@ import {
   Mail, Menu, MessageSquare, Phone, Play, Plus, RefreshCw, Search, Send,
   Shield, ShieldAlert, Sparkles, Ticket as TicketIcon, Users, WalletCards, X, Zap,
   Camera, Cpu, GitFork, UploadCloud, Trash2, XCircle, Landmark, ShoppingCart, Laptop, Shirt,
-  Backpack, Apple, Settings2, ArrowRight, Smartphone
+  Backpack, Apple, Settings2, ArrowRight, Smartphone, Plug
 } from 'lucide-react'
-import { api, API_ROOT, getToken, setToken, type NextStep, type Ticket, type User } from './api'
+import { api, API_ROOT, getToken, setToken, type ClaimReason, type NextStep, type Purchase, type Ticket, type User } from './api'
 import { label, anyStatus, roleName, reasonText, humanize, DESK, BUCKET, NEXT_ACTION, LEDGER_STATUS, PROOF_STATUS,
          PAYOUT_ACTION, RUN_TRIGGER, HUMAN_DECISION, REFUND_STATUS } from './labels'
 import { isClosedStatus, priorityRank } from './logic'
 import { LOCALE, money } from './format'
 import { FileClaim } from './customer/FileClaim'
-import { CLAIM_TONE, claimStatus } from './customer/claimUi'
+import { CLAIM_TONE, ELIGIBILITY_BADGE, categoryLabel, claimStatus } from './customer/claimUi'
+import { QuickRefund } from './customer/QuickRefund'
+import { ProductThumb } from './customer/ProductThumb'
 import { CustomerClaimDrawer, MyClaims } from './customer/MyClaims'
 import { CustomerRefunds } from './customer/CustomerRefunds'
 import { RefundPanel } from './desk/RefundPanel'
+import { DeveloperIntegrations } from './desk/DeveloperIntegrations'
 import { isStoreLinked, refundStage } from './desk/refundStage'
 
 export { isClosedStatus, priorityRank }
@@ -39,8 +42,8 @@ const roles = [
   { label: 'Approval Desk', role: 'cs_1', email: 'cs1@ritos.local', icon: CheckCircle2, desc: 'Genuine in-policy refunds' },
   { label: 'Review Desk', role: 'cs_2', email: 'cs2@ritos.local', icon: AlertTriangle, desc: 'Missing proof & damage' },
   { label: 'Rejection Desk', role: 'cs_3', email: 'cs3@ritos.local', icon: X, desc: 'Policy rejection notices' },
-  { label: 'Administrator', role: 'administrator', email: 'admin@ritos.local', icon: Command, desc: 'Webhooks & system config' },
-  { label: 'Supervisor', role: 'supervisor', email: 'lead@ritos.local', icon: Shield, desc: 'Omnichannel desk oversight' },
+  { label: 'Administrator', role: 'administrator', email: 'admin@ritos.local', icon: Command, desc: 'Management Dashboard, full access' },
+  { label: 'Supervisor', role: 'supervisor', email: 'lead@ritos.local', icon: Shield, desc: 'Management Dashboard, approvals' },
   { label: 'Finance Approver', role: 'finance_approver', email: 'finance@ritos.local', icon: CircleDollarSign, desc: 'Settlement authorization' },
   // The four-eyes rule needs three different people; when Finance or an Administrator approved the claim,
   // Refund Operations is the one who can still send the payment.
@@ -53,7 +56,18 @@ const DEMO_PASSWORD: string = import.meta.env.VITE_DEMO_PASSWORD || ''
 
 // The agent registry comes from the API (GET /automation/agents): one source of truth with the orchestrator.
 
-const navFor = (role: string) => {
+// Pages restricted to some roles, mirroring the server's guards (backend/app/api.py): the menu never offers a page
+// whose data the server would refuse. Desks, tickets and the settlement register are open to every staff role.
+const PAGE_ROLES: Record<string, string[]> = {
+  ecommerce: ['administrator', 'supervisor', 'auditor'],
+  audit: ['administrator', 'auditor'],
+  automation: ['administrator', 'supervisor', 'cs_1', 'cs_2', 'cs_3', 'refund_operations', 'finance_approver'],
+}
+const canOpenPage = (role: string, page: string) => !PAGE_ROLES[page] || PAGE_ROLES[page].includes(role)
+const MANAGEMENT_ROLES = ['administrator', 'supervisor']
+
+const navFor = (role: string) => navItems(role).filter(([, key]) => canOpenPage(role, key))
+const navItems = (role: string) => {
   if (role === 'cs_1') {
     return [
       ['Approval Dashboard', 'dashboard'],
@@ -91,15 +105,16 @@ const navFor = (role: string) => {
       ['Audit Trail', 'audit']
     ]
   }
-  // Administrator and Supervisor: Full omnichannel visibility & controls
+  // One Management Dashboard for Administrator and Supervisor (same pages; the server still decides each action
+  // by role, e.g. only an Administrator reads the audit trail). Other staff roles get the same menu, filtered.
   return [
-    ['Executive Command', 'dashboard'],
+    [MANAGEMENT_ROLES.includes(role) ? 'Management Dashboard' : 'Operations Dashboard', 'dashboard'],
     ['Approval Desk', 'cs1_desk'],
     ['Review Desk', 'cs2_desk'],
     ['Rejection Desk', 'cs3_desk'],
     ['Finance Approvals Queue', 'finance_queue'],
     ['All Team Tickets Queue', 'tickets'],
-    ['eCommerce Integration Hub', 'ecommerce'],
+    ['Developer Integrations', 'ecommerce'],
     ['Specialist Agents Registry', 'automation'],
     ['Settlement Register', 'refunds'],
     ['Security Audit Trail', 'audit']
@@ -161,6 +176,8 @@ function App() {
   const [agentCatalog, setAgentCatalog] = useState<any[]>([])
   const [awaitingPayout, setAwaitingPayout] = useState<Ticket[]>([])
   const [timeline, setTimeline] = useState<any[]>([])
+  // Store claims: whether the approval/rejection actually reached the store (outbox delivery)
+  const [storeDelivery, setStoreDelivery] = useState<any>(null)
   const [loginError, setLoginError] = useState('')
   const [busy, setBusy] = useState(false)
 
@@ -195,15 +212,15 @@ function App() {
 
   // eCommerce Webhook Simulator state
   const [simEcom, setSimEcom] = useState({
-    order_id: 'ORD-1002',
-    transaction_id: 'TXN-1002',
+    order_id: 'ORD-SF-05',
+    transaction_id: 'TXN-SF-05',
     customer_email: 'customer@ritos.local',
-    customer_name: 'Pooja Verma',
-    customer_phone: '+91-9876543220',
-    item_name: 'Fastrack Smartwatch',
-    item_category: 'ELECTRONICS',
-    claimed_amount: '2499.00',
-    description: 'Display is flickering and battery drains within 1 hour of delivery.'
+    customer_name: 'Riya Kapoor',
+    customer_phone: '',
+    item_name: 'BrewMate Coffee Maker',
+    item_category: 'HOME',
+    claimed_amount: '3999',
+    description: 'The carafe arrived cracked and the machine leaks when brewing.'
   })
   const [ecomSimResult, setEcomSimResult] = useState<any>(null)
 
@@ -214,6 +231,10 @@ function App() {
   const [newClaimId, setNewClaimId] = useState<string | null>(null)
 
   const [customerTxs, setCustomerTxs] = useState<any[]>([])
+  // Customer dashboard: each purchased item with its refund eligibility, and the refund opened from it
+  const [customerPurchases, setCustomerPurchases] = useState<Purchase[] | null>(null)
+  const [claimReasons, setClaimReasons] = useState<ClaimReason[]>([])
+  const [quickRefund, setQuickRefund] = useState<Purchase | null>(null)
   const [runningAllAgents, setRunningAllAgents] = useState(false)
   const [allAgentsResult, setAllAgentsResult] = useState<any>(null)
   const [shopflowStatus, setShopflowStatus] = useState<any>(null)
@@ -276,6 +297,7 @@ function App() {
         api.desksSummary().then(setDesks).catch(() => {})
       } else {
         api.customerTransactions().then(setCustomerTxs).catch(() => {})
+        loadCustomerPurchases()
       }
 
       if (!isCustomer) {
@@ -320,8 +342,9 @@ function App() {
 
   useEffect(() => {
     setTimeline([])
+    setStoreDelivery(null)
     if (selected && user && user.role !== 'customer') {
-      api.ticketTimeline(selected.id).then((r) => setTimeline(r.history || [])).catch(() => setTimeline([]))
+      api.ticketTimeline(selected.id).then((r) => { setTimeline(r.history || []); setStoreDelivery(r.store_delivery || null) }).catch(() => setTimeline([]))
     }
   }, [selected?.id, selected?.updated_at])
 
@@ -603,6 +626,20 @@ function App() {
     }
   }
 
+  // Store claims: re-send an approval that did not reach the store, then refresh where it stands
+  async function handleRetryDelivery(messageId: string) {
+    setBusy(true)
+    try {
+      await api.retryOutbox(messageId)
+      setNotice('Delivery to the store queued again. The claim updates once ShopFlow receives it.')
+      if (selected) api.ticketTimeline(selected.id).then(r => setStoreDelivery(r.store_delivery || null)).catch(() => {})
+    } catch (err) {
+      setNotice(`Retry failed: ${(err as Error).message}`)
+    } finally {
+      setBusy(false)
+    }
+  }
+
   async function handleReconcileRefund(r: any) {
     setBusy(true)
     try {
@@ -633,10 +670,10 @@ function App() {
     }
   }
 
-  function handleRequestRefundForOrder(tx: any) {
-    setClaimPreselectTx(tx.id)
-    setPage('new')
+  function loadCustomerPurchases() {
+    api.customerPurchases().then(r => { setCustomerPurchases(r.items); setClaimReasons(r.reasons) }).catch(() => setCustomerPurchases([]))
   }
+
 
   // --- SHOPFLOW ACTIONS ---
   async function handleSyncShopflow() {
@@ -904,7 +941,7 @@ function App() {
                  key === 'refunds' ? <CircleDollarSign size={17} /> :
                  key === 'finance_queue' ? <Landmark size={17} /> :
                  key === 'new' ? <Plus size={17} /> :
-                 key === 'ecommerce' ? <ShoppingCart size={17} color="var(--primary-600)" /> :
+                 key === 'ecommerce' ? <Plug size={17} color="var(--primary-600)" /> :
                  key === 'automation' ? <BrainCircuit size={17} /> : <FileText size={17} />}
                 <span>{label}</span>
                 {count !== null && count !== undefined && count > 0 && (
@@ -1043,7 +1080,7 @@ function App() {
               </div>
 
               <SectionTitle title="Approval Queue" action="View Full Desk Queue" onAction={() => setPage('cs1_desk')} />
-              <TicketTable tickets={cs1Tickets} onSelect={setSelected} />
+              <TicketTable tickets={cs1Tickets} onSelect={setSelected} refunds={refunds} />
             </>
           )}
 
@@ -1073,7 +1110,7 @@ function App() {
               </div>
 
               <SectionTitle title="Review Queue" action="View Full Desk Queue" onAction={() => setPage('cs2_desk')} />
-              <TicketTable tickets={cs2Tickets} onSelect={setSelected} />
+              <TicketTable tickets={cs2Tickets} onSelect={setSelected} refunds={refunds} />
             </>
           )}
 
@@ -1103,7 +1140,7 @@ function App() {
               </div>
 
               <SectionTitle title="Rejection Queue" action="View Full Desk Queue" onAction={() => setPage('cs3_desk')} />
-              <TicketTable tickets={cs3Tickets} onSelect={setSelected} />
+              <TicketTable tickets={cs3Tickets} onSelect={setSelected} refunds={refunds} />
             </>
           )}
 
@@ -1112,16 +1149,13 @@ function App() {
             <>
               <div className="page-heading">
                 <div>
-                  <div className="eyebrow">ENTERPRISE AUTOMATION CONTROL PLANE</div>
-                  <h1>Omnichannel Operations Command Center</h1>
-                  <p>Real-time cross-desk triage, automated customer communications, and live eCommerce webhook integrations.</p>
+                  <div className="eyebrow">{MANAGEMENT_ROLES.includes(user.role) ? 'MANAGEMENT' : 'OPERATIONS'} · {roleName(user.role).toUpperCase()}</div>
+                  <h1>{MANAGEMENT_ROLES.includes(user.role) ? 'Management Dashboard' : 'Operations Dashboard'}</h1>
+                  <p>Every desk at a glance: what is waiting, what was settled, and the latest claims.</p>
                 </div>
                 <div className="heading-actions">
                   <button className="secondary" onClick={refresh}>
-                    <RefreshCw size={15} /> Sync Queues
-                  </button>
-                  <button className="primary" onClick={() => setPage('ecommerce')}>
-                    <ExternalLink size={15} /> eCommerce Webhook Hub
+                    <RefreshCw size={15} /> Refresh
                   </button>
                 </div>
               </div>
@@ -1180,7 +1214,7 @@ function App() {
               </div>
 
               <SectionTitle title="Live Ingested Cases" action="View All Tickets" onAction={() => setPage('tickets')} />
-              <TicketTable tickets={tickets.slice(0, 6)} onSelect={setSelected} />
+              <TicketTable tickets={tickets.slice(0, 6)} onSelect={setSelected} refunds={refunds} />
             </>
           )}
 
@@ -1629,15 +1663,16 @@ function App() {
                 </div>
               </div>
 
-              {/* Verified Order History & 1-Click Refund Action */}
+              {/* My purchases: one row per item, with its refund eligibility. "Request refund" opens a pre-filled
+                  request (QuickRefund) instead of a blank form. */}
               <div className="panel table-panel">
                 <div className="panel-heading">
                   <div>
-                    <h3>My Verified Purchases & Order Receipts</h3>
-                    <p>Official merchant orders linked to your profile. Click "Request Refund" to auto-fill your claim details.</p>
+                    <h3>My purchases</h3>
+                    <p>Request a refund straight from an item: the product, order and amount are filled in from your order.</p>
                   </div>
                   <span className="pill blue" style={{ padding: '6px 12px', fontSize: '12px' }}>
-                    {customerTxs.length} Verified Orders
+                    {(customerPurchases || []).length} items
                   </span>
                 </div>
 
@@ -1645,63 +1680,66 @@ function App() {
                   <table>
                     <thead>
                       <tr>
-                        <th>ORDER ID</th>
-                        <th>TRANSACTION ID</th>
-                        <th>ORDER AMOUNT</th>
-                        <th>PAYMENT STATUS</th>
-                        <th>REFUNDED SO FAR</th>
-                        <th>PURCHASE DATE</th>
+                        <th>PRODUCT</th>
+                        <th>ORDER</th>
+                        <th>BOUGHT</th>
+                        <th>PAID</th>
+                        <th>REFUND</th>
                         <th>ACTION</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {customerTxs.map(tx => {
-                        const canRefund = (Number(tx.amount) - Number(tx.refunded_amount)) > 0
+                      {(customerPurchases || []).map(p => {
+                        const badge = ELIGIBILITY_BADGE[p.eligibility.status]
+                        const claimable = p.eligibility.claimable && !!p.purchase_id
                         return (
-                          <tr key={tx.id}>
+                          <tr key={p.purchase_id || p.transaction_id}>
                             <td>
-                              <strong style={{ color: 'var(--navy-900)' }}>{tx.order_id}</strong>
+                              <div className="cp-product">
+                                <ProductThumb category={p.product?.category} imageUrl={p.product?.image_url} size={36} />
+                                <div>
+                                  <strong>{p.product?.name || 'Order items unavailable'}</strong>
+                                  <small className="subline">{categoryLabel(p.product?.category)}</small>
+                                </div>
+                              </div>
+                            </td>
+                            <td><span className="mono">{p.order_id}</span></td>
+                            <td><span className="date-cell">{new Date(p.purchased_at).toLocaleDateString(LOCALE)}</span></td>
+                            <td><strong className="amount">{money(p.amount, p.currency)}</strong></td>
+                            <td>
+                              <span className={`fc-badge tone-${badge.tone}`}>{badge.label}</span>
+                              {p.eligibility.status === 'ELIGIBLE' && p.eligibility.window_ends_at && (
+                                <small className="subline">until {new Date(p.eligibility.window_ends_at).toLocaleDateString(LOCALE)}</small>
+                              )}
                             </td>
                             <td>
-                              <span className="mono">{tx.id}</span>
-                            </td>
-                            <td>
-                              <strong className="amount">{money(tx.amount, tx.currency)}</strong>
-                            </td>
-                            <td>
-                              <span className="pill green"><i />{tx.payment_status}</span>
-                            </td>
-                            <td>
-                              <span className="amount" style={{ color: tx.refunded_amount > 0 ? 'var(--emerald-700)' : 'var(--text-muted)' }}>
-                                {money(tx.refunded_amount, tx.currency)}
-                              </span>
-                            </td>
-                            <td>
-                              <span className="date-cell">{new Date(tx.created_at).toLocaleDateString()}</span>
-                            </td>
-                            <td>
-                              {canRefund ? (
-                                <button
-                                  className="primary compact"
-                                  onClick={() => handleRequestRefundForOrder(tx)}
-                                  style={{ background: 'var(--primary-700)', borderColor: 'var(--primary-700)' }}
-                                  title="1-Click Pre-populate refund claim"
-                                >
-                                  <Zap size={13} /> Request Refund
+                              {claimable ? (
+                                <button className="primary compact" onClick={() => setQuickRefund(p)}
+                                  title="Request a refund for this item; everything is filled in from your order">
+                                  <Zap size={13} /> Request refund
+                                </button>
+                              ) : p.eligibility.existing_claim ? (
+                                <button className="secondary compact" onClick={async () => {
+                                  try { setSelected(await api.ticket(p.eligibility.existing_claim!.id)) } catch (err) { setNotice((err as Error).message) }
+                                }}>
+                                  View request
                                 </button>
                               ) : (
-                                <span className="pill green"><i />FULLY REFUNDED</span>
+                                <span className="hint" style={{ display: 'block', maxWidth: '220px', fontSize: '12px' }}>{p.eligibility.message}</span>
                               )}
                             </td>
                           </tr>
                         )
                       })}
-                      {!customerTxs.length && (
+                      {customerPurchases !== null && !customerPurchases.length && (
                         <tr>
-                          <td colSpan={7}>
-                            <Empty text="No verified purchase records found for your account." />
+                          <td colSpan={6}>
+                            <Empty text="No purchases found for your account." />
                           </td>
                         </tr>
+                      )}
+                      {customerPurchases === null && (
+                        <tr><td colSpan={6}><span className="hint">Loading your purchases…</span></td></tr>
                       )}
                     </tbody>
                   </table>
@@ -2062,7 +2100,7 @@ function App() {
                 </button>
               </div>
 
-              <TicketTable tickets={displayedTickets} onSelect={setSelected} />
+              <TicketTable tickets={displayedTickets} onSelect={setSelected} refunds={refunds} />
             </>
           )}
 
@@ -2087,12 +2125,12 @@ function App() {
 
           {/* ECOMMERCE INTEGRATION HUB (ADMINISTRATOR & SUPERVISOR ONLY) */}
           {page === 'ecommerce' && (
-            !['administrator', 'supervisor'].includes(user.role) ? (
+            !canOpenPage(user.role, 'ecommerce') ? (
               <div className="panel" style={{ padding: '48px 24px', textAlign: 'center', maxWidth: '580px', margin: '48px auto' }}>
                 <ShieldAlert size={44} color="var(--rose-600)" style={{ margin: '0 auto 16px' }} />
-                <h2 style={{ fontSize: '20px', fontWeight: 800, color: 'var(--navy-900)' }}>Administrator Access Required</h2>
+                <h2 style={{ fontSize: '20px', fontWeight: 800, color: 'var(--navy-900)' }}>Management access required</h2>
                 <p style={{ color: 'var(--navy-600)', margin: '10px 0 24px', lineHeight: 1.6, fontSize: '14px' }}>
-                  The eCommerce Webhook Hub, server-to-server API secrets, and live store simulation engine are strictly restricted to Platform Administrators and Supervisors.
+                  Developer Integrations is available to Administrators and Supervisors, and read-only to Auditors.
                 </p>
                 <button
                   className="primary"
@@ -2102,190 +2140,20 @@ function App() {
                 </button>
               </div>
             ) : (
-              <>
-                <div className="page-heading">
-                  <div>
-                    <div className="eyebrow">ECOMMERCE WEBHOOK & INTEGRATION API</div>
-                    <h1>Connect Your eCommerce Store</h1>
-                    <p>ShopFlow storefront integration and custom eCommerce webhooks. Server-to-server refund event ingestion with instant multi-agent triage.</p>
-                  </div>
-                </div>
-
-                {/* Native ShopFlow Integration Card */}
-                <div className="panel" style={{ padding: '24px', marginBottom: '24px', background: 'linear-gradient(135deg, #0f172a 0%, #1e293b 100%)', color: '#f8fafc', border: '1px solid rgba(255,255,255,0.1)' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '16px' }}>
-                    <div style={{ maxWidth: '640px' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#38bdf8', fontSize: '11px', fontWeight: 800, letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: '6px' }}>
-                        <Database size={16} /> Native eCommerce Integration
-                      </div>
-                      <h2 style={{ fontSize: '20px', fontWeight: 800, margin: 0, color: '#ffffff' }}>
-                        ShopFlow Storefront Connection
-                      </h2>
-                      <p style={{ margin: '6px 0 0', fontSize: '13px', color: '#94a3b8', lineHeight: 1.5 }}>
-                        ShopFlow acts as the System of Record (SoR). RITOS autonomously receives refund events, fetches rich claim context dossiers, runs the {agentCatalog.length} specialist agents, and submits payment execution callbacks.
-                      </p>
-                    </div>
-
-                    <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
-                      <button
-                        className="primary"
-                        onClick={handleSyncShopflow}
-                        disabled={syncingShopflow}
-                        style={{ background: '#2563eb', borderColor: '#3b82f6', display: 'flex', alignItems: 'center', gap: '8px' }}
-                      >
-                        <RefreshCw size={14} className={syncingShopflow ? 'spin' : ''} />
-                        <span>{syncingShopflow ? 'Syncing ShopFlow...' : 'Sync Pending ShopFlow Tickets'}</span>
-                      </button>
-                      <button
-                        className="secondary"
-                        onClick={handleSimulateShopflowWebhook}
-                        disabled={busy}
-                        style={{ background: 'rgba(255,255,255,0.1)', color: '#f8fafc', borderColor: 'rgba(255,255,255,0.2)' }}
-                      >
-                        <Zap size={14} /> Test ShopFlow Webhook Ingestion
-                      </button>
-                    </div>
-                  </div>
-
-                  <div style={{ marginTop: '20px', paddingTop: '16px', borderTop: '1px solid rgba(255,255,255,0.1)', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(200px, 100%), 1fr))', gap: '16px', fontSize: '12px' }}>
-                    <div>
-                      <small style={{ color: '#94a3b8', display: 'block', textTransform: 'uppercase', letterSpacing: '0.5px' }}>ShopFlow Instance URL</small>
-                      <strong style={{ color: '#ffffff', fontFamily: 'var(--font-mono)', overflowWrap: 'anywhere' }}>{shopflowStatus?.shopflow_base_url || 'not reachable'}</strong>
-                    </div>
-                    <div>
-                      <small style={{ color: '#94a3b8', display: 'block', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Connection State</small>
-                      <span className={`pill ${shopflowStatus?.connected ? 'green' : 'amber'}`}>
-                        <i />{shopflowStatus?.connected ? 'CONNECTED (HTTP 200)' : 'STANDBY / LISTENING'}
-                      </span>
-                    </div>
-                    <div>
-                      <small style={{ color: '#94a3b8', display: 'block', textTransform: 'uppercase', letterSpacing: '0.5px' }}>RITOS Webhook Target</small>
-                      <code style={{ color: '#38bdf8' }}>{`${API_ROOT}/webhook/refund-tickets`}</code>
-                    </div>
-                    <div>
-                      <small style={{ color: '#94a3b8', display: 'block', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Decision Callback</small>
-                      <code style={{ color: '#34d399' }}>POST /api/ritos/refund-decision</code>
-                    </div>
-                  </div>
-                </div>
-
-              <div className="dashboard-grid">
-                {/* Simulator */}
-                <div className="panel" style={{ padding: '24px' }}>
-                  <div className="panel-heading" style={{ padding: '0 0 16px', borderBottom: '1px solid var(--border-subtle)' }}>
-                    <div>
-                      <h3>Simulate Incoming eCommerce Ticket</h3>
-                      <p>Send a test order payload to observe instant multi-agent triage</p>
-                    </div>
-                  </div>
-
-                  <div className="form-grid" style={{ marginTop: '16px' }}>
-                    <div>
-                      <label>Order ID</label>
-                      <input value={simEcom.order_id} onChange={e => setSimEcom({ ...simEcom, order_id: e.target.value })} />
-                    </div>
-                    <div>
-                      <label>Transaction ID</label>
-                      <input value={simEcom.transaction_id} onChange={e => setSimEcom({ ...simEcom, transaction_id: e.target.value })} />
-                    </div>
-                    <div>
-                      <label>Customer Name</label>
-                      <input value={simEcom.customer_name} onChange={e => setSimEcom({ ...simEcom, customer_name: e.target.value })} />
-                    </div>
-                    <div>
-                      <label>Customer Mobile Phone</label>
-                      <input value={simEcom.customer_phone} onChange={e => setSimEcom({ ...simEcom, customer_phone: e.target.value })} />
-                    </div>
-                    <div>
-                      <label>Product Item Name</label>
-                      <input value={simEcom.item_name} onChange={e => setSimEcom({ ...simEcom, item_name: e.target.value })} />
-                    </div>
-                    <div>
-                      <label>Product Category</label>
-                      <select value={simEcom.item_category} onChange={e => setSimEcom({ ...simEcom, item_category: e.target.value })}>
-                        <option value="ELECTRONICS">ELECTRONICS (7-day window)</option>
-                        <option value="APPAREL">APPAREL (14-day window)</option>
-                        <option value="PERISHABLE">PERISHABLE (Final sale / 0d)</option>
-                        <option value="HYGIENE">HYGIENE (Non-returnable / 0d)</option>
-                        <option value="GENERAL">GENERAL (14-day window)</option>
-                      </select>
-                    </div>
-                    <div className="span-2">
-                      <label>Claimed Amount (INR)</label>
-                      <input type="number" value={simEcom.claimed_amount} onChange={e => setSimEcom({ ...simEcom, claimed_amount: e.target.value })} />
-                    </div>
-                    <div className="span-2">
-                      <label>Customer Complaint Description</label>
-                      <textarea rows={2} value={simEcom.description} onChange={e => setSimEcom({ ...simEcom, description: e.target.value })} />
-                    </div>
-                  </div>
-
-                  <button className="primary" style={{ marginTop: '16px' }} onClick={handleSimulateEcom} disabled={busy}>
-                    <Send size={15} /> Simulate eCommerce Webhook Ingestion
-                  </button>
-
-                  {ecomSimResult && (
-                    <div style={{ marginTop: '20px', padding: '16px', background: 'var(--navy-50)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)' }}>
-                      <strong><CheckCircle2 size={14} color="var(--emerald-600)" className="inline-icon" aria-hidden="true" />Ingestion Output:</strong>
-                      <div style={{ marginTop: '8px', display: 'grid', gap: '6px', fontSize: '13px' }}>
-                        <div><strong>Assigned Desk:</strong> <span className="pill blue" style={{ marginLeft: '6px' }}>{ecomSimResult.assigned_desk}</span></div>
-                        <div><strong>Decision Bucket:</strong> <b>{ecomSimResult.decision_bucket}</b></div>
-                        <div><strong>Policy Reason:</strong> <span>{ecomSimResult.policy_evaluation_reason}</span></div>
-                        <div><strong>Auto-Drafted Message:</strong> <p style={{ margin: '4px 0', fontSize: '12px', color: 'var(--navy-700)', fontStyle: 'italic' }}>"{ecomSimResult.customer_message_draft}"</p></div>
-                      </div>
-                    </div>
-                  )}
-                </div>
-
-                {/* API Code Guide for Vercel/Render */}
-                <div className="panel" style={{ padding: '24px' }}>
-                  <div className="panel-heading" style={{ padding: '0 0 16px', borderBottom: '1px solid var(--border-subtle)' }}>
-                    <div>
-                      <h3>Render / Vercel Webhook Code</h3>
-                      <p>Copy this Node.js / Python snippet into your eCommerce backend</p>
-                    </div>
-                  </div>
-
-                  <div style={{ marginTop: '16px' }}>
-                    <small style={{ fontWeight: 700, color: 'var(--navy-700)', textTransform: 'uppercase', fontSize: '11px' }}>
-                      POST Endpoint URL
-                    </small>
-                    <div style={{ padding: '10px 12px', background: 'var(--navy-900)', color: '#93c5fd', borderRadius: 'var(--radius-sm)', fontFamily: 'var(--font-mono)', fontSize: '12px', margin: '6px 0 16px', overflowWrap: 'anywhere' }}>
-                      {`${API_ROOT}/api/v1/integrations/ecommerce/ticket`}
-                    </div>
-
-                    <small style={{ fontWeight: 700, color: 'var(--navy-700)', textTransform: 'uppercase', fontSize: '11px' }}>
-                      Node.js / Express Example (Vercel Backend)
-                    </small>
-                    <pre style={{ padding: '14px', background: 'var(--navy-900)', color: '#f1f5f9', borderRadius: 'var(--radius-md)', fontSize: '11px', overflowX: 'auto', lineHeight: '1.5' }}>
-{`// In your eCommerce Backend (Render / Vercel):
-await fetch('http://YOUR_RITOS_URL/api/v1/integrations/ecommerce/ticket', {
-  method: 'POST',
-  headers: {
-    'Content-Type': 'application/json',
-    'X-Ecommerce-Secret': process.env.ECOMMERCE_WEBHOOK_SECRET
-  },
-  body: JSON.stringify({
-    order_id: order.id,
-    transaction_id: order.payment_reference,
-    customer_email: customer.email, // must match a provisioned RITOS customer
-    customer_name: customer.name,
-    customer_phone: customer.phone,
-    item_name: item.title,
-    item_category: item.category, // 'ELECTRONICS' | 'APPAREL'
-    claimed_amount: item.price,
-    purchase_date: order.created_at,
-    description: refundRequest.user_reason,
-    // Only needed when RITOS does not know this transaction yet: the store's payment facts
-    transaction_amount: order.paid_amount,
-    payment_status: order.payment_status
-  })
-});`}
-                    </pre>
-                  </div>
-                </div>
-              </div>
-            </>
+              <DeveloperIntegrations
+                user={user}
+                apiRoot={API_ROOT}
+                agents={agentCatalog}
+                busy={busy}
+                syncing={syncingShopflow}
+                onSync={handleSyncShopflow}
+                onTestWebhook={handleSimulateShopflowWebhook}
+                sim={simEcom}
+                setSim={setSimEcom}
+                onSimulate={handleSimulateEcom}
+                simResult={ecomSimResult}
+                onOpenTicket={async id => { try { setSelected(await api.ticket(id)) } catch (err) { setNotice((err as Error).message) } }}
+              />
             )
           )}
 
@@ -2574,7 +2442,7 @@ await fetch('http://YOUR_RITOS_URL/api/v1/integrations/ecommerce/ticket', {
 
           {/* 8 SPECIALIST AGENTS REGISTRY */}
           {page === 'automation' && (
-            !['administrator', 'supervisor', 'cs_1', 'cs_2', 'cs_3', 'refund_operations', 'finance_approver'].includes(user.role) ? (
+            !canOpenPage(user.role, 'automation') ? (
               <div className="panel" style={{ padding: '48px 24px', textAlign: 'center', maxWidth: '580px', margin: '48px auto' }}>
                 <ShieldAlert size={44} color="var(--rose-600)" style={{ margin: '0 auto 16px' }} />
                 <h2 style={{ fontSize: '20px', fontWeight: 800, color: 'var(--navy-900)' }}>Internal Operations Access Required</h2>
@@ -2671,7 +2539,7 @@ await fetch('http://YOUR_RITOS_URL/api/v1/integrations/ecommerce/ticket', {
 
           {/* AUDIT TRAIL (COMPLIANCE & GOVERNANCE ROLES ONLY) */}
           {page === 'audit' && (
-            !['administrator', 'supervisor', 'auditor', 'finance_approver'].includes(user.role) ? (
+            !canOpenPage(user.role, 'audit') ? (
               <div className="panel" style={{ padding: '48px 24px', textAlign: 'center', maxWidth: '580px', margin: '48px auto' }}>
                 <ShieldAlert size={44} color="var(--rose-600)" style={{ margin: '0 auto 16px' }} />
                 <h2 style={{ fontSize: '20px', fontWeight: 800, color: 'var(--navy-900)' }}>Compliance Role Required</h2>
@@ -2733,6 +2601,17 @@ await fetch('http://YOUR_RITOS_URL/api/v1/integrations/ecommerce/ticket', {
       </main>
 
       {/* --- TICKET DETAILS / DESK ACTION DRAWER --- */}
+      {quickRefund && user && isCustomer && (
+        <QuickRefund
+          purchase={quickRefund}
+          reasons={claimReasons}
+          user={user}
+          onClose={() => setQuickRefund(null)}
+          onSubmitted={claim => { setNewClaimId(claim.id); loadCustomerPurchases(); load() }}
+          onOpenClaim={claim => { setQuickRefund(null); setSelected(claim); setPage('tickets') }}
+        />
+      )}
+
       {selected && isCustomer && (
         <CustomerClaimDrawer
           claim={selected}
@@ -2913,6 +2792,8 @@ await fetch('http://YOUR_RITOS_URL/api/v1/integrations/ecommerce/ticket', {
                     onRejectPayout={(r, reason) => handleRejectRefund(r, reason)}
                     onExecute={r => handleExecuteRefund(r)}
                     onReconcile={r => handleReconcileRefund(r)}
+                    delivery={storeDelivery}
+                    onRetryDelivery={id => handleRetryDelivery(id)}
                   />
                 </>
               )}
@@ -3399,7 +3280,7 @@ function PriorityPill({ value }: any) {
   return <span className={`priority-pill ${String(value).toLowerCase()}`}>{value}</span>
 }
 
-function TicketTable({ tickets, onSelect }: { tickets: Ticket[]; onSelect: (t: Ticket) => void }) {
+function TicketTable({ tickets, onSelect, refunds = [] }: { tickets: Ticket[]; onSelect: (t: Ticket) => void; refunds?: any[] }) {
   return (
     <div className="panel table-panel">
       <div className="table-wrap">
@@ -3446,7 +3327,16 @@ function TicketTable({ tickets, onSelect }: { tickets: Ticket[]; onSelect: (t: T
                     <i />{t.assigned_desk ? label(DESK, t.assigned_desk).text : 'Not routed'}{t.decision_bucket ? ` · ${label(BUCKET, t.decision_bucket).text}` : ''}
                   </span>
                 </td>
-                <td><StatusPill value={t.status} /></td>
+                <td>
+                  <StatusPill value={t.status} />
+                  {/* Where the refund stands (same wording as the claim drawer and close to what the customer sees) */}
+                  {(() => {
+                    const st = refundStage(t, refunds)
+                    return t.decision_bucket === 'GENUINE_REFUNDABLE' && st.code !== 'NOT_STARTED'
+                      ? <small className={`mc-status-inline rp-chip tone-${st.tone}`} style={{ display: 'flex', marginTop: '4px' }}><i aria-hidden="true" />{st.label}</small>
+                      : null
+                  })()}
+                </td>
                 <td><span className="date-cell">{new Date(t.created_at).toLocaleDateString()}</span></td>
                 <td>
                   <button

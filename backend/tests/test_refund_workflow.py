@@ -170,3 +170,52 @@ def test_unknown_payout_outcome_is_confirmed_with_the_provider_before_it_counts(
     r = client.post(f"/api/v1/refunds/{rid}/reconcile", headers=_h("finance@ritos.local"))
     assert r.status_code == 200 and r.json()["status"] == "REFUNDED", r.text
     assert _ticket(tid).refund_status == "REFUNDED"
+
+
+def test_customer_is_told_at_each_step_from_approval_to_payment():
+    """Approval is not only a status: the customer gets a message and a decision date at every step."""
+    tid = _approval_desk_claim(1299.0)
+    customer = lambda: client.get(f"/api/v1/tickets/{tid}", headers=_h("customer@ritos.local")).json()
+    rid = _propose(tid, "admin@ritos.local")                     # an Administrator approves the claim
+    c = customer()
+    assert c["customer_status"]["label"] == "Refund in progress" and c["refund_decided_at"]
+    assert any("was approved" in m["body"] and "₹1,299.00" in m["body"] for m in c["comments"])
+    assert _approve(rid).status_code == 200                       # Finance: second approval
+    c = customer()
+    assert c["customer_status"]["label"] == "Refund approved"
+    assert any("approved for payment" in m["body"] for m in c["comments"])
+    assert _execute(rid, "refunds@ritos.local").status_code == 200  # Refund operations sends it
+    c = customer()
+    assert c["customer_status"]["code"] == "REFUNDED"
+    paid = [m for m in c["comments"] if "was issued" in m["body"]]
+    assert len(paid) == 1 and "SANDBOX-" in paid[0]["body"] and "no real money" in paid[0]["body"]
+    assert all(not m["internal"] for m in c["comments"])
+
+
+def test_a_product_rule_overrides_its_category():
+    """return_policies row "SKU:<sku>" wins over the category row (a clearance item in an otherwise returnable category)."""
+    from app.models import ReturnPolicy
+    from app.purchases import list_purchases
+    ordinary, clearance = (_approval_desk_claim_order(f"Lamp {k}", 999.0) for k in ("A", "B"))
+    with SessionLocal() as db:
+        db.add(ReturnPolicy(category=f"SKU:{clearance[1]}", return_window_days=0, allow_damaged_exceptions=True,
+                            policy_summary="clearance: defects only"))
+        db.commit()
+        customer = db.scalar(select(User).where(User.email == "customer@ritos.local"))
+        status = {p["transaction_id"]: p["eligibility"]["status"] for p in list_purchases(db, customer.id)}
+    assert status[ordinary[0]] == "ELIGIBLE" and status[clearance[0]] == "ITEM_PROBLEM_ONLY"
+
+
+def _approval_desk_claim_order(name, amount):
+    """An in-window GENERAL order without a claim. Returns (transaction id, sku)."""
+    txid = f"TXN-RW-{uuid4().hex[:8]}"
+    with SessionLocal() as db:
+        customer = db.scalar(select(User).where(User.email == "customer@ritos.local"))
+        db.add(Transaction(id=txid, customer_id=customer.id, order_id=f"ORD-{txid}", amount=amount, currency="INR",
+                           payment_status="SUCCESSFUL", refunded_amount=0,
+                           created_at=datetime.now(timezone.utc) - timedelta(days=2)))
+        sku = f"SKU-{txid}"
+        db.add(Product(sku=sku, name=name, category="GENERAL", price_minor=int(amount * 100), currency="INR"))
+        db.add(OrderItem(transaction_id=txid, product_sku=sku, amount=amount))
+        db.commit()
+    return txid, sku

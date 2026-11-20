@@ -310,3 +310,28 @@ def test_ecommerce_intake_never_guesses_customer_or_payment():
     assert client.post(url, json={**ECOM, "customer_email": "nobody@example.com"}, headers=staff).status_code == 404
     unknown_tx = {**ECOM, "transaction_id": "TXN-NOT-IN-LEDGER", "transaction_amount": 999, "payment_status": "SUCCESSFUL"}
     assert client.post(url, json=unknown_tx, headers=staff).status_code == 409  # staff cannot create payments
+
+
+def test_decision_refused_by_the_store_is_not_counted_as_delivered(store, monkeypatch):
+    """A store that answers 409 ILLEGAL_TRANSITION did not apply the approval: the message must fail visibly
+    instead of being marked SENT (which left claims "Approved" in RITOS that the store never refunded)."""
+    store["SF-REFUSED"] = store_context("SF-REFUSED")
+    data = send_event("SF-REFUSED")
+    assert outbox_kinds(data["ritos_ticket_id"]) == ["DECISION"]
+    refused = {"error": {"code": "ILLEGAL_TRANSITION", "message": "Cannot record decision for ticket in status REJECTED"}}
+    monkeypatch.setattr(outbox, "_send", lambda msg: httpx.Response(409, json=refused))
+    with SessionLocal() as db:
+        db.query(OutboxMessage).filter(OutboxMessage.ticket_id != data["ritos_ticket_id"]).update({"status": "SENT"})
+        db.commit()
+        outbox.deliver_due(db)
+        msg = db.scalar(select(OutboxMessage).where(OutboxMessage.ticket_id == data["ritos_ticket_id"]))
+        assert (msg.status, msg.attempts) == ("FAILED", 1) and "ILLEGAL_TRANSITION" in msg.last_error
+    staff = login("admin@ritos.local")
+    delivery = client.get(f"/api/v1/tickets/{data['ritos_ticket_id']}/timeline", headers=staff).json()["store_delivery"]
+    assert delivery["status"] == "FAILED" and delivery["decision"] == "APPROVED"
+    # an operator re-sends it once the store is fixed; a store that already refunded answers DUPLICATE_REFUND
+    assert client.post(f"/api/v1/integrations/outbox/{delivery['id']}/retry", headers=staff).status_code == 200
+    monkeypatch.setattr(outbox, "_send", lambda msg: httpx.Response(409, json={"error": {"code": "DUPLICATE_REFUND"}}))
+    with SessionLocal() as db:
+        outbox.deliver_due(db)
+        assert db.get(OutboxMessage, delivery["id"]).status == "SENT"

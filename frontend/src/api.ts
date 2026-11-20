@@ -79,7 +79,22 @@ export type Purchase = {
     reason_code: string | null
   }
 }
-export type ClaimReason = { code: string; label: string; item_problem: boolean; details_required: boolean }
+export type IntegrationsOverview = {
+  shopflow: { connected: boolean; base_url: string }
+  credentials: {
+    store_api_key: { configured: boolean; development_default: boolean }
+    ecommerce_secret: { configured: boolean }
+    gateway_webhook_secret: { configured: boolean }
+  }
+  deliveries: { sent: number; pending: number; failed: number }
+  inbound: { last_received_at: string | null; last_24h: number }
+  payments: { provider: string; live: boolean }
+  mcp: { supported: boolean; servers: number; reason: string }
+}
+export type InboundEventRow = { id: string; source: string; event_type: string; store_ticket: string | null; outcome: string | null; received_at: string | null }
+export type McpStatus = { supported: boolean; servers: any[]; reason: string }
+
+export type ClaimReason ={ code: string; label: string; item_problem: boolean; details_required: boolean }
 export type CustomerClaimStatus = {
   code: 'UNDER_REVIEW' | 'ACTION_NEEDED' | 'REFUND_IN_PROGRESS' | 'REFUNDED' | 'NOT_APPROVED' | 'CLOSED'
   label: string
@@ -143,6 +158,16 @@ export const api = {
     }),
   reconcileRefund: (id: string) =>
     request<any>(`/refunds/${id}/reconcile`, { method: 'POST' }),
+  // Re-send a store message (e.g. an approval that did not reach the store); Administrator or Supervisor
+  retryOutbox: (messageId: string) => request<any>(`/integrations/outbox/${messageId}/retry`, { method: 'POST' }),
+  // Messages to the store (latest 200): Administrator, Supervisor, Auditor
+  listOutbox: () => request<any[]>('/integrations/outbox'),
+  // Deliver due messages now instead of waiting for the background worker: Administrator, Supervisor
+  deliverOutbox: () => request<{ attempted: any[] }>('/integrations/outbox/deliver', { method: 'POST' }),
+  // Developer Integrations console (read-only; Administrator, Supervisor, Auditor). Credentials: configured or not, never values.
+  integrationsOverview: () => request<IntegrationsOverview>('/integrations/overview'),
+  integrationEvents: () => request<InboundEventRow[]>('/integrations/events'),
+  mcpServers: () => request<McpStatus>('/integrations/mcp'),
   audit: () => request<any[]>('/admin/audit-logs'),
   users: () => request<User[]>('/admin/users'),
   automationSummary: () => request<any>('/automation/summary'),
@@ -183,7 +208,7 @@ export const api = {
       body: JSON.stringify({ action, note })
     }),
   payoutsAwaitingAuthorization: () => request<Ticket[]>('/payouts/awaiting-authorization'),
-  ticketTimeline: (id: string) => request<{ history: any[] }>(`/tickets/${id}/timeline`),
+  ticketTimeline: (id: string) => request<{ history: any[]; store_delivery?: any }>(`/tickets/${id}/timeline`),
   authorizePayout: (ticketId: string) =>
     request<any>(`/tickets/${ticketId}/authorize-payout`, {
       method: 'POST'

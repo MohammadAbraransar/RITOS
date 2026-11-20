@@ -22,7 +22,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .models import (
-    RefundRequest, RefundStatus, Transaction, Ticket, User, Role,
+    RefundRequest, RefundStatus, Transaction, Ticket, TicketComment, User, Role,
     LedgerAccount, LedgerJournal, LedgerEntry, GatewaySettlementAttempt,
     IdempotencyRecord, AccountType, EntryType, JournalStatus, AuditLog, TicketEvent
 )
@@ -449,6 +449,13 @@ class FinancialSettlementService:
         if ticket:
             ticket.refund_status = RefundStatus.REFUNDED.value
             ticket.status = "RESOLVED"
+            sym = "₹" if refund.currency == "INR" else f"{refund.currency} "
+            note = (" This is a test environment, so no real money was sent." if attempt.provider == "SANDBOX"
+                    or not gateway_status()["live_payments_enabled"] else "")
+            author = actor_id if actor_id != "gateway-webhook" else (refund.approved_by_id or refund.requested_by_id)
+            db.add(TicketComment(ticket_id=ticket.id, author_id=author,
+                                 internal=False, body=f"Your refund of {sym}{amount:,.2f} was issued to your original "
+                                                      f"payment method (reference {attempt.provider_reference}).{note}"))
             db.add(TicketEvent(ticket_id=ticket.id, actor_id=actor_id, event_type="FINANCIAL_SETTLEMENT_POSTED",
                                details={"refund_id": refund.id, "amount_minor": attempt.amount_minor, "provider": attempt.provider,
                                         "provider_reference": attempt.provider_reference, "journal_id": journal.id,

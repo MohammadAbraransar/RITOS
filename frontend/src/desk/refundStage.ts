@@ -12,6 +12,8 @@ export type RefundStageCode =
   | 'PAYMENT_FAILED'           // gateway declined; nothing was paid
   | 'PAID'                     // the gateway (or the store) confirmed the refund
   | 'SENT_TO_STORE'            // store order: decision sent, the store pays
+  | 'STORE_DELIVERY_PENDING'   // store order: approved, decision still queued or retrying
+  | 'STORE_DELIVERY_FAILED'    // store order: approved, but the store refused or never received the decision
   | 'STORE_PAYMENT_FAILED'     // store order: the store reported its payment failed
   | 'CLOSED'                   // rejected or cancelled: no refund
 
@@ -40,7 +42,9 @@ export const latestRefund = (t: Ticket, refunds: any[]) => refunds.find((r: any)
 /** Only the sandbox gateway is implemented: its references start with SANDBOX- and no real money moves. */
 export const isSandboxPayment = (r?: any) => !!r?.provider_reference && String(r.provider_reference).startsWith('SANDBOX-')
 
-export function refundStage(t: Ticket, refunds: any[]): RefundStage {
+/** `delivery`: for store claims, whether the decision reached the store (GET /tickets/{id}/timeline store_delivery). */
+export type StoreDelivery = { id: string; status: string; attempts: number; last_error?: string | null; sent_at?: string | null } | null
+export function refundStage(t: Ticket, refunds: any[], delivery?: StoreDelivery): RefundStage {
   const store = isStoreLinked(t)
   const r = store ? undefined : latestRefund(t, refunds)
   const steps = store ? STORE_STEPS : LEDGER_STEPS
@@ -63,9 +67,16 @@ export function refundStage(t: Ticket, refunds: any[]): RefundStage {
   if (t.status === 'RESOLVED') return s('CLOSED', 'Closed', 'neutral', 0, 'This claim is closed without a refund.')
 
   if (store) {
+    // Approved in RITOS is not yet approved in the store: the decision travels through the outbox.
+    if (t.refund_status === 'APPROVED' && delivery?.status === 'FAILED')
+      return s('STORE_DELIVERY_FAILED', 'Approved, but the store never got it', 'red', 1,
+        `The approval did not reach ShopFlow, so the customer has not been refunded. ${delivery.last_error ? `Last error: ${delivery.last_error}. ` : ''}Retry the delivery once the store is reachable.`)
+    if (t.refund_status === 'APPROVED' && delivery?.status === 'PENDING')
+      return s('STORE_DELIVERY_PENDING', 'Approved, waiting to reach the store', 'amber', 1,
+        `The approval is queued for ShopFlow${delivery.attempts ? ` (${delivery.attempts} attempt${delivery.attempts > 1 ? 's' : ''} so far${delivery.last_error ? `: ${delivery.last_error}` : ''})` : ''}. The customer is refunded only after the store receives it.`)
     if (t.refund_status === 'APPROVED')
       return s('SENT_TO_STORE', 'Approved, sent to the store', 'blue', 2,
-        'The decision was sent to ShopFlow, which pays the customer and reports back when it is done.')
+        'The store received the approval. ShopFlow pays the customer and reports back when it is done.')
     if (t.refund_status === 'RECONCILIATION_REQUIRED')
       return s('STORE_PAYMENT_FAILED', 'Store payment failed', 'amber', 2,
         'ShopFlow reported that its refund payment failed. Check the order in the store before trying again.')

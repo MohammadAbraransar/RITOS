@@ -90,8 +90,14 @@ def deliver_due(db: Session, limit: int | None = None) -> list[dict]:
                 body = resp.json()
             except Exception:
                 body = {"text": resp.text[:500]}
-            # 409 on a decision means the store already moved past this state (e.g. replayed): treat as delivered.
-            if resp.is_success or resp.status_code == 409:
+            code = (body.get("error") or {}).get("code") if isinstance(body, dict) and isinstance(body.get("error"), dict) else None
+            if resp.status_code == 409 and msg.kind == "DECISION" and code == "ILLEGAL_TRANSITION":
+                # The store refused the decision (its ticket is in another state): the approval never reached it.
+                # Counting this as delivered left claims "Approved" in RITOS while the store never applied them.
+                outcomes[msg.id] = ("REFUSED", body, f"Store refused the decision: {str(body)[:300]}")
+                failed_keys.add(msg.key)
+            # Any other 409 means the store already has this outcome (e.g. a replay, already refunded): delivered.
+            elif resp.is_success or resp.status_code == 409:
                 outcomes[msg.id] = ("SENT", body, None)
             else:
                 raise RuntimeError(f"HTTP {resp.status_code}: {str(body)[:300]}")
@@ -115,6 +121,8 @@ def deliver_due(db: Session, limit: int | None = None) -> list[dict]:
         row.attempts += 1
         if outcome == "SENT":
             row.status, row.sent_at, row.response, row.last_error = "SENT", _now(), body, None
+        elif outcome == "REFUSED":  # retrying cannot help; an operator must look at the store's ticket
+            row.status, row.response, row.last_error = "FAILED", body, error
         else:
             row.last_error = error
             if row.attempts >= settings.outbox_max_attempts:

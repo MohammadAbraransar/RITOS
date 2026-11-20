@@ -264,6 +264,22 @@
 .mc-reply textarea:focus { outline: 2px solid var(--primary-500); outline-offset: 1px; }
 .mc-close-link { justify-self: start; }
 
+/* Quick refund from the dashboard (QuickRefund.tsx) */
+.qr-amount { margin-top: 14px; }
+.qr-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.qr-actions .fc-submit { flex: 1 1 220px; }
+.qr-actions .fc-help { margin: 0; flex-basis: 100%; }
+.qr-textarea {
+  width: 100%; resize: vertical; padding: 9px 12px; font-size: 13px; line-height: 1.5;
+  border: 1px solid var(--border-strong); border-radius: var(--radius-md); background: #fff;
+}
+.qr-textarea:focus { outline: 2px solid var(--primary-500); outline-offset: 1px; }
+.qr-add-note { justify-self: start; padding: 0; font-size: 13px; }
+
+/* Dashboard purchases table: product cell */
+.cp-product { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.cp-product strong { display: block; color: var(--navy-900); }
+
 @media (min-width: 769px) {
   .fc-section, .fc-summary, .fc-process { padding: 22px; }
 }

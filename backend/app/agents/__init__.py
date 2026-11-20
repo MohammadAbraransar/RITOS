@@ -282,7 +282,7 @@ def evidence_verification(s: PipelineState) -> dict:
 # ---------------------------------------------------------------------------
 def policy_enforcement(s: PipelineState) -> dict:
     t = s.ticket
-    policy = get_effective_policy(s.db, t.item_category, s.store_facts)
+    policy = get_effective_policy(s.db, t.item_category, s.store_facts, sku=s.store_facts.get("sku"))
     verified = s.identity.get("identity_status") == "verified" and s.defect.get("defect_status") == "verified"
     # Intake sets purchase_date only from trusted sources (ledger capture or store order); never a customer's input.
     anchor_source = s.evidence.get("purchase_date_source") or ("TICKET_RECORD" if t.purchase_date else None)

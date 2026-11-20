@@ -5,7 +5,7 @@ import { Check, CheckCircle2, Landmark, RefreshCw, Send, X } from 'lucide-react'
 import type { Ticket, User } from '../api'
 import { dateTime, money } from '../format'
 import { roleName } from '../labels'
-import { refundStage } from './refundStage'
+import { refundStage, type StoreDelivery } from './refundStage'
 import '../customer/customer.css'
 import './desk.css'
 
@@ -25,11 +25,13 @@ type Props = {
   onRejectPayout: (refund: any, reason: string) => void
   onExecute: (refund: any) => void
   onReconcile: (refund: any) => void
+  delivery?: StoreDelivery
+  onRetryDelivery?: (messageId: string) => void
 }
 
 export function RefundPanel(p: Props) {
   const { ticket: t, user, busy } = p
-  const st = refundStage(t, p.refunds)
+  const st = refundStage(t, p.refunds, p.delivery)
   const r = st.refund
   const [rejecting, setRejecting] = useState<'claim' | 'payout' | null>(null)
   const [reason, setReason] = useState('')
@@ -114,6 +116,14 @@ export function RefundPanel(p: Props) {
           <button className="secondary" disabled={busy} onClick={() => p.onReconcile(r)}>
             <RefreshCw size={15} /> Confirm with provider
           </button>
+        )}
+        {st.code === 'STORE_DELIVERY_FAILED' && p.delivery && p.onRetryDelivery && ['administrator', 'supervisor'].includes(user.role) && (
+          <button className="secondary" disabled={busy} onClick={() => p.onRetryDelivery!(p.delivery!.id)}>
+            <RefreshCw size={15} /> Retry delivery to the store
+          </button>
+        )}
+        {st.code === 'STORE_DELIVERY_FAILED' && !['administrator', 'supervisor'].includes(user.role) && (
+          <span className="hint">An Administrator or Supervisor can retry the delivery.</span>
         )}
         {waiting && <span className="hint">{waiting}</span>}
       </div>
