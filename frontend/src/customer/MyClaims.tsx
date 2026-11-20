@@ -225,6 +225,7 @@ export function CustomerClaimDrawer({ claim, refunds, userId, onClose, onChanged
             {claim.order_id && <div><dt>Order number</dt><dd>{claim.order_id}</dd></div>}
             <div><dt>Reason</dt><dd>{claim.reason_label || 'Described in your words'}</dd></div>
             {claim.purchase_date && <div><dt>Bought</dt><dd>{shortDate(claim.purchase_date)}</dd></div>}
+            {paid?.provider_reference && <div><dt>Payment reference</dt><dd className="mc-ref">{paid.provider_reference}</dd></div>}
           </dl>
 
           {(claim.details || (!claim.reason_label && claim.description)) && (

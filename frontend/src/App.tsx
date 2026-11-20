@@ -17,6 +17,9 @@ import { LOCALE, money } from './format'
 import { FileClaim } from './customer/FileClaim'
 import { CLAIM_TONE, claimStatus } from './customer/claimUi'
 import { CustomerClaimDrawer, MyClaims } from './customer/MyClaims'
+import { CustomerRefunds } from './customer/CustomerRefunds'
+import { RefundPanel } from './desk/RefundPanel'
+import { isStoreLinked, refundStage } from './desk/refundStage'
 
 export { isClosedStatus, priorityRank }
 
@@ -39,6 +42,9 @@ const roles = [
   { label: 'Administrator', role: 'administrator', email: 'admin@ritos.local', icon: Command, desc: 'Webhooks & system config' },
   { label: 'Supervisor', role: 'supervisor', email: 'lead@ritos.local', icon: Shield, desc: 'Omnichannel desk oversight' },
   { label: 'Finance Approver', role: 'finance_approver', email: 'finance@ritos.local', icon: CircleDollarSign, desc: 'Settlement authorization' },
+  // The four-eyes rule needs three different people; when Finance or an Administrator approved the claim,
+  // Refund Operations is the one who can still send the payment.
+  { label: 'Refund Operations', role: 'refund_operations', email: 'refunds@ritos.local', icon: Landmark, desc: 'Sends approved payouts' },
   { label: 'Customer Portal', role: 'customer', email: 'customer@ritos.local', icon: Users, desc: 'Self-service claims' }
 ]
 
@@ -125,7 +131,7 @@ function nextStepText(t: Ticket, user: User | null, refunds: any[]): string {
   if (t.refund_status === 'REFUNDED' || refund?.status === 'REFUNDED') return 'Refunded. Nothing left to do.'
   if (t.status === 'RESOLVED' || t.status === 'REJECTED' || t.decision_bucket === 'NON_REFUNDABLE')
     return `Closed: ${t.policy_evaluation_reason || 'not eligible for a refund'}.`
-  if (t.refund_status === 'APPROVED') return 'Approved and sent to the store, which is paying the customer.'
+  if (t.refund_status === 'APPROVED' && isStoreLinked(t)) return 'Approved and sent to the store, which is paying the customer.'
   if (refund?.next_step) return waitingFor(refund.next_step, user?.id) + (refund.next_step.can_act ? ' You can do this step in the Finance Approvals queue.' : '')
   if (waiting === 'AWAIT_PROOF') return `Waiting for the customer to send evidence${t.proof_required ? `: ${t.proof_required}` : ''}. Assigned to ${assignee}.`
   if (waiting === 'MANUAL_REVIEW') return `A reviewer must decide (assigned to ${assignee}). Use the review actions below.`
@@ -186,8 +192,6 @@ function App() {
 
   // Message drafting state in drawer
   const [draftMessage, setDraftMessage] = useState('')
-  const [manualCancelReason, setManualCancelReason] = useState('')
-  const [showCancelPrompt, setShowCancelPrompt] = useState(false)
 
   // eCommerce Webhook Simulator state
   const [simEcom, setSimEcom] = useState({
@@ -237,6 +241,8 @@ function App() {
     if (user?.role === 'cs_3') return cs3Tickets
     return tickets
   }, [tickets, user?.role, cs1Tickets, cs2Tickets, cs3Tickets])
+  // Refund rows name their claim by ticket number, so the same claim reads the same on every screen
+  const ticketById = (id?: string) => tickets.find(t => t.id === id)
 
   // full=false refreshes only the ticket list (used when filters or the page change)
   async function load(full = true) {
@@ -323,8 +329,6 @@ function App() {
     if (selected) {
       setRefundAmount(selected.claimed_amount ? String(selected.claimed_amount) : '')
       setDraftMessage(selected.customer_message_draft || '')
-      setShowCancelPrompt(false)
-      setManualCancelReason('')
     }
   }, [selected])
 
@@ -415,14 +419,14 @@ function App() {
     }
   }
 
-  async function handleCS1ManualDecide(t: Ticket, decision: 'APPROVE' | 'CANCEL') {
-    if (decision === 'CANCEL' && !manualCancelReason.trim()) {
-      setNotice('Please provide a reason for cancelling the refund.')
+  async function handleCS1ManualDecide(t: Ticket, decision: 'APPROVE' | 'CANCEL', cancelReason = '') {
+    if (decision === 'CANCEL' && !cancelReason.trim()) {
+      setNotice('Please give a reason for rejecting the claim.')
       return
     }
     setBusy(true)
     try {
-      const reason = decision === 'APPROVE' ? 'Manually inspected and approved by the Approval Desk.' : manualCancelReason
+      const reason = decision === 'APPROVE' ? 'Manually inspected and approved by the Approval Desk.' : cancelReason
       const res = await api.cs1ManualDecide(t.id, decision, reason)
       if (decision === 'APPROVE') {
         if (res.status === 'REFUND_PROPOSED') {
@@ -433,10 +437,9 @@ function App() {
           setNotice('Refund approved.')
         }
       } else {
-        setNotice('Refund cancelled.')
+        setNotice('Claim rejected. The customer can see the reason on their request.')
       }
       setSelected(res.ticket)
-      setShowCancelPrompt(false)
       await load()
     } catch (err) {
       setNotice(`Action Failed: ${(err as Error).message}`)
@@ -544,27 +547,40 @@ function App() {
   }
 
   // --- FINANCE APPROVER ACTIONS ---
+  // After a payout action, reload the lists and the open ticket so every screen shows the same stage.
+  async function reloadAfterPayout(ticketId?: string) {
+    await load()
+    if (ticketId && selected?.id === ticketId) {
+      try { setSelected(await api.ticket(ticketId)) } catch {}
+    }
+  }
+
   async function handleApproveRefund(r: any) {
     setBusy(true)
     try {
-      await api.approveRefund(r.id, 'Dual-custody verification approved by Finance.')
-      setNotice(`Refund #${r.id.slice(0, 8).toUpperCase()} approved by ${user?.full_name} (${roleName(user?.role)}).`)
-      await load()
+      await api.approveRefund(r.id, 'Second approval: checked against the order and payment records.')
+      setNotice(`Payout #${r.id.slice(0, 8).toUpperCase()} approved. No money has moved yet: a third person sends the payment.`)
+      await reloadAfterPayout(r.ticket_id)
     } catch (err) {
-      setNotice(`Approval Failed: ${(err as Error).message}`)
+      setNotice(`Approval failed: ${(err as Error).message}`)
     } finally {
       setBusy(false)
     }
   }
 
-  async function handleRejectRefund(r: any) {
+  async function handleRejectRefund(r: any, reason?: string) {
+    const why = reason ?? window.prompt('Why is this payout rejected? The customer sees this reason.', '')
+    if (!why || why.trim().length < 3) {
+      if (why !== null) setNotice('Please give a reason (at least 3 characters).')
+      return
+    }
     setBusy(true)
     try {
-      await api.rejectRefund(r.id, 'Disapproved by Finance Approver audit check.')
-      setNotice(`Refund #${r.id.slice(0, 8).toUpperCase()} rejected by ${user?.full_name} (${roleName(user?.role)}).`)
-      await load()
+      await api.rejectRefund(r.id, why.trim())
+      setNotice(`Payout #${r.id.slice(0, 8).toUpperCase()} rejected. The claim is closed and the customer was told why.`)
+      await reloadAfterPayout(r.ticket_id)
     } catch (err) {
-      setNotice(`Rejection Failed: ${(err as Error).message}`)
+      setNotice(`Rejection failed: ${(err as Error).message}`)
     } finally {
       setBusy(false)
     }
@@ -576,11 +592,12 @@ function App() {
       const res = await api.executeRefund(r.id, `exec-${r.id}`)
       // Only a REFUNDED status is a completed payout; anything else (e.g. RECONCILIATION_REQUIRED) is reported as is.
       setNotice(res.status === 'REFUNDED'
-        ? `Payout completed via ${res.provider} (ref ${res.provider_reference})`
-        : `Payout status: ${label(REFUND_STATUS, res.status).text}${res.provider_reference ? ` (ref ${res.provider_reference})` : ''}. ${res.error || 'Check the settlement register.'}`)
-      await load()
+        ? `Payment completed via ${res.provider} (ref ${res.provider_reference})${res.provider === 'SANDBOX' ? '. Sandbox: no real money moved.' : ''}`
+        : `Payment status: ${label(REFUND_STATUS, res.status).text}${res.provider_reference ? ` (ref ${res.provider_reference})` : ''}. ${res.warning || res.error || 'Check the settlement register.'}`)
+      await reloadAfterPayout(r.ticket_id)
     } catch (err) {
-      setNotice(`Execution Failed: ${(err as Error).message}`)
+      setNotice(`Payment failed, nothing was paid: ${(err as Error).message}`)
+      await reloadAfterPayout(r.ticket_id)
     } finally {
       setBusy(false)
     }
@@ -590,10 +607,12 @@ function App() {
     setBusy(true)
     try {
       const res = await api.reconcileRefund(r.id)
-      setNotice(`Payment outcome confirmed: ${label(REFUND_STATUS, res.status).text}`)
-      await load()
+      setNotice(res.reconciled
+        ? `Payment outcome confirmed: ${label(REFUND_STATUS, res.status).text}`
+        : `Not confirmed yet: ${res.detail || label(REFUND_STATUS, res.status).text}`)
+      await reloadAfterPayout(r.ticket_id)
     } catch (err) {
-      setNotice(`Reconciliation Failed: ${(err as Error).message}`)
+      setNotice(`Confirmation failed: ${(err as Error).message}`)
     } finally {
       setBusy(false)
     }
@@ -1195,7 +1214,7 @@ function App() {
                   icon={<CircleDollarSign />}
                   label="Total Settled Volume"
                   value={money(refunds.filter(r => r.status === 'REFUNDED').reduce((acc, r) => acc + (Number(r.amount) || 0), 0))}
-                  note="Disbursed via payment gateway"
+                  note={refunds.some(r => r.live_payments === false) ? "Sandbox settlements: no real money moved" : "Settled via payment gateway"}
                   tone="green"
                 />
                 <Metric
@@ -1259,7 +1278,7 @@ function App() {
                           </td>
                           <td>
                             <strong>{r.transaction_id}</strong>
-                            <small className="subline mono">Ticket #{r.ticket_id?.slice(0, 8)}</small>
+                            <ClaimLink ticket={ticketById(r.ticket_id)} id={r.ticket_id} onOpen={setSelected} />
                           </td>
                           <td>
                             <strong className="amount" style={{ fontSize: '15px' }}>
@@ -1359,7 +1378,7 @@ function App() {
                           </td>
                           <td>
                             <strong>{r.transaction_id}</strong>
-                            <small className="subline mono">Ticket #{r.ticket_id?.slice(0, 8)}</small>
+                            <ClaimLink ticket={ticketById(r.ticket_id)} id={r.ticket_id} onOpen={setSelected} />
                           </td>
                           <td>
                             <strong className="amount" style={{ fontSize: '15px' }}>
@@ -1455,7 +1474,7 @@ function App() {
                           <td><span className="mono">{r.transaction_id}</span></td>
                           <td><strong className="amount">{money(r.amount, r.currency)}</strong></td>
                           <td><span className="mono" style={{ color: 'var(--primary-700)', fontWeight: 600 }}>{r.provider_reference || '—'}</span></td>
-                          <td><span className="pill green"><i />SETTLED</span></td>
+                          <td><span className="pill green"><i />{r.live_payments === false ? "SETTLED (TEST)" : "SETTLED"}</span></td>
                           <td><span className="date-cell">{date(r.created_at)}</span></td>
                         </tr>
                       ))}
@@ -1505,14 +1524,14 @@ function App() {
                   icon={<CheckCircle2 />}
                   label="Refunds Credited"
                   value={refunds.filter(r => r.status === 'REFUNDED').length}
-                  note="Successfully returned to your account"
+                  note="See Refunds for each payment"
                   tone="green"
                 />
                 <Metric
                   icon={<CircleDollarSign />}
                   label="Total Amount Credited"
                   value={money(refunds.filter(r => r.status === 'REFUNDED').reduce((acc, r) => acc + (Number(r.amount) || 0), 0))}
-                  note="Processed via payment gateway"
+                  note={refunds.some(r => r.status === "REFUNDED" && r.live_payments === false) ? "Test payments: no real money moved" : "Paid to your original payment method"}
                   tone="green"
                 />
                 <Metric
@@ -1755,28 +1774,28 @@ function App() {
                           <td><StatusPill value={t.status} /></td>
                           <td>
                             <div className="row-actions" onClick={e => e.stopPropagation()}>
-                              {t.status !== 'RESOLVED' && (
-                                <>
-                                  {canProposeFor(user, t) && !hasActiveRefund(t, refunds) && (
-                                    <button
-                                      className="primary compact"
-                                      onClick={() => handleCS1DirectRefund(t)}
-                                      title="1-Click Direct Refund"
-                                      style={{ background: 'var(--emerald-700)', borderColor: 'var(--emerald-700)' }}
-                                    >
-                                      <Zap size={14} /> 1-Click Refund
+                              {(() => {
+                                const st = refundStage(t, refunds)
+                                return (
+                                  <>
+                                    <span className={`mc-status-inline rp-chip tone-${st.tone}`}><i aria-hidden="true" />{st.label}</span>
+                                    {['NOT_STARTED', 'PAYMENT_FAILED'].includes(st.code) && canProposeFor(user, t) && (
+                                      <button
+                                        className="primary compact"
+                                        onClick={() => handleCS1DirectRefund(t)}
+                                        disabled={busy}
+                                        title="Approve the refund (a second person approves the payout)"
+                                        style={{ background: 'var(--emerald-700)', borderColor: 'var(--emerald-700)' }}
+                                      >
+                                        <CheckCircle2 size={14} /> Approve refund
+                                      </button>
+                                    )}
+                                    <button className="secondary compact" onClick={() => setSelected(t)} title="Open the claim">
+                                      {st.code === 'PAID' || st.code === 'CLOSED' ? 'View' : 'Review & decide'}
                                     </button>
-                                  )}
-                                  <button
-                                    className="secondary compact"
-                                    onClick={() => setSelected(t)}
-                                    title="Manually Inspect"
-                                  >
-                                    Inspect & Decide
-                                  </button>
-                                </>
-                              )}
-                              {t.status === 'RESOLVED' && <span className="pill green"><i />REFUNDED</span>}
+                                  </>
+                                )
+                              })()}
                             </div>
                           </td>
                         </tr>
@@ -2333,7 +2352,7 @@ await fetch('http://YOUR_RITOS_URL/api/v1/integrations/ecommerce/ticket', {
                     <tbody>
                       {refunds.filter((r: any) => r.next_step).map((r: any) => (
                         <tr key={r.id}>
-                          <td><span className="mono bold">#{r.id.slice(0, 8).toUpperCase()}</span><br /><span className="hint">{r.reason}</span></td>
+                          <td><span className="mono bold">#{r.id.slice(0, 8).toUpperCase()}</span> <ClaimLink ticket={ticketById(r.ticket_id)} id={r.ticket_id} onOpen={setSelected} /><br /><span className="hint">{r.reason}</span></td>
                           <td className="amount">{money(r.amount, r.currency)}</td>
                           <td><StatusPill value={r.status} /></td>
                           <td style={{ fontSize: '12px', maxWidth: '280px' }}>{waitingFor(r.next_step, user.id)}</td>
@@ -2372,7 +2391,11 @@ await fetch('http://YOUR_RITOS_URL/api/v1/integrations/ecommerce/ticket', {
           )}
 
           {/* REFUND OPERATIONS REGISTER & GENERAL LEDGER */}
-          {page === 'refunds' && (
+          {page === 'refunds' && isCustomer && (
+            <CustomerRefunds refunds={refunds} claims={tickets} loaded={ticketsLoaded} onOpen={setSelected} onRetry={refresh} />
+          )}
+
+          {page === 'refunds' && !isCustomer && (
             <>
               <div className="page-heading">
                 <div>
@@ -2425,11 +2448,11 @@ await fetch('http://YOUR_RITOS_URL/api/v1/integrations/ecommerce/ticket', {
                       <tbody>
                         {refunds.map(r => (
                           <tr key={r.id}>
-                            <td><span className="mono">{r.id.slice(0, 8).toUpperCase()}</span></td>
+                            <td><span className="mono">{r.id.slice(0, 8).toUpperCase()}</span><br /><ClaimLink ticket={ticketById(r.ticket_id)} id={r.ticket_id} onOpen={setSelected} /></td>
                             <td className="amount">{money(r.amount, r.currency)}</td>
                             <td><StatusPill value={r.status} /></td>
-                            <td><span className="mono">{r.provider_reference || '—'}</span></td>
-                            <td style={{ maxWidth: '280px', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.reason}</td>
+                            <td><span className="mono">{r.provider_reference || '—'}</span>{r.status === 'REFUNDED' && r.live_payments === false && <small className="subline">Test payment: no real money moved</small>}</td>
+                            <td style={{ maxWidth: '280px', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.rejection_reason ? `Rejected: ${r.rejection_reason}` : r.reason}</td>
                             <td><span className="date-cell">{date(r.created_at)}</span></td>
                           </tr>
                         ))}
@@ -2869,75 +2892,29 @@ await fetch('http://YOUR_RITOS_URL/api/v1/integrations/ecommerce/ticket', {
                 </div>
               </div>
 
-              {/* ACTION BOX FOR Approval Desk (GENUINE / REFUNDABLE) */}
-              {selected.decision_bucket === 'GENUINE_REFUNDABLE' && (
-                <div style={{ background: 'var(--emerald-50)', border: '1px solid var(--emerald-100)', padding: '18px', borderRadius: 'var(--radius-lg)', marginBottom: '22px' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--emerald-700)', fontWeight: 800, fontSize: '14px', marginBottom: '8px' }}>
-                    <CheckCircle2 size={18} /> Approval Desk Actions
-                  </div>
-                  <p style={{ fontSize: '12px', color: 'var(--emerald-800)', margin: '0 0 14px', lineHeight: '1.5' }}>
-                    {selected.policy_evaluation_reason}
-                  </p>
-
-                  {selected.status !== 'RESOLVED' ? (
-                    <div>
-                      <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
-                        {hasActiveRefund(selected, refunds) ? (
-                          <span className="hint">{nextStepText(selected, user, refunds)}</span>
-                        ) : canProposeFor(user, selected) ? (
-                          <button
-                            className="primary"
-                            onClick={() => handleCS1DirectRefund(selected)}
-                            disabled={busy}
-                            style={{ background: 'var(--emerald-700)', borderColor: 'var(--emerald-700)' }}
-                          >
-                            <Zap size={15} /> 1-Click Direct Refund ({money(selected.claimed_amount, selected.currency)})
-                          </button>
-                        ) : (
-                          <span className="hint">Payout is approved by {proposalRoles(user, selected).map(roleLabel).join(' or ')}.</span>
-                        )}
-
-                        <button
-                          className="secondary"
-                          onClick={() => setShowCancelPrompt(!showCancelPrompt)}
-                        >
-                          Manual Verify & Cancel
-                        </button>
-                      </div>
-
-                      {showCancelPrompt && (
-                        <div style={{ marginTop: '14px', padding: '14px', background: '#ffffff', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)' }}>
-                          <label style={{ fontSize: '11px', fontWeight: 700, color: 'var(--rose-700)' }}>
-                            Reason for Cancelling / Denying Refund:
-                          </label>
-                          <textarea
-                            rows={2}
-                            value={manualCancelReason}
-                            onChange={e => setManualCancelReason(e.target.value)}
-                            placeholder="e.g. Package was already delivered intact per courier tracking proof…"
-                            style={{ width: '100%', marginTop: '6px' }}
-                          />
-                          <div style={{ display: 'flex', gap: '8px', marginTop: '10px' }}>
-                            <button
-                              className="primary compact"
-                              onClick={() => handleCS1ManualDecide(selected, 'CANCEL')}
-                              style={{ background: 'var(--rose-600)', borderColor: 'var(--rose-600)' }}
-                            >
-                              Confirm Denial
-                            </button>
-                            <button className="secondary compact" onClick={() => setShowCancelPrompt(false)}>
-                              Cancel
-                            </button>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  ) : (
-                    <div style={{ fontWeight: 700, color: 'var(--emerald-700)', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                      <Check size={16} /> Refund has already been executed for this case.
-                    </div>
+              {/* REFUND: where the payout stands and the actions allowed at this stage (desk/RefundPanel.tsx) */}
+              {(selected.decision_bucket === 'GENUINE_REFUNDABLE' || refunds.some((r: any) => r.ticket_id === selected.id)) && (
+                <>
+                  {selected.policy_evaluation_reason && (
+                    <p className="hint" style={{ margin: '0 0 8px', fontSize: '12px' }}>
+                      <strong>Why it is eligible:</strong> {selected.policy_evaluation_reason}
+                    </p>
                   )}
-                </div>
+                  <RefundPanel
+                    ticket={selected}
+                    refunds={refunds}
+                    user={user}
+                    busy={busy}
+                    canPropose={canProposeFor(user, selected)}
+                    proposeRoles={proposalRoles(user, selected)}
+                    onPropose={() => handleCS1DirectRefund(selected)}
+                    onRejectClaim={reason => handleCS1ManualDecide(selected, 'CANCEL', reason)}
+                    onApprove={r => handleApproveRefund(r)}
+                    onRejectPayout={(r, reason) => handleRejectRefund(r, reason)}
+                    onExecute={r => handleExecuteRefund(r)}
+                    onReconcile={r => handleReconcileRefund(r)}
+                  />
+                </>
               )}
 
               {/* ACTION BOX FOR Review Desk (EXCEPTIONS / PROOF NEEDED) */}
@@ -3121,26 +3098,36 @@ await fetch('http://YOUR_RITOS_URL/api/v1/integrations/ecommerce/ticket', {
                     <strong>Policy Ineligibility:</strong> {selected.policy_evaluation_reason}
                   </p>
 
-                  <label style={{ fontSize: '11px', fontWeight: 700, color: 'var(--navy-800)', display: 'block', marginBottom: '4px' }}>
-                    AI Pre-Drafted Rejection Notice to Customer:
-                  </label>
-                  <textarea
-                    rows={4}
-                    value={draftMessage}
-                    onChange={e => setDraftMessage(e.target.value)}
-                    style={{ width: '100%', background: '#ffffff', border: '1px solid var(--rose-200)', borderRadius: 'var(--radius-md)', padding: '10px', fontSize: '12px' }}
-                  />
+                  {selected.rejection_notice_sent_at ? (
+                    // Already closed and the customer was told: show the outcome instead of offering to send it again
+                    <div className="mc-status tone-red" role="status">
+                      <span className="mc-status-label"><i aria-hidden="true" />Closed, not refunded</span>
+                      <p>Rejection notice posted to the customer's request on {date(selected.rejection_notice_sent_at)}. No refund was paid.</p>
+                    </div>
+                  ) : (
+                    <>
+                      <label style={{ fontSize: '11px', fontWeight: 700, color: 'var(--navy-800)', display: 'block', marginBottom: '4px' }}>
+                        AI Pre-Drafted Rejection Notice to Customer:
+                      </label>
+                      <textarea
+                        rows={4}
+                        value={draftMessage}
+                        onChange={e => setDraftMessage(e.target.value)}
+                        style={{ width: '100%', background: '#ffffff', border: '1px solid var(--rose-100)', borderRadius: 'var(--radius-md)', padding: '10px', fontSize: '12px' }}
+                      />
 
-                  <div style={{ display: 'flex', gap: '10px', marginTop: '12px' }}>
-                    <button
-                      className="primary compact"
-                      onClick={() => handleCS3SendRejection(selected)}
-                      disabled={busy}
-                      style={{ background: 'var(--rose-600)', borderColor: 'var(--rose-600)' }}
-                    >
-                      <Send size={14} /> Send Denial Notice to Customer
-                    </button>
-                  </div>
+                      <div style={{ display: 'flex', gap: '10px', marginTop: '12px' }}>
+                        <button
+                          className="primary compact"
+                          onClick={() => handleCS3SendRejection(selected)}
+                          disabled={busy}
+                          style={{ background: 'var(--rose-600)', borderColor: 'var(--rose-600)' }}
+                        >
+                          <Send size={14} /> Send Denial Notice to Customer
+                        </button>
+                      </div>
+                    </>
+                  )}
                 </div>
               )}
 
@@ -3242,37 +3229,6 @@ await fetch('http://YOUR_RITOS_URL/api/v1/integrations/ecommerce/ticket', {
               </details>
               )}
 
-              {/* FINANCE PAYOUT EXECUTION BOX */}
-              {selected.decision_bucket === 'GENUINE_REFUNDABLE' && selected.refund_status !== 'REFUNDED' && (
-                <div style={{ padding: '14px 18px', background: 'var(--indigo-50)', border: '1px solid var(--indigo-100)', borderRadius: 'var(--radius-lg)', marginBottom: '18px', display: 'flex', flexWrap: 'wrap', gap: '12px', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <div style={{ minWidth: 0 }}>
-                    <div style={{ fontWeight: 700, fontSize: '13px', color: 'var(--indigo-950)' }}>
-                      <Landmark size={14} className="inline-icon" aria-hidden="true" />Authorized for Gateway Settlement
-                    </div>
-                    <div style={{ fontSize: '11px', color: 'var(--indigo-800)' }}>
-                      {selected.classification_evidence?.workflow?.next_action === 'AUTO_APPROVE'
-                        ? 'All automated checks passed (approved automatically).'
-                        : `Needs approval: ${selected.policy_evaluation_reason || 'see decision trace'}`}
-                    </div>
-                  </div>
-                  {hasActiveRefund(selected, refunds) ? (
-                    <span className="hint" style={{ maxWidth: '260px' }}>{nextStepText(selected, user, refunds)}</span>
-                  ) : canProposeFor(user, selected) ? (
-                    <button
-                      className="primary compact"
-                      onClick={() => handleAuthorizePayout(selected)}
-                      disabled={busy}
-                      style={{ background: 'var(--indigo-700)', borderColor: 'var(--indigo-700)' }}
-                    >
-                      <Zap size={14} /> Authorize Payout ({money(selected.claimed_amount, selected.currency)})
-                    </button>
-                  ) : (
-                    <span className="hint" style={{ maxWidth: '260px' }}>
-                      Payout is authorized by {proposalRoles(user, selected).map(roleLabel).join(' or ')}.
-                    </span>
-                  )}
-                </div>
-              )}
 
               {/* Conversation & Notes */}
               <div className="drawer-section">
@@ -3521,6 +3477,16 @@ function TicketTable({ tickets, onSelect }: { tickets: Ticket[]; onSelect: (t: T
         <span>Synced with RITOS Automation Engine</span>
       </div>
     </div>
+  )
+}
+
+// A refund's claim: its ticket number (opens the claim) when the desk has it loaded, otherwise the short id
+function ClaimLink({ ticket, id, onOpen }: { ticket?: Ticket; id?: string; onOpen: (t: Ticket) => void }) {
+  if (!ticket) return <small className="subline mono">Claim #{id?.slice(0, 8)}</small>
+  return (
+    <button type="button" className="text-btn subline" style={{ padding: 0, fontSize: '12px' }} onClick={() => onOpen(ticket)}>
+      {ticket.ticket_number} <ArrowUpRight size={12} aria-hidden="true" />
+    </button>
   )
 }
 

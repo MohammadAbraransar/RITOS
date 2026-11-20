@@ -90,8 +90,12 @@ def record_event(db: Session, ticket_id: str, actor_id: str|None, event_type: st
     db.add(TicketEvent(ticket_id=ticket_id, actor_id=actor_id, event_type=event_type, details=details))
 def audit(db: Session, actor_id: str|None, action: str, entity_type: str, entity_id: str, details: dict|None=None):
     db.add(AuditLog(actor_id=actor_id, action=action, entity_type=entity_type, entity_id=entity_id, details=details or {}))
-def refund_key(ticket_id: str, amount, currency: str):
+def refund_key(ticket_id: str, amount, currency: str, attempt: int = 1):
+    """Idempotency key of a refund proposal. A new attempt (after the gateway declined the previous payout)
+    gets its own key, so it is a new proposal that goes through approval again."""
     raw = f"ritos-refund:{ticket_id}:{Decimal(str(amount)).quantize(Decimal('0.01'))}:{currency}"
+    if attempt > 1:
+        raw += f":attempt-{attempt}"
     return hashlib.sha256(raw.encode()).hexdigest()
 
 PRODUCT_POLICIES = {

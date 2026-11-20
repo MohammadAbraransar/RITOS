@@ -97,8 +97,22 @@ def customer_claim_state(t: Ticket) -> dict:
     """Where the claim stands, in the customer's terms."""
     rs, st = t.refund_status, t.status
     if rs == RefundStatus.REFUNDED.value:
+        if not gateway_status()["live_payments_enabled"]:
+            # Only the sandbox gateway is implemented in this build: say so instead of claiming money was paid.
+            return {"code": "REFUNDED", "label": "Refunded (test mode)",
+                    "description": "Your refund was issued through our test payment system. This is a test environment, "
+                                   "so no real money was sent to your account."}
         return {"code": "REFUNDED", "label": "Refunded",
                 "description": "Your refund has been paid to your original payment method."}
+    if rs == RefundStatus.RECONCILIATION_REQUIRED.value:
+        return {"code": "REFUND_IN_PROGRESS", "label": "Refund being confirmed",
+                "description": "We sent your refund and are confirming with the payment provider that it went through."}
+    if rs == RefundStatus.FAILED.value:
+        return {"code": "REFUND_IN_PROGRESS", "label": "Refund delayed",
+                "description": "Your refund was approved, but the payment didn't go through. Our team will send it again."}
+    if rs == RefundStatus.APPROVED.value:
+        return {"code": "REFUND_IN_PROGRESS", "label": "Refund approved",
+                "description": "Your refund was approved and is about to be paid to your original payment method."}
     if rs in _REFUND_IN_PROGRESS:
         return {"code": "REFUND_IN_PROGRESS", "label": "Refund in progress",
                 "description": "Your request was accepted. The refund is going through final checks before it is paid."}
@@ -437,19 +451,38 @@ def refunds(db:Session=Depends(get_db),user:User=Depends(get_current_user)):
 def refund_row(r: RefundRequest, user: User) -> dict:
     """Refund for the desk, with what it is waiting for and whether this user may do it (permissions.py policy)."""
     return {"id":r.id,"ticket_id":r.ticket_id,"transaction_id":r.transaction_id,"amount":float(r.amount),"currency":r.currency,
-            "status":r.status,"reason":r.reason,"provider_reference":r.provider_reference,"created_at":r.created_at.isoformat(),
+            "status":r.status,"reason":r.reason,"rejection_reason":r.rejection_reason,
+            # False while only the SANDBOX gateway exists: a REFUNDED status then never means real money moved
+            "live_payments":gateway_status()["live_payments_enabled"],
+            "provider_reference":r.provider_reference,"created_at":r.created_at.isoformat(),
             "updated_at":r.updated_at.isoformat() if r.updated_at else None,
             "requested_by_id":r.requested_by_id,"approved_by_id":r.approved_by_id,"next_step":next_step(r, user)}
+
+# Refunds that still hold the ticket in the payout flow: the claim cannot be cancelled or re-proposed meanwhile
+ACTIVE_REFUND_STATUSES = [RefundStatus.PENDING_APPROVAL.value, RefundStatus.APPROVED.value, RefundStatus.PROCESSING.value,
+                          RefundStatus.RECONCILIATION_REQUIRED.value]
+
+def active_refund(db: Session, ticket_id: str) -> RefundRequest | None:
+    return db.scalar(select(RefundRequest).where(RefundRequest.ticket_id == ticket_id,
+                                                 RefundRequest.status.in_(ACTIVE_REFUND_STATUSES)))
 
 def propose_refund(db: Session, t: Ticket, user: User, amount: Decimal, reason: str) -> dict:
     """Create (or return) the refund proposal for a ticket. Money moves only after an independent approval
     and a separate execution (finance.py), never from this call."""
+    if t.status in CLOSED_STATUSES or t.refund_status in ("REFUNDED", "REJECTED", "CANCELLED"):
+        raise HTTPException(409, "This claim is already closed, so no refund can be proposed for it")
     tx = db.get(Transaction, t.transaction_id)
     if not tx or t.payment_verification != "VERIFIED":
         raise HTTPException(409, "Refund cannot be proposed until transaction ownership, amount and payment are verified")
     amount = Decimal(str(amount)).quantize(Decimal("0.01"))
-    key = refund_key(t.id, amount, t.currency)
-    existing = db.scalar(select(RefundRequest).where(RefundRequest.idempotency_key == key))
+    # A payout the gateway declined (FAILED) can be proposed again; the new attempt needs its own approval.
+    attempt = 1
+    while True:
+        key = refund_key(t.id, amount, t.currency, attempt)
+        existing = db.scalar(select(RefundRequest).where(RefundRequest.idempotency_key == key))
+        if not existing or existing.status != RefundStatus.FAILED.value:
+            break
+        attempt += 1
     if existing:
         return {"id": existing.id, "status": existing.status, "idempotent_replay": True}
     remaining = Decimal(str(tx.amount)) - Decimal(str(tx.refunded_amount))
@@ -484,20 +517,34 @@ def approve_refund(refund_id:str,payload:RefundDecision,db:Session=Depends(get_d
     if r.requested_by_id==user.id: raise HTTPException(409,"Separation of duties: approver cannot approve their own request")
     if r.status!=RefundStatus.PENDING_APPROVAL.value: raise HTTPException(409,"Refund is not awaiting approval")
     r.status=RefundStatus.APPROVED.value; r.approved_by_id=user.id
+    t=db.get(Ticket,r.ticket_id)
+    if t: t.refund_status=RefundStatus.APPROVED.value  # approved for payment; no money has moved yet
     audit(db,user.id,"REFUND_APPROVED","refund",r.id,{"reason":payload.reason})
     record_event(db,r.ticket_id,user.id,"REFUND_APPROVED",{"refund_id":r.id,"reason":payload.reason})
     db.commit(); db.refresh(r)
-    return {"id":r.id,"status":r.status}
+    return {"id":r.id,"status":r.status,"refund":refund_row(r,user)}
 
 @router.post("/refunds/{refund_id}/reject")
 def reject_refund(refund_id:str,payload:RefundDecision,db:Session=Depends(get_db),user:User=Depends(require_payout(APPROVE))):
+    """The second approver turns the payout down: the refund is not paid and the claim closes as not approved.
+    The reason is posted on the customer's claim."""
     r=db.get(RefundRequest,refund_id)
     if not r: raise HTTPException(404,"Refund request not found")
     if r.status!=RefundStatus.PENDING_APPROVAL.value: raise HTTPException(409,"Refund is not awaiting approval")
     r.status=RefundStatus.REJECTED.value; r.rejection_reason=payload.reason
+    t=db.get(Ticket,r.ticket_id)
+    if t:
+        # Without this the claim kept showing "waiting for approval" forever and could never be decided again.
+        record_human_decision(db,t,"REJECTED",user.id,payload.reason)
+        t.status=TicketStatus.REJECTED.value; t.refund_status=RefundStatus.REJECTED.value
+        t.refund_decided_at=datetime.now(timezone.utc); t.refund_decided_by_id=user.id
+        t.policy_evaluation_reason=f"Payout rejected at approval: {payload.reason}"
+        db.add(TicketComment(ticket_id=t.id,author_id=user.id,internal=False,
+                             body=f"Your refund was not approved: {payload.reason}"))
     audit(db,user.id,"REFUND_REJECTED","refund",r.id,{"reason":payload.reason})
     record_event(db,r.ticket_id,user.id,"REFUND_REJECTED",{"refund_id":r.id,"reason":payload.reason})
-    db.commit(); return {"id":r.id,"status":r.status}
+    db.commit(); db.refresh(r)
+    return {"id":r.id,"status":r.status,"refund":refund_row(r,user)}
 
 @router.post("/refunds/{refund_id}/execute")
 def execute_refund(
@@ -950,6 +997,13 @@ def cs1_manual_decide(ticket_id:str, payload:CS1DecisionIn, db:Session=Depends(g
     decision = payload.decision.upper().strip()
     if decision not in {"APPROVE", "CANCEL"}:
         raise HTTPException(400, "Decision must be 'APPROVE' or 'CANCEL'")
+    if ticket.status in CLOSED_STATUSES or ticket.refund_status in ("REFUNDED", "REJECTED", "CANCELLED"):
+        raise HTTPException(409, "This claim is already closed")
+    pending = active_refund(db, ticket.id)
+    if decision == "CANCEL" and pending:
+        # Cancelling the claim here would leave the payout approvable and payable on a rejected claim.
+        raise HTTPException(409, f"A refund for this claim is already in the payout flow ({pending.status}). "
+                                 "It can only be stopped by rejecting it at the approval step.")
     if decision == "APPROVE":
         require_cs1_bucket(ticket)
         if ticket.payment_verification != "VERIFIED":

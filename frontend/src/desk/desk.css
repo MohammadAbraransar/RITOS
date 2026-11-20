@@ -1,0 +1,44 @@
+/* Desk refund panel: same tokens, tones and fact layout as the customer screens (customer.css). Mobile first. */
+.rp-panel {
+  display: grid; gap: 14px; padding: 16px; margin-bottom: 20px;
+  background: #fff; border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); box-shadow: var(--shadow-xs);
+}
+.rp-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 6px 12px; }
+.rp-head h4 { display: inline-flex; align-items: center; gap: 6px; margin: 0; font-size: 15px; font-weight: 800; color: var(--navy-900); }
+.rp-amount { font-size: 18px; font-weight: 800; color: var(--navy-900); letter-spacing: -0.3px; }
+
+.rp-steps { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.rp-steps li {
+  display: flex; align-items: center; gap: 6px; min-width: 0; padding: 6px 8px; border-radius: var(--radius-md);
+  background: var(--navy-50); border: 1px solid var(--border-subtle); font-size: 12px; font-weight: 600; color: var(--text-muted);
+}
+.rp-steps li > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rp-step-dot {
+  flex-shrink: 0; width: 18px; height: 18px; border-radius: 50%; display: grid; place-items: center;
+  font-size: 10px; font-weight: 800; background: #fff; border: 1.5px solid var(--border-strong); color: var(--navy-600);
+}
+.rp-steps li.is-done { background: var(--emerald-50); border-color: var(--emerald-100); color: var(--emerald-700); }
+.rp-steps li.is-done .rp-step-dot { background: var(--emerald-600); border-color: var(--emerald-600); color: #fff; }
+.rp-steps li.is-current { background: var(--primary-50); border-color: var(--primary-100); color: var(--primary-700); }
+.rp-steps li.is-current .rp-step-dot { border-color: var(--primary-600); color: var(--primary-700); }
+
+.rp-facts { grid-template-columns: repeat(auto-fit, minmax(min(150px, 100%), 1fr)); }
+.rp-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
+.rp-actions .hint { font-size: 12px; }
+.rp-danger { color: var(--rose-700) !important; border-color: var(--rose-100) !important; }
+.rp-danger-solid { background: var(--rose-600) !important; border-color: var(--rose-600) !important; }
+.rp-reject { display: grid; gap: 8px; padding: 12px; border-radius: var(--radius-md); background: var(--rose-50); border: 1px solid var(--rose-100); }
+.rp-reject label { font-size: 12px; font-weight: 700; color: var(--rose-700); }
+.rp-reject textarea {
+  width: 100%; resize: vertical; padding: 9px 12px; font-size: 13px; background: #fff;
+  border: 1px solid var(--border-strong); border-radius: var(--radius-md);
+}
+.rp-reject textarea:focus { outline: 2px solid var(--primary-500); outline-offset: 1px; }
+
+/* Stage chip used in desk tables (same look as the customer status chip) */
+.rp-chip { white-space: nowrap; }
+
+@media (max-width: 480px) {
+  .rp-steps { grid-template-columns: 1fr; }
+  .rp-actions > button { flex: 1 1 100%; justify-content: center; }
+}

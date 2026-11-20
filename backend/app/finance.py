@@ -163,6 +163,13 @@ def gateway_status() -> Dict[str, Any]:
     }
 
 
+def _mirror_on_ticket(db: Session, refund: RefundRequest) -> None:
+    """The claim shows the payout's state (desk and customer screens read the ticket), so keep them in step."""
+    ticket = db.get(Ticket, refund.ticket_id)
+    if ticket and ticket.refund_status != RefundStatus.REFUNDED.value:
+        ticket.refund_status = refund.status
+
+
 class FinancialSettlementService:
     """Central service managing the financial settlement lifecycle and double-entry ledger."""
 
@@ -384,6 +391,7 @@ class FinancialSettlementService:
                                            idempotency_key=idempotency_key, status="INITIATED")
         db.add(attempt)
         refund.status = RefundStatus.PROCESSING.value
+        _mirror_on_ticket(db, refund)
         db.commit()  # releases the row locks before the network call
 
         # ---- Phase 2: gateway call (no locks held) ----
@@ -405,6 +413,7 @@ class FinancialSettlementService:
         elif status == "UNKNOWN":
             refund.status = RefundStatus.RECONCILIATION_REQUIRED.value
             attempt.status = "RECONCILIATION_REQUIRED"
+            _mirror_on_ticket(db, refund)
             response = {"id": refund.id, "status": refund.status, "provider": adapter.provider_name,
                         "provider_reference": attempt.provider_reference,
                         "warning": "Gateway outcome unknown; reconcile before any new attempt."}
@@ -412,6 +421,7 @@ class FinancialSettlementService:
         else:
             refund.status = RefundStatus.FAILED.value
             attempt.status = status
+            _mirror_on_ticket(db, refund)  # nothing was paid; the claim can be proposed again
             db.add(AuditLog(actor_id=executor.id, action="FINANCIAL_SETTLEMENT_FAILED", entity_type="refund", entity_id=refund.id,
                             details={"provider": adapter.provider_name, "status": status, "error": result.get("error")}))
             db.commit()
@@ -473,6 +483,7 @@ class FinancialSettlementService:
         elif outcome == "FAILED":
             refund.status = RefundStatus.FAILED.value
             attempt.status = "FAILED"
+            _mirror_on_ticket(db, refund)
             response = {"id": refund.id, "status": refund.status}
         else:
             response = {"id": refund.id, "status": refund.status, "detail": f"Provider still reports {outcome}."}
